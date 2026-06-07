@@ -2,6 +2,10 @@
 
 A macOS flashcard app (similar to Anki) built with Swift/SwiftUI and GRDB for local SQLite persistence. (The Xcode project name is `Memor`; a few legacy files and identifiers still say "Flashcards2".)
 
+## Development Workflow
+
+- **Commit every change.** After making any change to the app, commit it with a relevant, descriptive commit message. Don't batch unrelated changes into one commit — keep each commit scoped to a single logical change.
+
 ## Project Structure
 
 ```
