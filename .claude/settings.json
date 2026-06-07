@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git mv *)",
+      "Bash(awk 'NR<2022 || NR>2847' /Users/samhooper/Desktop/Memor/Flashcards2/ContentView.swift)",
+      "Bash(mv /tmp/ContentView_trimmed.swift /Users/samhooper/Desktop/Memor/Flashcards2/ContentView.swift)",
+      "Bash(awk 'NR>=283 && NR<=659' /Users/samhooper/Desktop/Memor/Flashcards2/ContentView.swift)",
+      "Read(//tmp/**)",
+      "Bash(cat)",
+      "Read(//private/tmp/**)",
+      "Bash(awk 'NR<283 || NR>659' /Users/samhooper/Desktop/Memor/Flashcards2/ContentView.swift)"
+    ]
+  }
+}

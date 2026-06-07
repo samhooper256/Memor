@@ -5,12 +5,35 @@
 //  Created by Sam Hooper on 4/1/26.
 //
 
+import Combine
 import SwiftUI
+
+@MainActor
+final class QuickStudyState: ObservableObject {
+    @Published var pendingSearch: String?
+
+    func request(searchText: String) {
+        pendingSearch = searchText
+    }
+}
 
 @main
 struct Flashcards2App: App {
     @StateObject private var navigationState = AppNavigationState()
+    @StateObject private var addInstanceWindowState = AddInstanceWindowState()
+    @StateObject private var editInstanceWindowState = EditInstanceWindowState()
+    @StateObject private var queryPreviewWindowState = QueryPreviewWindowState()
+    @StateObject private var instanceSearchWindowState = InstanceSearchWindowState()
+    @StateObject private var querySearchWindowState = QuerySearchWindowState()
+    @StateObject private var stacksPageState = StacksPageState()
+    @StateObject private var manageBoundariesWindowState = ManageBoundariesWindowState()
+    @StateObject private var quickStudyState = QuickStudyState()
+    @StateObject private var shortcutSettings = ShortcutSettings.shared
+    @StateObject private var timeZoneSettings = TimeZoneSettings.shared
+    @State private var hasPerformedInitialStacksRefresh = false
+    @Environment(\.openWindow) private var openWindow
     private let appDatabase: AppDatabase
+    private let mcpServer: MemorMCPServer
 
     init() {
         do {
@@ -18,34 +41,162 @@ struct Flashcards2App: App {
         } catch {
             fatalError("Failed to initialize database: \(error)")
         }
+        mcpServer = MemorMCPServer(appDatabase: appDatabase)
+        mcpServer.start()
     }
 
     var body: some Scene {
-        WindowGroup {
-            ContentView()
+        WindowGroup("Memor") {
+            ContentView(appDatabase: appDatabase)
                 .environmentObject(navigationState)
+                .environmentObject(addInstanceWindowState)
+                .environmentObject(editInstanceWindowState)
+                .environmentObject(queryPreviewWindowState)
+                .environmentObject(instanceSearchWindowState)
+                .environmentObject(querySearchWindowState)
+                .environmentObject(stacksPageState)
+                .environmentObject(quickStudyState)
+                .environmentObject(shortcutSettings)
+                .environmentObject(timeZoneSettings)
+                .task {
+                    guard !hasPerformedInitialStacksRefresh else { return }
+                    hasPerformedInitialStacksRefresh = true
+
+                    do {
+                        try await stacksPageState.refresh(appDatabase: appDatabase)
+                    } catch {
+                        print("Failed to refresh stacks on launch: \(error)")
+                    }
+                }
+        }
+
+        Window("Add Instance", id: "add-instance") {
+            AddInstanceWindowView(appDatabase: appDatabase)
+                .environmentObject(addInstanceWindowState)
+                .environmentObject(queryPreviewWindowState)
+                .environmentObject(shortcutSettings)
+        }
+
+        Window("Edit Instance", id: "edit-instance") {
+            EditInstanceWindowView(appDatabase: appDatabase)
+                .environmentObject(editInstanceWindowState)
+                .environmentObject(queryPreviewWindowState)
+                .environmentObject(shortcutSettings)
+        }
+
+        Window("Query Preview", id: "query-preview") {
+            QueryPreviewWindowView(appDatabase: appDatabase)
+                .environmentObject(queryPreviewWindowState)
+                .environmentObject(shortcutSettings)
+        }
+
+        Window("Search Instances", id: "instance-search") {
+            InstanceSearchWindowView(appDatabase: appDatabase)
+                .environmentObject(instanceSearchWindowState)
+                .environmentObject(editInstanceWindowState)
+                .environmentObject(addInstanceWindowState)
+                .environmentObject(shortcutSettings)
+        }
+
+        Window("Search Queries", id: "query-search") {
+            QuerySearchWindowView(appDatabase: appDatabase)
+                .environmentObject(querySearchWindowState)
+                .environmentObject(editInstanceWindowState)
+                .environmentObject(stacksPageState)
+                .environmentObject(quickStudyState)
+                .environmentObject(shortcutSettings)
+        }
+
+        Window("Instance Search Help", id: "instance-search-help") {
+            InstanceSearchHelpWindowView()
+        }
+        .windowResizability(.contentSize)
+
+        Window("Query Search Help", id: "query-search-help") {
+            QuerySearchHelpWindowView()
+        }
+        .windowResizability(.contentSize)
+
+        Window("Edit Global HTML", id: "global-html-editor") {
+            GlobalCodeEditorWindowView(
+                appDatabase: appDatabase,
+                kind: .html
+            )
+            .environmentObject(shortcutSettings)
+        }
+
+        Window("Edit Global CSS", id: "global-css-editor") {
+            GlobalCodeEditorWindowView(
+                appDatabase: appDatabase,
+                kind: .css
+            )
+            .environmentObject(shortcutSettings)
+        }
+
+        Window("Manage Boundaries", id: "manage-boundaries") {
+            ManageBoundariesWindowView(appDatabase: appDatabase)
+                .environmentObject(manageBoundariesWindowState)
+                .environmentObject(shortcutSettings)
+        }
+
+        Window("Settings", id: "settings") {
+            SettingsWindowView(shortcuts: shortcutSettings, appDatabase: appDatabase)
+                .environmentObject(shortcutSettings)
         }
         .commands {
             CommandMenu("Navigate") {
-                Button(AppTab.decks.title) {
-                    navigationState.select(.decks)
+                Button(AppTab.stacks.title) {
+                    navigationState.select(.stacks)
                 }
-                .keyboardShortcut("1", modifiers: .command)
+                .shortcut(.goToStacksTab, settings: shortcutSettings)
+
+                Button(AppTab.instances.title) {
+                    navigationState.select(.instances)
+                }
+                .shortcut(.goToInstancesTab, settings: shortcutSettings)
 
                 Button(AppTab.collections.title) {
                     navigationState.select(.collections)
                 }
-                .keyboardShortcut("2", modifiers: .command)
+                .shortcut(.goToCollectionsTab, settings: shortcutSettings)
 
                 Button(AppTab.types.title) {
                     navigationState.select(.types)
                 }
-                .keyboardShortcut("3", modifiers: .command)
+                .shortcut(.goToTypesTab, settings: shortcutSettings)
 
                 Button(AppTab.graph.title) {
                     navigationState.select(.graph)
                 }
-                .keyboardShortcut("4", modifiers: .command)
+                .shortcut(.goToGraphTab, settings: shortcutSettings)
+            }
+
+            CommandMenu("Instances") {
+                Button("Add Instance") {
+                    addInstanceWindowState.requestOpen()
+                    openWindow(id: "add-instance")
+                }
+                .shortcut(.openAddInstance, settings: shortcutSettings)
+
+                Button("Search Instances") {
+                    instanceSearchWindowState.requestOpen()
+                    openWindow(id: "instance-search")
+                }
+                .shortcut(.openSearchInstances, settings: shortcutSettings)
+
+                Divider()
+
+                Button("Manage Boundaries…") {
+                    manageBoundariesWindowState.requestOpen()
+                    openWindow(id: "manage-boundaries")
+                }
+            }
+
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") {
+                    openWindow(id: "settings")
+                }
+                .shortcut(.openSettings, settings: shortcutSettings)
             }
         }
     }

@@ -7,17 +7,57 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AFDF0AA52F94778700331401 /* MCP in Frameworks */ = {isa = PBXBuildFile; productRef = AFDF0AA42F94778700331401 /* MCP */; };
+		AFDF0AB32F94797A00331401 /* memor-mcp in CopyFiles */ = {isa = PBXBuildFile; fileRef = AFDF0AAA2F9477B500331401 /* memor-mcp */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		B38D0E0A2D4A100100000001 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = B38D0E092D4A100100000001 /* GRDB */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		AFDF0AB42F9479AE00331401 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AF2714502F7DF204008265B1 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AFDF0AA92F9477B500331401;
+			remoteInfo = "memor-mcp";
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		AFDF0AA82F9477B500331401 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = /usr/share/man/man1/;
+			dstSubfolderSpec = 0;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+		AFDF0AB12F9478F400331401 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 6;
+			files = (
+				AFDF0AB32F94797A00331401 /* memor-mcp in CopyFiles */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
-		AF2714582F7DF204008265B1 /* Flashcards2.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Flashcards2.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AF2714582F7DF204008265B1 /* Memor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Memor.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AFDF0AAA2F9477B500331401 /* memor-mcp */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "memor-mcp"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		AF27145A2F7DF204008265B1 /* Flashcards2 */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = Flashcards2;
+			sourceTree = "<group>";
+		};
+		AFDF0AAB2F9477B500331401 /* memor-mcp */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "memor-mcp";
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -28,6 +68,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				B38D0E0A2D4A100100000001 /* GRDB in Frameworks */,
+				AFDF0AA52F94778700331401 /* MCP in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AFDF0AA72F9477B500331401 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -38,6 +86,7 @@
 			isa = PBXGroup;
 			children = (
 				AF27145A2F7DF204008265B1 /* Flashcards2 */,
+				AFDF0AAB2F9477B500331401 /* memor-mcp */,
 				AF2714592F7DF204008265B1 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -45,7 +94,8 @@
 		AF2714592F7DF204008265B1 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				AF2714582F7DF204008265B1 /* Flashcards2.app */,
+				AF2714582F7DF204008265B1 /* Memor.app */,
+				AFDF0AAA2F9477B500331401 /* memor-mcp */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -53,28 +103,53 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		AF2714572F7DF204008265B1 /* Flashcards2 */ = {
+		AF2714572F7DF204008265B1 /* Memor */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = AF2714632F7DF204008265B1 /* Build configuration list for PBXNativeTarget "Flashcards2" */;
+			buildConfigurationList = AF2714632F7DF204008265B1 /* Build configuration list for PBXNativeTarget "Memor" */;
 			buildPhases = (
 				AF2714542F7DF204008265B1 /* Sources */,
 				AF2714552F7DF204008265B1 /* Frameworks */,
 				AF2714562F7DF204008265B1 /* Resources */,
+				AFDF0AB12F9478F400331401 /* CopyFiles */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AFDF0AB52F9479AE00331401 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				AF27145A2F7DF204008265B1 /* Flashcards2 */,
+			);
+			name = Memor;
+			packageProductDependencies = (
+				B38D0E092D4A100100000001 /* GRDB */,
+				AFDF0AA42F94778700331401 /* MCP */,
+			);
+			productName = Flashcards2;
+			productReference = AF2714582F7DF204008265B1 /* Memor.app */;
+			productType = "com.apple.product-type.application";
+		};
+		AFDF0AA92F9477B500331401 /* memor-mcp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AFDF0AAE2F9477B500331401 /* Build configuration list for PBXNativeTarget "memor-mcp" */;
+			buildPhases = (
+				AFDF0AA62F9477B500331401 /* Sources */,
+				AFDF0AA72F9477B500331401 /* Frameworks */,
+				AFDF0AA82F9477B500331401 /* CopyFiles */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				AF27145A2F7DF204008265B1 /* Flashcards2 */,
+				AFDF0AAB2F9477B500331401 /* memor-mcp */,
 			);
-			name = Flashcards2;
+			name = "memor-mcp";
 			packageProductDependencies = (
-				B38D0E092D4A100100000001 /* GRDB */,
 			);
-			productName = Flashcards2;
-			productReference = AF2714582F7DF204008265B1 /* Flashcards2.app */;
-			productType = "com.apple.product-type.application";
+			productName = "memor-mcp";
+			productReference = AFDF0AAA2F9477B500331401 /* memor-mcp */;
+			productType = "com.apple.product-type.tool";
 		};
 /* End PBXNativeTarget section */
 
@@ -89,9 +164,12 @@
 					AF2714572F7DF204008265B1 = {
 						CreatedOnToolsVersion = 26.4;
 					};
+					AFDF0AA92F9477B500331401 = {
+						CreatedOnToolsVersion = 26.4.1;
+					};
 				};
 			};
-			buildConfigurationList = AF2714532F7DF204008265B1 /* Build configuration list for PBXProject "Flashcards2" */;
+			buildConfigurationList = AF2714532F7DF204008265B1 /* Build configuration list for PBXProject "Memor" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -102,13 +180,15 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				B38D0E082D4A100100000001 /* XCRemoteSwiftPackageReference "GRDB.swift" */,
+				AFDF0AA32F94778700331401 /* XCRemoteSwiftPackageReference "swift-sdk" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = AF2714592F7DF204008265B1 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				AF2714572F7DF204008265B1 /* Flashcards2 */,
+				AF2714572F7DF204008265B1 /* Memor */,
+				AFDF0AA92F9477B500331401 /* memor-mcp */,
 			);
 		};
 /* End PBXProject section */
@@ -131,7 +211,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AFDF0AA62F9477B500331401 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		AFDF0AB52F9479AE00331401 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AFDF0AA92F9477B500331401 /* memor-mcp */;
+			targetProxy = AFDF0AB42F9479AE00331401 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		AF2714612F7DF204008265B1 /* Debug */ = {
@@ -257,6 +352,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Flashcards2.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -270,7 +366,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.sam.Flashcards2;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sam.Memor;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -287,6 +383,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Flashcards2.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -300,7 +397,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.sam.Flashcards2;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sam.Memor;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -312,10 +409,32 @@
 			};
 			name = Release;
 		};
+		AFDF0AAF2F9477B500331401 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		AFDF0AB02F9477B500331401 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		AF2714532F7DF204008265B1 /* Build configuration list for PBXProject "Flashcards2" */ = {
+		AF2714532F7DF204008265B1 /* Build configuration list for PBXProject "Memor" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				AF2714612F7DF204008265B1 /* Debug */,
@@ -324,7 +443,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		AF2714632F7DF204008265B1 /* Build configuration list for PBXNativeTarget "Flashcards2" */ = {
+		AF2714632F7DF204008265B1 /* Build configuration list for PBXNativeTarget "Memor" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				AF2714642F7DF204008265B1 /* Debug */,
@@ -333,9 +452,26 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		AFDF0AAE2F9477B500331401 /* Build configuration list for PBXNativeTarget "memor-mcp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AFDF0AAF2F9477B500331401 /* Debug */,
+				AFDF0AB02F9477B500331401 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		AFDF0AA32F94778700331401 /* XCRemoteSwiftPackageReference "swift-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/modelcontextprotocol/swift-sdk.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.12.0;
+			};
+		};
 		B38D0E082D4A100100000001 /* XCRemoteSwiftPackageReference "GRDB.swift" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/groue/GRDB.swift.git";
@@ -347,6 +483,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		AFDF0AA42F94778700331401 /* MCP */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AFDF0AA32F94778700331401 /* XCRemoteSwiftPackageReference "swift-sdk" */;
+			productName = MCP;
+		};
 		B38D0E092D4A100100000001 /* GRDB */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = B38D0E082D4A100100000001 /* XCRemoteSwiftPackageReference "GRDB.swift" */;

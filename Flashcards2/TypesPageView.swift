@@ -1,0 +1,357 @@
+//
+//  TypesPageView.swift
+//  Flashcards2
+//
+//  Created by Codex on 4/1/26.
+//
+
+import AppKit
+import GRDB
+import SwiftUI
+import WebKit
+import WebKit
+
+struct TypesPageView: View {
+    @Environment(\.openWindow) private var openWindow
+    @EnvironmentObject private var navigationState: AppNavigationState
+    @EnvironmentObject private var shortcutSettings: ShortcutSettings
+    let appDatabase: AppDatabase
+
+    @State private var selectedType: FlashcardType?
+    @State private var autoRenameTypeID: Int64?
+    @State private var types: [FlashcardType] = []
+    @State private var searchText = ""
+    @State private var errorMessage: String?
+    @State private var typePendingDeletion: FlashcardType?
+
+    @State private var isAddTypePopoverPresented = false
+    @State private var newTypeName = ""
+    @State private var newTypeKind: TypeKind = .object
+    @State private var addTypeError: String?
+    @FocusState private var isNewTypeNameFocused: Bool
+    @FocusState private var isSearchFocused: Bool
+
+    private var filteredTypes: [FlashcardType] {
+        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return types }
+        return types.filter { $0.name.localizedCaseInsensitiveContains(trimmed) }
+    }
+
+    var body: some View {
+        Group {
+            if let selectedType {
+                TypeDetailPageView(
+                    type: selectedType,
+                    appDatabase: appDatabase,
+                    shouldAutoPresentRenamePopover: autoRenameTypeID == selectedType.id,
+                    onAutoRenamePopoverPresented: {
+                        autoRenameTypeID = nil
+                    },
+                    onBack: { self.selectedType = nil }
+                )
+            } else {
+                typesListPage
+            }
+        }
+        .task(id: selectedType?.id) {
+            guard selectedType == nil else { return }
+            await loadTypes()
+            if let typeID = navigationState.requestedTypeDetailID,
+               let type = types.first(where: { $0.id == typeID }) {
+                navigationState.requestedTypeDetailID = nil
+                selectedType = type
+            }
+        }
+        .onChange(of: navigationState.resetToHomeNonce) { _, _ in
+            selectedType = nil
+        }
+        .onChange(of: navigationState.requestedTypeDetailID) { _, typeID in
+            guard let typeID else { return }
+            navigationState.requestedTypeDetailID = nil
+            if let type = types.first(where: { $0.id == typeID }) {
+                selectedType = type
+            } else {
+                Task {
+                    await loadTypes()
+                    if let type = types.first(where: { $0.id == typeID }) {
+                        selectedType = type
+                    }
+                }
+            }
+        }
+        .alert(
+            "Are you sure you want to delete this type?",
+            isPresented: Binding(
+                get: { typePendingDeletion != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        typePendingDeletion = nil
+                    }
+                }
+            ),
+            presenting: typePendingDeletion
+        ) { type in
+            Button("Delete", role: .destructive) {
+                Task {
+                    await deleteType(type)
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                typePendingDeletion = nil
+            }
+        } message: { _ in
+            Text("This action is irreversible. All instances of this type will be deleted.")
+        }
+    }
+
+    private var typesListPage: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text(AppTab.types.title)
+                    .font(.largeTitle)
+                    .fontWeight(.semibold)
+
+                HStack(spacing: 12) {
+                    Button("Edit Global HTML") {
+                        openWindow(id: "global-html-editor")
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("Edit Global CSS") {
+                        openWindow(id: "global-css-editor")
+                    }
+                    .buttonStyle(.bordered)
+
+                    TextField("Search types", text: $searchText)
+                        .textFieldStyle(.roundedBorder)
+                        .focused($isSearchFocused)
+                        .frame(maxWidth: .infinity)
+                }
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .foregroundStyle(.red)
+                } else if filteredTypes.isEmpty && !types.isEmpty {
+                    Text("No types match your search.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        ForEach(filteredTypes) { type in
+                            TypeRowView(
+                                type: type,
+                                onOpen: {
+                                    selectedType = type
+                                },
+                                onDelete: {
+                                    typePendingDeletion = type
+                                }
+                            )
+                        }
+                    }
+                }
+
+                Button("Add Type") {
+                    newTypeName = ""
+                    newTypeKind = .object
+                    addTypeError = nil
+                    isAddTypePopoverPresented = true
+                }
+                .buttonStyle(.borderedProminent)
+                .popover(isPresented: $isAddTypePopoverPresented, arrowEdge: .bottom) {
+                    addTypePopover
+                }
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .background {
+            FindShortcutKeyHandler(shortcutSettings: shortcutSettings) {
+                isSearchFocused = true
+            }
+        }
+    }
+
+    private var addTypePopover: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Add Type")
+                .font(.headline)
+
+            TextField("Type Name", text: $newTypeName)
+                .textFieldStyle(.roundedBorder)
+                .focused($isNewTypeNameFocused)
+                .onSubmit {
+                    Task { await addType() }
+                }
+
+            Picker("Kind", selection: $newTypeKind) {
+                Text("Object").tag(TypeKind.object)
+                Text("Node").tag(TypeKind.node)
+            }
+            .pickerStyle(.radioGroup)
+
+            Text(newTypeKind == .node
+                 ? "Node types have text fields and link fields connecting instances of the same type."
+                 : "Object types store text fields.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let addTypeError {
+                Text(addTypeError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    isAddTypePopoverPresented = false
+                }
+                Button("Create") {
+                    Task { await addType() }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(newTypeName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(16)
+        .frame(width: 320)
+        .onAppear {
+            isNewTypeNameFocused = true
+        }
+    }
+
+    @MainActor
+    private func loadTypes() async {
+        do {
+            types = try appDatabase.fetchTypes()
+            errorMessage = nil
+        } catch {
+            errorMessage = "Failed to load types."
+        }
+    }
+
+    @MainActor
+    private func addType() async {
+        let trimmedName = newTypeName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
+        do {
+            let newType = try appDatabase.createType(name: trimmedName, kind: newTypeKind)
+            types = try appDatabase.fetchTypes()
+            isAddTypePopoverPresented = false
+            selectedType = newType
+            errorMessage = nil
+        } catch {
+            addTypeError = (error as? DatabaseError)?.message ?? "Failed to add type."
+        }
+    }
+
+    @MainActor
+    private func deleteType(_ type: FlashcardType) async {
+        do {
+            try appDatabase.deleteType(typeID: type.id)
+            types = try appDatabase.fetchTypes()
+            typePendingDeletion = nil
+            errorMessage = nil
+        } catch {
+            errorMessage = "Failed to delete type."
+        }
+    }
+}
+
+private struct TypeRowView: View {
+    let type: FlashcardType
+    let onOpen: () -> Void
+    let onDelete: () -> Void
+
+    @State private var isHovered = false
+    @State private var isDeleteButtonHovered = false
+
+    private var instanceCountText: String {
+        let noun = type.instanceCount == 1 ? "instance" : "instances"
+        return "\(type.instanceCount) \(noun)"
+    }
+
+    private var isMapType: Bool {
+        type.isBuiltin && (type.name == POINTMAP_TYPE_NAME || type.name == BOUNDARYMAP_TYPE_NAME)
+    }
+
+    // SF Symbol + color indicating the type's kind.
+    private var kindIcon: (name: String, color: Color) {
+        if isMapType {
+            return ("map.fill", .yellow)
+        } else if type.isNode {
+            return ("point.3.filled.connected.trianglepath.dotted", .green)
+        } else {
+            return ("doc.text.fill", .blue)
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: kindIcon.name)
+                .foregroundStyle(kindIcon.color)
+                .font(.title3)
+
+            Text(type.name)
+                .font(.title3)
+                .fontWeight(.medium)
+                .foregroundStyle(.primary)
+
+            if type.isBuiltin {
+                Text("(built-in)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(instanceCountText)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(NSColor.controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .contentShape(Rectangle())
+        .pointerStyle(isHovered && !type.isBuiltin ? .link : .default)
+        .overlay {
+            ZStack(alignment: .topTrailing) {
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
+
+                if isHovered && !type.isBuiltin {
+                    Button(action: onDelete) {
+                        Image(systemName: "trash")
+                            .foregroundStyle(.red)
+                            .padding(8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(isDeleteButtonHovered ? Color.red.opacity(0.14) : Color.clear)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .padding(8)
+                    .onHover { hovering in
+                        isDeleteButtonHovered = hovering
+                    }
+                }
+            }
+        }
+        .onTapGesture {
+            guard !type.isBuiltin else { return }
+            isHovered = false
+            onOpen()
+        }
+        .onContinuousHover { phase in
+            switch phase {
+            case .active:
+                isHovered = true
+            case .ended:
+                isHovered = false
+                isDeleteButtonHovered = false
+            }
+        }
+    }
+}
+

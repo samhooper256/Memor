@@ -5,21 +5,36 @@
 //  Created by Sam Hooper on 4/1/26.
 //
 
+import AppKit
 import Combine
 import SwiftUI
+import WebKit
 
 enum AppTab: Int, CaseIterable, Identifiable {
-    case decks
+    case stacks
+    case instances
     case collections
     case types
     case graph
 
     var id: Self { self }
 
+    var shortcutAction: ShortcutAction {
+        switch self {
+        case .stacks: return .goToStacksTab
+        case .instances: return .goToInstancesTab
+        case .collections: return .goToCollectionsTab
+        case .types: return .goToTypesTab
+        case .graph: return .goToGraphTab
+        }
+    }
+
     var title: String {
         switch self {
-        case .decks:
-            "Decks"
+        case .stacks:
+            "Stacks"
+        case .instances:
+            "Instances"
         case .collections:
             "Collections"
         case .types:
@@ -31,22 +46,101 @@ enum AppTab: Int, CaseIterable, Identifiable {
 }
 
 final class AppNavigationState: ObservableObject {
-    @Published var selectedTab: AppTab = .decks
+    @Published var selectedTab: AppTab = .stacks
+    @Published var requestedTypeDetailID: Int64?
+    @Published private(set) var resetToHomeNonce = UUID()
 
     func select(_ tab: AppTab) {
+        if selectedTab == tab {
+            resetToHomeNonce = UUID()
+        }
         selectedTab = tab
+    }
+
+    func navigateToTypeDetail(typeID: Int64) {
+        requestedTypeDetailID = typeID
+        selectedTab = .types
     }
 }
 
+@MainActor
+final class StacksPageState: ObservableObject {
+    @Published private(set) var queryCountsByStackID: [Int64: StackQueryCounts?] = [:]
+    @Published private(set) var lastUpdatedTimestamp: Date?
+    @Published private(set) var averageQueryInterval: Double?
+
+    func refresh(appDatabase: AppDatabase) async throws {
+        queryCountsByStackID = try appDatabase.refreshStackQueryCounts()
+        lastUpdatedTimestamp = try appDatabase.fetchStacksLastUpdatedTimestamp()
+        averageQueryInterval = try appDatabase.fetchAverageQueryInterval()
+    }
+
+    func loadLastUpdatedTimestamp(appDatabase: AppDatabase) async throws {
+        lastUpdatedTimestamp = try appDatabase.fetchStacksLastUpdatedTimestamp()
+    }
+
+    func refreshQueryCounts(for stack: Stack, appDatabase: AppDatabase) async throws {
+        queryCountsByStackID[stack.id] = try appDatabase.refreshStackQueryCounts(for: stack)
+    }
+
+    func queryCounts(for stackID: Int64) -> StackQueryCounts? {
+        queryCountsByStackID[stackID] ?? StackQueryCounts(
+            blueQueryCount: 0,
+            redQueryCount: 0,
+            greenQueryCount: 0,
+            magentaQueryCount: 0
+        )
+    }
+}
+
+@MainActor
+final class InstancesPageState: ObservableObject {
+    @Published var selectedTypeID: Int64?
+}
+
 struct ContentView: View {
+    @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var navigationState: AppNavigationState
+    @EnvironmentObject private var querySearchWindowState: QuerySearchWindowState
+    @EnvironmentObject private var stacksPageState: StacksPageState
+    @EnvironmentObject private var quickStudyState: QuickStudyState
+    @EnvironmentObject private var shortcutSettings: ShortcutSettings
+    let appDatabase: AppDatabase
+    @State private var activeStudyStack: Stack?
+    @State private var isActiveStudyQuickStudy: Bool = false
+    @StateObject private var instancesPageState = InstancesPageState()
 
     var body: some View {
-        VStack(spacing: 0) {
-            tabBar
-            Divider()
-            currentPage
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        Group {
+            if let activeStudyStack {
+                StudyModeView(
+                    stack: activeStudyStack,
+                    appDatabase: appDatabase,
+                    onExit: { exitStudyMode(for: activeStudyStack) }
+                )
+            } else {
+                VStack(spacing: 0) {
+                    tabBar
+                    Divider()
+                    currentPage
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                }
+            }
+        }
+        .background {
+            MainWindowQuerySearchShortcutHandler(shortcutSettings: shortcutSettings) {
+                if let activeStudyStack {
+                    querySearchWindowState.requestOpen(searchText: activeStudyStack.search)
+                } else {
+                    querySearchWindowState.requestOpen()
+                }
+                openWindow(id: "query-search")
+            }
+        }
+        .onChange(of: quickStudyState.pendingSearch) { _, newValue in
+            guard let searchText = newValue else { return }
+            quickStudyState.pendingSearch = nil
+            startQuickStudySession(searchText: searchText)
         }
     }
 
@@ -69,6 +163,7 @@ struct ContentView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .buttonStyle(.plain)
+                .shortcut(tab.shortcutAction, settings: shortcutSettings)
             }
         }
         .padding(12)
@@ -78,14 +173,22 @@ struct ContentView: View {
     @ViewBuilder
     private var currentPage: some View {
         switch navigationState.selectedTab {
-        case .decks:
-            TabPageView(title: AppTab.decks.title)
+        case .stacks:
+            StacksPageView(
+                appDatabase: appDatabase,
+                onSelectStack: { activeStudyStack = $0 }
+            )
+        case .instances:
+            InstancesPageView(
+                appDatabase: appDatabase,
+                pageState: instancesPageState
+            )
         case .collections:
-            TabPageView(title: AppTab.collections.title)
+            CollectionsPageView(appDatabase: appDatabase)
         case .types:
-            TabPageView(title: AppTab.types.title)
+            TypesPageView(appDatabase: appDatabase)
         case .graph:
-            TabPageView(title: AppTab.graph.title)
+            GraphPageView(appDatabase: appDatabase)
         }
     }
 
@@ -94,6 +197,103 @@ struct ContentView: View {
             return AnyShapeStyle(Color.accentColor.opacity(0.18))
         } else {
             return AnyShapeStyle(.clear)
+        }
+    }
+
+    private func exitStudyMode(for stack: Stack) {
+        let wasQuickStudy = isActiveStudyQuickStudy
+        isActiveStudyQuickStudy = false
+        activeStudyStack = nil
+
+        if wasQuickStudy {
+            navigationState.select(.stacks)
+            return
+        }
+
+        Task {
+            do {
+                try await stacksPageState.refreshQueryCounts(for: stack, appDatabase: appDatabase)
+            } catch {
+                print("Failed to refresh stack counts after study mode: \(error)")
+            }
+        }
+    }
+
+    private func startQuickStudySession(searchText: String) {
+        let synthetic = Stack(
+            id: -1,
+            name: "",
+            search: searchText,
+            isPinned: false,
+            blueQueryCount: 0,
+            redQueryCount: 0,
+            greenQueryCount: 0,
+            magentaQueryCount: 0
+        )
+        isActiveStudyQuickStudy = true
+        activeStudyStack = synthetic
+    }
+}
+
+private struct MainWindowQuerySearchShortcutHandler: NSViewRepresentable {
+    let shortcutSettings: ShortcutSettings
+    let onTriggered: () -> Void
+
+    func makeNSView(context: Context) -> KeyHandlingView {
+        let view = KeyHandlingView()
+        view.shortcutSettings = shortcutSettings
+        view.onTriggered = onTriggered
+        return view
+    }
+
+    func updateNSView(_ nsView: KeyHandlingView, context: Context) {
+        nsView.shortcutSettings = shortcutSettings
+        nsView.onTriggered = onTriggered
+    }
+
+    final class KeyHandlingView: NSView {
+        var shortcutSettings: ShortcutSettings?
+        var onTriggered: (() -> Void)?
+
+        private var monitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+
+            if window == nil {
+                removeMonitor()
+            } else {
+                installMonitorIfNeeded()
+            }
+        }
+
+        deinit {
+            removeMonitor()
+        }
+
+        private func installMonitorIfNeeded() {
+            guard monitor == nil else { return }
+
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self, event.window === self.window else {
+                    return event
+                }
+
+                if let binding = self.shortcutSettings?.binding(for: .openSearchQueries),
+                   binding.matches(event) {
+                    self.onTriggered?()
+                    return nil
+                }
+
+                return event
+            }
+        }
+
+        private func removeMonitor() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
         }
     }
 }
@@ -113,7 +313,11 @@ private struct TabPageView: View {
     }
 }
 
+// MARK: - Graph Page
+
+
+
 #Preview {
-    ContentView()
+    ContentView(appDatabase: try! AppDatabase())
         .environmentObject(AppNavigationState())
 }
