@@ -160,7 +160,9 @@ struct QueryPreviewWindowView: View {
 
     private func isEditInstanceWindowOpen() -> Bool {
         NSApp.windows.contains { window in
-            window.isVisible
+            // A minimized window still holds the editor's (possibly unsaved)
+            // content, so count it as open alongside visible windows.
+            (window.isVisible || window.isMiniaturized)
                 && (window.identifier?.rawValue == "edit-instance" || window.title == "Edit Instance")
         }
     }
