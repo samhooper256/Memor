@@ -654,6 +654,13 @@ struct HyperlinkSearchTextField: NSViewRepresentable {
             lastAppliedFocusRequest = focusRequest
             DispatchQueue.main.async {
                 guard let window = textField.window else { return }
+                // If the field is already being edited, leave its caret/selection
+                // alone. performSearch re-issues the focus request on every
+                // keystroke; without this guard, repositioning the caret to the
+                // end teleports it whenever the user edits mid-string.
+                if textField.currentEditor() != nil {
+                    return
+                }
                 window.makeFirstResponder(textField)
                 if let editor = textField.currentEditor() {
                     let length = (textField.stringValue as NSString).length
