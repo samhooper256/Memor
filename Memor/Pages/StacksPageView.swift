@@ -268,6 +268,8 @@ private struct StackRowView: View {
                 Text(highlightedSearchQuery(stack.search))
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
+
+                DescriptionDisplay(stack.description)
             }
 
             Spacer(minLength: 0)
@@ -374,6 +376,8 @@ private struct StackDetailPageView: View {
     @State private var searchQuery: String
     @State private var searchSaveTask: Task<Void, Never>?
     @State private var searchErrorMessage: String?
+    @State private var description: String
+    @State private var descriptionSaveTask: Task<Void, Never>?
     @State private var isRenamePopoverPresented = false
     @State private var renamedStackName: String = ""
     @State private var displayedName: String
@@ -385,6 +389,7 @@ private struct StackDetailPageView: View {
         self.onBack = onBack
         self._searchQuery = State(initialValue: stack.search)
         self._displayedName = State(initialValue: stack.name)
+        self._description = State(initialValue: stack.description)
     }
 
     var body: some View {
@@ -458,6 +463,8 @@ private struct StackDetailPageView: View {
                             .font(.caption)
                     }
                 }
+
+                DescriptionEditor(text: $description)
             }
             .padding(24)
 
@@ -471,6 +478,14 @@ private struct StackDetailPageView: View {
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 guard !Task.isCancelled else { return }
                 await saveSearch(newValue)
+            }
+        }
+        .onChange(of: description) { _, newValue in
+            descriptionSaveTask?.cancel()
+            descriptionSaveTask = Task {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard !Task.isCancelled else { return }
+                try? appDatabase.updateStackDescription(id: stack.id, description: newValue)
             }
         }
     }
@@ -515,6 +530,8 @@ private struct StackCardView: View {
                 Text(highlightedSearchQuery(stack.search))
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
+
+                DescriptionDisplay(stack.description)
             }
 
             Spacer(minLength: 0)

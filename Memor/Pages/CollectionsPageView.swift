@@ -339,24 +339,7 @@ private struct CollectionDetailPageView: View {
                 }
                 .frame(maxWidth: .infinity)
 
-                ZStack(alignment: .topLeading) {
-                    if description.isEmpty {
-                        Text("Description")
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundStyle(.tertiary)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 6)
-                            .allowsHitTesting(false)
-                    }
-                    PlainTextEditor(text: $description)
-                        .frame(minHeight: 60)
-                }
-                .background(Color(nsColor: .controlBackgroundColor))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
-                }
+                DescriptionEditor(text: $description)
                 .onChange(of: description) { _, newValue in
                     descriptionSaveTask?.cancel()
                     descriptionSaveTask = Task {
@@ -598,12 +581,7 @@ private struct CollectionRowView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                if !collection.description.isEmpty {
-                    Text(collection.description)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
+                DescriptionDisplay(collection.description)
             }
 
             Spacer(minLength: 0)

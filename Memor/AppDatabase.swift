@@ -525,6 +525,7 @@ struct AppDatabase {
                         id,
                         name,
                         search,
+                        COALESCE(description, '') AS description,
                         is_pinned AS isPinned,
                         0 AS blueQueryCount,
                         0 AS redQueryCount,
@@ -551,6 +552,7 @@ struct AppDatabase {
                 id: db.lastInsertedRowID,
                 name: name,
                 search: search,
+                description: "",
                 isPinned: false,
                 blueQueryCount: 0,
                 redQueryCount: 0,
@@ -695,6 +697,17 @@ struct AppDatabase {
         }
     }
 
+    func updateStackDescription(id: Int64, description: String) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE stack SET description = ? WHERE id = ?
+                    """,
+                arguments: [description, id]
+            )
+        }
+    }
+
     func setStackPinned(id: Int64, isPinned: Bool) throws {
         try dbQueue.write { db in
             try db.execute(
@@ -755,6 +768,7 @@ struct AppDatabase {
                         id,
                         name,
                         search,
+                        COALESCE(description, '') AS description,
                         is_pinned AS isPinned,
                         0 AS blueQueryCount,
                         0 AS redQueryCount,

@@ -224,6 +224,7 @@ struct ContentView: View {
             id: -1,
             name: "",
             search: searchText,
+            description: "",
             isPinned: false,
             blueQueryCount: 0,
             redQueryCount: 0,

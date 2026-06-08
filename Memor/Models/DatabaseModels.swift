@@ -196,6 +196,7 @@ struct Stack: Identifiable, FetchableRecord, Decodable, Hashable {
     let id: Int64
     let name: String
     let search: String
+    let description: String
     let isPinned: Bool
     let blueQueryCount: Int
     let redQueryCount: Int

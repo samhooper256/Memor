@@ -134,11 +134,13 @@ extension AppDatabase {
                     id INTEGER PRIMARY KEY,
                     name TEXT,
                     search TEXT,
+                    description TEXT,
                     is_pinned INTEGER NOT NULL DEFAULT 0
                 ) STRICT
                 """)
 
             try migrateStackPinnedColumn(db: db)
+            try migrateStackDescriptionColumn(db: db)
 
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS image_file (
@@ -518,6 +520,18 @@ extension AppDatabase {
         let names = Set(info.compactMap { $0["name"] as String? })
         if !names.contains("is_pinned") {
             try db.execute(sql: "ALTER TABLE \"stack\" ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0")
+        }
+    }
+
+    // Adds the description column to the stack table for databases created before
+    // stack descriptions existed. Idempotent: the ALTER runs only when the column is
+    // absent, so this is a no-op on fresh installs. Existing rows default to NULL,
+    // which fetchStacks coalesces to an empty string.
+    private static func migrateStackDescriptionColumn(db: Database) throws {
+        let info = try Row.fetchAll(db, sql: "PRAGMA table_info(\"stack\")")
+        let names = Set(info.compactMap { $0["name"] as String? })
+        if !names.contains("description") {
+            try db.execute(sql: "ALTER TABLE \"stack\" ADD COLUMN description TEXT")
         }
     }
 
