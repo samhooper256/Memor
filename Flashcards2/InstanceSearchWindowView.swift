@@ -423,10 +423,13 @@ struct QuerySearchWindowView: View {
     @State private var isAddStackPopoverPresented = false
     @State private var newStackName = ""
     @State private var isResetDueDatesConfirmationPresented = false
+    @State private var isDeleteQueriesConfirmationPresented = false
     @State private var selectedQueryIDs: Set<String> = []
     // The query IDs the pending reset confirmation will act on. Empty means
     // "all queries matching the current search".
     @State private var queryIDsPendingReset: Set<String> = []
+    // The query IDs the pending delete confirmation will disable.
+    @State private var queryIDsPendingDelete: Set<String> = []
     @State private var searchFocusRequest = UUID()
 
     private var resultsCount: Int {
@@ -475,6 +478,10 @@ struct QuerySearchWindowView: View {
                         Button("Reset Due Dates") {
                             queryIDsPendingReset = items
                             isResetDueDatesConfirmationPresented = true
+                        }
+                        Button("Delete Queries", role: .destructive) {
+                            queryIDsPendingDelete = items
+                            isDeleteQueriesConfirmationPresented = true
                         }
                     }
                 } primaryAction: { clickedIDs in
@@ -592,6 +599,19 @@ struct QuerySearchWindowView: View {
         } message: {
             Text("This action is irreversible.")
         }
+        .alert(
+            "Are you sure you want to delete \(queryIDsPendingDelete.count) \(queryIDsPendingDelete.count == 1 ? "query" : "queries")?",
+            isPresented: $isDeleteQueriesConfirmationPresented
+        ) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                Task {
+                    await deleteQueries()
+                }
+            }
+        } message: {
+            Text("This disables the selected queries on their instances. The instances themselves are not deleted. This action is irreversible.")
+        }
         .onDisappear {
             debounceTask?.cancel()
         }
@@ -688,6 +708,26 @@ struct QuerySearchWindowView: View {
             errorMessage = nil
         } catch {
             errorMessage = "Failed to reset due dates."
+        }
+    }
+
+    @MainActor
+    private func deleteQueries() async {
+        let pairs = queryIDsPendingDelete.compactMap { id -> (instanceID: Int64, queryTypeID: Int64)? in
+            let parts = id.split(separator: ":")
+            guard parts.count == 2,
+                  let instanceID = Int64(parts[0]),
+                  let queryTypeID = Int64(parts[1]) else { return nil }
+            return (instanceID: instanceID, queryTypeID: queryTypeID)
+        }
+        guard !pairs.isEmpty else { return }
+        do {
+            try appDatabase.disableQueries(instanceIDAndQueryTypeIDPairs: pairs)
+            NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
+            await runSearch(for: debouncedSearchQuery)
+            errorMessage = nil
+        } catch {
+            errorMessage = "Failed to delete queries."
         }
     }
 }

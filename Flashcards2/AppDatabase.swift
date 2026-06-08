@@ -1692,6 +1692,41 @@ struct AppDatabase {
         }
     }
 
+    /// Disables the given queries by removing their per-instance query rows. This
+    /// never deletes instances — only the `query` / `pointmap_query` /
+    /// `boundarymap_query` rows that make a query active. For map types, the
+    /// `queryTypeID` is a point/attachment id, so both directions are disabled.
+    func disableQueries(instanceIDAndQueryTypeIDPairs: [(instanceID: Int64, queryTypeID: Int64)]) throws {
+        guard !instanceIDAndQueryTypeIDPairs.isEmpty else { return }
+
+        try dbQueue.write { db in
+            for pair in instanceIDAndQueryTypeIDPairs {
+                try db.execute(
+                    sql: "DELETE FROM query WHERE instance_id = ? AND query_type_id = ?",
+                    arguments: [pair.instanceID, pair.queryTypeID]
+                )
+                try db.execute(
+                    sql: """
+                        DELETE FROM pointmap_query
+                        WHERE point_id IN (
+                            SELECT id FROM pointmap_point WHERE id = ? AND instance_id = ?
+                        )
+                        """,
+                    arguments: [pair.queryTypeID, pair.instanceID]
+                )
+                try db.execute(
+                    sql: """
+                        DELETE FROM boundarymap_query
+                        WHERE attachment_id IN (
+                            SELECT id FROM boundarymap_attachment WHERE id = ? AND instance_id = ?
+                        )
+                        """,
+                    arguments: [pair.queryTypeID, pair.instanceID]
+                )
+            }
+        }
+    }
+
     func fetchStudyQueryBuckets(forStackSearch stackSearch: String) throws -> StudyQueryBuckets {
         let parsedQuery = try parseQuerySearchQuery(stackSearch)
         let startOfTomorrowTimestamp = TimeZoneSettings.shared.startOfTomorrowTimestamp()
