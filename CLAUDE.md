@@ -102,6 +102,7 @@ There are three classes of type, discriminated by `type.kind` ('object' | 'node'
 - `type:name` - instance of named type
 - `id:number` - the single instance with this ID
 - `:noqueries` - **instance search only** - instances with no query types enabled (no `query` rows; for PointMap/BoundaryMap, no points / boundary queries). Rejected in query search. The instance-vs-query distinction is enforced by the `allowsNoQueries` flag threaded through `parseSearchExpression`.
+- `:new` - **query search only** - queries that are new (`interval = 0`). Standard object/node queries only; PointMap/BoundaryMap results are always excluded when `:new` is present (their condition builders compile it to an always-false predicate, so `NOT :new` still includes them). Rejected in instance search. Enforced by the `allowsNew` flag threaded through `parseSearchExpression` (counterpart to `allowsNoQueries`).
 - Components can use `or(...)` for OR logic
 - Double quotes for spaces inside components: `"literal:hi there"`
 - Empty query matches all

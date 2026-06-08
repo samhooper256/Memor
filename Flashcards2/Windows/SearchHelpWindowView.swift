@@ -80,10 +80,17 @@ private let noQueriesSearchHelpComponent = SearchHelpComponent(
     description: "Match only instances that have no query types enabled."
 )
 
+// Query-only component.
+private let newSearchHelpComponent = SearchHelpComponent(
+    segments: [(":new", searchOperatorColor)],
+    description: "Match only queries that are new (never studied)."
+)
+
 private let instanceSearchHelpComponents: [SearchHelpComponent] =
     sharedSearchHelpComponents + [noQueriesSearchHelpComponent]
 
-private let querySearchHelpComponents: [SearchHelpComponent] = sharedSearchHelpComponents
+private let querySearchHelpComponents: [SearchHelpComponent] =
+    sharedSearchHelpComponents + [newSearchHelpComponent]
 
 private struct SearchHelpContentView: View {
     @Environment(\.dismiss) private var dismiss

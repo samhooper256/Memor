@@ -50,6 +50,7 @@ struct AppDatabase {
         case type(String)
         case id(Int64)
         case noQueries
+        case new
         case and(SearchExpression, SearchExpression)
         case or(SearchExpression, SearchExpression)
         case not(SearchExpression)
@@ -4867,6 +4868,9 @@ struct AppDatabase {
                 """,
                 StatementArguments()
             )
+        case .new:
+            // :new is standard-query-only; exclude all PointMap rows.
+            return ("0", StatementArguments())
         case .and(let left, let right):
             let l = makePointMapSearchCondition(left, pointAlias: pointAlias, instanceAlias: instanceAlias, includePointName: includePointName)
             let r = makePointMapSearchCondition(right, pointAlias: pointAlias, instanceAlias: instanceAlias, includePointName: includePointName)
@@ -5386,6 +5390,9 @@ struct AppDatabase {
                 """,
                 StatementArguments()
             )
+        case .new:
+            // :new is standard-query-only; exclude all BoundaryMap rows.
+            return ("0", StatementArguments())
         case .and(let left, let right):
             let l = makeBoundaryMapSearchCondition(left, attachmentAlias: attachmentAlias, instanceAlias: instanceAlias, boundaryAlias: boundaryAlias, includeBoundaryName: includeBoundaryName)
             let r = makeBoundaryMapSearchCondition(right, attachmentAlias: attachmentAlias, instanceAlias: instanceAlias, boundaryAlias: boundaryAlias, includeBoundaryName: includeBoundaryName)
@@ -5984,12 +5991,12 @@ struct AppDatabase {
 
     private func parseInstanceSearchQuery(_ query: String) throws -> InstanceSearchQuery {
         let tokens = try tokenizeSearchQueryComponents(query)
-        return InstanceSearchQuery(expression: try parseSearchExpression(tokens, allowsNoQueries: true))
+        return InstanceSearchQuery(expression: try parseSearchExpression(tokens, allowsNoQueries: true, allowsNew: false))
     }
 
     private func parseQuerySearchQuery(_ query: String) throws -> QuerySearchQuery {
         let tokens = try tokenizeSearchQueryComponents(query)
-        return QuerySearchQuery(expression: try parseSearchExpression(tokens, allowsNoQueries: false))
+        return QuerySearchQuery(expression: try parseSearchExpression(tokens, allowsNoQueries: false, allowsNew: true))
     }
 
     private func tokenizeSearchQueryComponents(_ query: String) throws -> [String] {
@@ -6031,10 +6038,11 @@ struct AppDatabase {
         return tokens
     }
 
-    private func parseSearchExpression(_ tokens: [String], allowsNoQueries: Bool) throws -> SearchExpression? {
+    private func parseSearchExpression(_ tokens: [String], allowsNoQueries: Bool, allowsNew: Bool) throws -> SearchExpression? {
         struct Parser {
             let tokens: [String]
             let allowsNoQueries: Bool
+            let allowsNew: Bool
             var index = 0
 
             mutating func parseExpression() throws -> SearchExpression? {
@@ -6107,6 +6115,11 @@ struct AppDatabase {
                         throw DatabaseError(message: "The :noqueries component can only be used when searching instances.")
                     }
                     return .noQueries
+                } else if token == ":new" {
+                    guard allowsNew else {
+                        throw DatabaseError(message: "The :new component can only be used when searching queries.")
+                    }
+                    return .new
                 } else if token.hasPrefix("literal:") {
                     let literal = String(token.dropFirst("literal:".count))
                     guard !literal.isEmpty else {
@@ -6153,7 +6166,7 @@ struct AppDatabase {
             }
         }
 
-        var parser = Parser(tokens: tokens, allowsNoQueries: allowsNoQueries)
+        var parser = Parser(tokens: tokens, allowsNoQueries: allowsNoQueries, allowsNew: allowsNew)
         let expression = try parser.parseExpression()
         guard parser.index == tokens.count else {
             throw DatabaseError(message: "Search query has an unmatched parenthesis.")
@@ -6265,6 +6278,9 @@ struct AppDatabase {
                 StatementArguments()
             )
 
+        case .new:
+            return ("query.interval = 0", StatementArguments())
+
         case .and(let leftExpression, let rightExpression):
             let left = makeSearchCondition(leftExpression, tableAlias: tableAlias, typeName: typeName, fieldIndices: fieldIndices)
             let right = makeSearchCondition(rightExpression, tableAlias: tableAlias, typeName: typeName, fieldIndices: fieldIndices)
@@ -6317,7 +6333,7 @@ struct AppDatabase {
         guard let expression else { return [] }
 
         switch expression {
-        case .literal, .type, .id, .noQueries:
+        case .literal, .type, .id, .noQueries, .new:
             return []
         case .collection(let collectionName):
             return [collectionName]

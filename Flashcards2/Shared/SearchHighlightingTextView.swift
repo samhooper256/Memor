@@ -10,6 +10,7 @@ import SwiftUI
 
 private let searchOperatorRegex = try! NSRegularExpression(pattern: #"\b(literal|col|collection|type|id):"#)
 private let searchFlagRegex = try! NSRegularExpression(pattern: #":noqueries\b"#)
+private let searchNewFlagRegex = try! NSRegularExpression(pattern: #":new\b"#)
 private let searchLogicalOperatorRegex = try! NSRegularExpression(pattern: #"\b(OR|NOT)\b"#)
 private let searchQuoteRegex = try! NSRegularExpression(pattern: #"(?:^"|"$|(?<=\s)"|"(?=\s))"#, options: .anchorsMatchLines)
 private let searchParenRegex = try! NSRegularExpression(pattern: #"[()]"#)
@@ -32,9 +33,15 @@ func applySearchQueryHighlighting(to textStorage: NSTextStorage, baseFont: NSFon
         textStorage.addAttribute(.foregroundColor, value: NSColor.systemBlue, range: match.range)
     }
 
-    // Argument-less flag components (blue) — instance search only
+    // Argument-less flag components (blue). `:noqueries` is instance-search only;
+    // `:new` is query-search only.
     if highlightsNoQueries {
         searchFlagRegex.enumerateMatches(in: string, range: fullRange) { match, _, _ in
+            guard let match else { return }
+            textStorage.addAttribute(.foregroundColor, value: NSColor.systemBlue, range: match.range)
+        }
+    } else {
+        searchNewFlagRegex.enumerateMatches(in: string, range: fullRange) { match, _, _ in
             guard let match else { return }
             textStorage.addAttribute(.foregroundColor, value: NSColor.systemBlue, range: match.range)
         }
@@ -74,7 +81,12 @@ func highlightedSearchQuery(_ search: String) -> AttributedString {
     }
 
     // Note: `:noqueries` is deliberately not highlighted here — this renders
-    // stack (query) searches, where the instance-only flag is not valid.
+    // stack (query) searches, where the instance-only flag is not valid. `:new`
+    // is a query-search flag, so it IS highlighted here.
+    searchNewFlagRegex.enumerateMatches(in: search, range: fullRange) { match, _, _ in
+        guard let match else { return }
+        result.addAttribute(.foregroundColor, value: NSColor.systemBlue, range: match.range)
+    }
 
     // Logical operators (green)
     searchLogicalOperatorRegex.enumerateMatches(in: search, range: fullRange) { match, _, _ in
