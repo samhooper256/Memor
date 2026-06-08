@@ -1159,6 +1159,13 @@ private struct FieldsSectionView: View {
         .onPreferenceChange(FieldRowFramePreferenceKey.self) { frames in
             rowFrames = frames
         }
+        .onChange(of: fields.map(\.id)) { _, _ in
+            // The parent has committed a new field order; drop the temporary
+            // drag order so the view tracks `fields` again.
+            if draggingID == nil {
+                liveOrder = nil
+            }
+        }
         .background(Color(NSColor.controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay {
@@ -1237,10 +1244,15 @@ private struct FieldsSectionView: View {
                 let finalOrder = liveOrder ?? fields.map(\.id)
                 let originalOrder = fields.map(\.id)
                 draggingID = nil
-                liveOrder = nil
                 frozenFrames = [:]
                 if finalOrder != originalOrder {
+                    // Keep showing the reordered list until the parent commits the
+                    // new `fields` order; clearing liveOrder now would briefly flash
+                    // the pre-swap order. `.onChange(of: fields)` clears it.
+                    liveOrder = finalOrder
                     onReorder(finalOrder)
+                } else {
+                    liveOrder = nil
                 }
             }
     }
