@@ -67,6 +67,9 @@ struct InstanceEditorWindowView: View {
     @State private var pendingBoundaryMapDeletion: Set<BoundaryMapEntryRef> = []
     @State private var isBoundaryMapDeletionConfirmationPresented = false
 
+    // Confirmation for deleting the whole instance being edited (edit mode only).
+    @State private var isInstanceDeletionConfirmationPresented = false
+
     // PointMap-specific state
     @State private var pointMapTitle: String = ""
     @State private var pointMapCameraPosition: MapCameraPosition = .region(
@@ -214,6 +217,13 @@ struct InstanceEditorWindowView: View {
             }
 
             HStack {
+                if mode == .edit, loadedInstanceID != nil {
+                    Button("Delete", role: .destructive) {
+                        isInstanceDeletionConfirmationPresented = true
+                    }
+                    .tint(.red)
+                }
+
                 Spacer()
 
                 Button(submitButtonTitle) {
@@ -223,6 +233,18 @@ struct InstanceEditorWindowView: View {
                 .disabled(!canSubmit)
             }
             .padding(.top, 6)
+            .alert(
+                "Are you sure you want to delete this instance?",
+                isPresented: $isInstanceDeletionConfirmationPresented
+            ) {
+                Button("Delete", role: .destructive) {
+                    deleteCurrentInstance()
+                }
+                .keyboardShortcut(.defaultAction)
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This action is irreversible.")
+            }
         }
         .padding(.vertical, 12)
         .padding(.horizontal, 12)
@@ -2445,6 +2467,18 @@ struct InstanceEditorWindowView: View {
         } catch {
             print("Failed to reset query due date: \(error)")
             showToast(message: "Failed to reset query due date.", style: .error)
+        }
+    }
+
+    @MainActor
+    private func deleteCurrentInstance() {
+        guard let loadedInstanceID else { return }
+        do {
+            try appDatabase.deleteInstance(instanceID: loadedInstanceID)
+            NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
+            dismiss()
+        } catch {
+            showToast(message: "Failed to delete instance.", style: .error)
         }
     }
 
