@@ -473,6 +473,9 @@ private struct InstancesSidebarRowView: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            Image(systemName: type.kindIcon.name)
+                .foregroundStyle(type.kindIcon.color)
+
             Text(type.name)
                 .frame(maxWidth: .infinity, alignment: .leading)
 

@@ -260,6 +260,24 @@ struct TypesPageView: View {
     }
 }
 
+extension FlashcardType {
+    var isMapType: Bool {
+        isBuiltin && (name == POINTMAP_TYPE_NAME || name == BOUNDARYMAP_TYPE_NAME)
+    }
+
+    // SF Symbol + color indicating the type's kind. Shared by the Types tab and
+    // the Instances tab sidebar.
+    var kindIcon: (name: String, color: Color) {
+        if isMapType {
+            return ("map.fill", .yellow)
+        } else if isNode {
+            return ("point.3.filled.connected.trianglepath.dotted", .green)
+        } else {
+            return ("doc.text.fill", .blue)
+        }
+    }
+}
+
 private struct TypeRowView: View {
     let type: FlashcardType
     let onOpen: () -> Void
@@ -273,25 +291,10 @@ private struct TypeRowView: View {
         return "\(type.instanceCount) \(noun)"
     }
 
-    private var isMapType: Bool {
-        type.isBuiltin && (type.name == POINTMAP_TYPE_NAME || type.name == BOUNDARYMAP_TYPE_NAME)
-    }
-
-    // SF Symbol + color indicating the type's kind.
-    private var kindIcon: (name: String, color: Color) {
-        if isMapType {
-            return ("map.fill", .yellow)
-        } else if type.isNode {
-            return ("point.3.filled.connected.trianglepath.dotted", .green)
-        } else {
-            return ("doc.text.fill", .blue)
-        }
-    }
-
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: kindIcon.name)
-                .foregroundStyle(kindIcon.color)
+            Image(systemName: type.kindIcon.name)
+                .foregroundStyle(type.kindIcon.color)
                 .font(.title3)
 
             Text(type.name)
