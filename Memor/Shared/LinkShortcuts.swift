@@ -1,6 +1,6 @@
 //
 //  LinkShortcuts.swift
-//  Flashcards2
+//  Memor
 //
 //  Keyboard shortcuts for `id:` instance links carried in text-field HTML via a
 //  `data-shortcut` attribute. Pressing the shortcut is equivalent to clicking the link.

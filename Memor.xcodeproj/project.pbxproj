@@ -50,9 +50,9 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		AF27145A2F7DF204008265B1 /* Flashcards2 */ = {
+		AF27145A2F7DF204008265B1 /* Memor */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = Flashcards2;
+			path = Memor;
 			sourceTree = "<group>";
 		};
 		AFDF0AAB2F9477B500331401 /* memor-mcp */ = {
@@ -85,7 +85,7 @@
 		AF27144F2F7DF204008265B1 = {
 			isa = PBXGroup;
 			children = (
-				AF27145A2F7DF204008265B1 /* Flashcards2 */,
+				AF27145A2F7DF204008265B1 /* Memor */,
 				AFDF0AAB2F9477B500331401 /* memor-mcp */,
 				AF2714592F7DF204008265B1 /* Products */,
 			);
@@ -118,14 +118,14 @@
 				AFDF0AB52F9479AE00331401 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				AF27145A2F7DF204008265B1 /* Flashcards2 */,
+				AF27145A2F7DF204008265B1 /* Memor */,
 			);
 			name = Memor;
 			packageProductDependencies = (
 				B38D0E092D4A100100000001 /* GRDB */,
 				AFDF0AA42F94778700331401 /* MCP */,
 			);
-			productName = Flashcards2;
+			productName = Memor;
 			productReference = AF2714582F7DF204008265B1 /* Memor.app */;
 			productType = "com.apple.product-type.application";
 		};
@@ -352,7 +352,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = Flashcards2.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Memor.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -383,7 +383,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = Flashcards2.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Memor.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;

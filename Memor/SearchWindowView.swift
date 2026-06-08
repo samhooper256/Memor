@@ -1,6 +1,6 @@
 //
 //  SearchWindowView.swift
-//  Flashcards2
+//  Memor
 //
 //  The unified "Search" window: one window with three switchable modes —
 //  Instances, Queries, and Points & Boundaries — mirroring the ⌘K hyperlink

@@ -7,7 +7,7 @@
 - Local persistence: SQLite database stored on the user's machine
 - Database toolkit: GRDB
 - The app uses App Sandbox during development.
-- Development sandbox database path: `/Users/samhooper/Library/Containers/com.sam.Flashcards2/Data/Library/Application Support/Flashcards2/Flashcards2.sqlite`
+- Development sandbox database path: `/Users/samhooper/Library/Containers/com.sam.Memor/Data/Library/Application Support/Memor/Memor.sqlite`
 - User-selected image folders are persisted with security-scoped bookmarks so the app can keep loading local image files across launches.
 
 ## Core Domain Model

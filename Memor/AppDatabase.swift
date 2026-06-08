@@ -1,6 +1,6 @@
 //
 //  AppDatabase.swift
-//  Flashcards2
+//  Memor
 //
 //  Created by Codex on 4/1/26.
 //
@@ -288,11 +288,41 @@ struct AppDatabase {
             appropriateFor: nil,
             create: true
         )
-        let directoryURL = applicationSupportURL.appendingPathComponent("Flashcards2", isDirectory: true)
+        let directoryURL = applicationSupportURL.appendingPathComponent("Memor", isDirectory: true)
 
         try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
 
-        return directoryURL.appendingPathComponent("Flashcards2.sqlite", isDirectory: false)
+        let databaseURL = directoryURL.appendingPathComponent("Memor.sqlite", isDirectory: false)
+        migrateLegacyDatabaseIfNeeded(
+            applicationSupportURL: applicationSupportURL,
+            newDatabaseURL: databaseURL,
+            fileManager: fileManager
+        )
+        return databaseURL
+    }
+
+    /// One-time migration from the pre-rename location
+    /// (`Application Support/Flashcards2/Flashcards2.sqlite`) to the current
+    /// `Memor/Memor.sqlite`. Moves the database plus its WAL/SHM sidecars so
+    /// SQLite state is preserved. Safe to delete once all installs have migrated.
+    private static func migrateLegacyDatabaseIfNeeded(
+        applicationSupportURL: URL,
+        newDatabaseURL: URL,
+        fileManager: FileManager
+    ) {
+        guard !fileManager.fileExists(atPath: newDatabaseURL.path) else { return }
+
+        let legacyDatabasePath = applicationSupportURL
+            .appendingPathComponent("Flashcards2", isDirectory: true)
+            .appendingPathComponent("Flashcards2.sqlite", isDirectory: false)
+            .path
+        guard fileManager.fileExists(atPath: legacyDatabasePath) else { return }
+
+        for suffix in ["", "-wal", "-shm"] {
+            let sourcePath = legacyDatabasePath + suffix
+            guard fileManager.fileExists(atPath: sourcePath) else { continue }
+            try? fileManager.moveItem(atPath: sourcePath, toPath: newDatabaseURL.path + suffix)
+        }
     }
 
 

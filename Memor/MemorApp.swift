@@ -1,6 +1,6 @@
 //
-//  Flashcards2App.swift
-//  Flashcards2
+//  MemorApp.swift
+//  Memor
 //
 //  Created by Sam Hooper on 4/1/26.
 //
@@ -18,7 +18,7 @@ final class QuickStudyState: ObservableObject {
 }
 
 @main
-struct Flashcards2App: App {
+struct MemorApp: App {
     @StateObject private var navigationState = AppNavigationState()
     @StateObject private var addInstanceWindowState = AddInstanceWindowState()
     @StateObject private var editInstanceWindowState = EditInstanceWindowState()

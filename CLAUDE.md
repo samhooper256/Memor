@@ -1,6 +1,6 @@
 # Memor
 
-A macOS flashcard app (similar to Anki) built with Swift/SwiftUI and GRDB for local SQLite persistence. (The Xcode project name is `Memor`; a few legacy files and identifiers still say "Flashcards2".)
+A macOS flashcard app (similar to Anki) built with Swift/SwiftUI and GRDB for local SQLite persistence. (Originally named `Flashcards2`; the app, project, source folder, and database are all `Memor` now. `AppDatabase` keeps a one-time migration that moves a pre-rename database from the old `Flashcards2` Application Support location on first launch.)
 
 ## Development Workflow
 
@@ -9,8 +9,8 @@ A macOS flashcard app (similar to Anki) built with Swift/SwiftUI and GRDB for lo
 ## Project Structure
 
 ```
-Flashcards2/
-  Flashcards2App.swift              App entry point, window scene definitions
+Memor/
+  MemorApp.swift              App entry point, window scene definitions
   ContentView.swift                 Main window shell: AppTab, AppNavigationState, ContentView, TabPageView
   AppDatabase.swift                 Database class + init + CRUD + search parsing + SRS (large; incremental splits underway — see Database/)
   Utilities.swift                   Cross-cutting helpers (QueryRenderContent etc.) that don't yet belong elsewhere
@@ -88,7 +88,7 @@ There are three classes of type, discriminated by `type.kind` ('object' | 'node'
 
 - SQLite via GRDB (`DatabaseQueue`)
 - App Sandbox enabled
-- DB path: `~/Library/Containers/com.sam.Flashcards2/Data/Library/Application Support/Flashcards2/Flashcards2.sqlite`
+- DB path: `~/Library/Containers/com.sam.Memor/Data/Library/Application Support/Memor/Memor.sqlite`
 - Dynamic per-type tables: `type{typeID}` with columns `field{fieldID}`
 - Global settings in `globals` table (global_query_html, global_query_css, stacks_last_updated_timestamp)
 - Security-scoped bookmarks for image file access (`image_file` table)
@@ -123,7 +123,7 @@ Components:
 
 ## Keyboard Shortcuts
 
-The shortcut system lives in `Flashcards2/Shortcuts/`. **Customizable** shortcuts are driven by a registry, persisted to UserDefaults (key `com.sam.Memor.shortcuts`), and re-render the UI live when changed via `ShortcutSettings: ObservableObject`.
+The shortcut system lives in `Memor/Shortcuts/`. **Customizable** shortcuts are driven by a registry, persisted to UserDefaults (key `com.sam.Memor.shortcuts`), and re-render the UI live when changed via `ShortcutSettings: ObservableObject`.
 
 ### Adding a new customizable shortcut
 
@@ -131,7 +131,7 @@ The shortcut system lives in `Flashcards2/Shortcuts/`. **Customizable** shortcut
 2. Apply it to the SwiftUI view: `.shortcut(.myAction, settings: shortcutSettings)` (replaces `.keyboardShortcut(...)`).
 3. Display it in button text: `ShortcutLabel(title: "Save", action: .myAction)` or interpolate `shortcutSettings.binding(for: .myAction).displayString`.
 4. For `NSEvent.addLocalMonitorForEvents` handlers, store a `ShortcutSettings` ref on the NSView and call `settings.binding(for: .myAction).matches(event)`. See `StudyModeKeyCommandHandler` in ContentView.swift for a reference implementation.
-5. Every scene that hosts the view must inject `.environmentObject(shortcutSettings)` (see Flashcards2App.swift).
+5. Every scene that hosts the view must inject `.environmentObject(shortcutSettings)` (see MemorApp.swift).
 
 ### Non-customizable bindings (kept hard-coded)
 
@@ -164,7 +164,7 @@ navigates to the linked instance).
   (they aren't stored in a text field and can't carry `data-shortcut`).
 - If two+ links on the instance share the same shortcut, pressing that key shows a system
   `NSAlert` instead of navigating.
-- Implementation: [Flashcards2/Shared/LinkShortcuts.swift](Flashcards2/Shared/LinkShortcuts.swift)
+- Implementation: [Memor/Shared/LinkShortcuts.swift](Memor/Shared/LinkShortcuts.swift)
   (`parseLinkShortcuts` / `resolveLinkShortcut` / `presentLinkShortcutCollisionAlert`,
   reusing `parseLinkedInstanceID` / `parseLinkedQueryID` from `Shared/QueryHTMLView.swift`).
   Wired into the key monitors in `Study/StudyModeView.swift` and `QueryPreviewWindowView.swift`.
@@ -217,7 +217,7 @@ Claude Desktop  ──stdio JSON-RPC──▶  memor-mcp  ──HTTP /mcp──�
 
 - **In-app server**: `MemorMCPServer` owns a `Server` + `StatelessHTTPServerTransport` + `MCPHTTPListener` bound to `127.0.0.1:51745` (see `MCPConstants`). Uses the `modelcontextprotocol/swift-sdk` SPM dependency.
 - **Stdio helper** (`memor-mcp/main.swift`): a separate command-line tool target. The build embeds the binary in `Memor.app/Contents/MacOS/` via a Copy Files build phase. Claude Desktop's `claude_desktop_config.json` points `"command"` at `/Applications/Memor.app/Contents/MacOS/memor-mcp`.
-- **Sandbox**: requires `com.apple.security.network.server` in [Flashcards2.entitlements](Flashcards2.entitlements). The listener binds loopback only.
+- **Sandbox**: requires `com.apple.security.network.server` in [Memor.entitlements](Memor.entitlements). The listener binds loopback only.
 
 ### Non-obvious gotchas (do not "simplify" these away)
 
@@ -229,7 +229,7 @@ Claude Desktop  ──stdio JSON-RPC──▶  memor-mcp  ──HTTP /mcp──�
 
 ### Adding a new MCP tool
 
-Edit [Flashcards2/MCP/MemorMCPTools.swift](Flashcards2/MCP/MemorMCPTools.swift):
+Edit [Memor/MCP/MemorMCPTools.swift](Memor/MCP/MemorMCPTools.swift):
 
 1. Add a `Tool(...)` entry to the `tools` array in `register(on:appDatabase:)` with a JSON schema for its args.
 2. Add a `case` to the `withMethodHandler(CallTool.self)` dispatch that decodes the args, calls `AppDatabase`, and returns `CallTool.Result(content: [.text(text: jsonResult, annotations: nil, _meta: nil)])`.
@@ -240,7 +240,7 @@ No changes to `MemorMCPServer`, the helper, or the listener are needed — new t
 ## Xcode Project
 
 - Target name is `Memor`, project file is `Memor.xcodeproj`.
-- The `Flashcards2/` group is a `PBXFileSystemSynchronizedRootGroup` — Swift files added anywhere under `Flashcards2/` are auto-picked-up by the target. Do not add explicit `PBXFileReference` entries for new files.
+- The `Memor/` group is a `PBXFileSystemSynchronizedRootGroup` — Swift files added anywhere under `Memor/` are auto-picked-up by the target. Do not add explicit `PBXFileReference` entries for new files.
 - The `Products` group in `project.pbxproj` is Xcode's standard built-products virtual group (owns `Memor.app`, referenced by `productRefGroup`). Do not delete it.
 - `memor-mcp/` is a separate command-line-tool target. The `Memor` app target has a Copy Files build phase (destination: Executables, subpath `Contents/MacOS`) that embeds the built `memor-mcp` binary inside `Memor.app`.
 - SPM dependencies include `modelcontextprotocol/swift-sdk` (the `MCP` product), used by both the app target and the `memor-mcp` target.

@@ -1,6 +1,6 @@
 //
 //  QueryPreviewWindowView.swift
-//  Flashcards2
+//  Memor
 //
 //  Created by Sam Hooper on 4/10/26.
 //

@@ -1,6 +1,6 @@
 //
 //  AddInstanceWindowView.swift
-//  Flashcards2
+//  Memor
 //
 //  Created by Codex on 4/4/26.
 //
