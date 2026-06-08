@@ -12,7 +12,10 @@ import UniformTypeIdentifiers
 
 struct QueryPreviewWindowView: View {
     @EnvironmentObject private var windowState: QueryPreviewWindowState
+    @EnvironmentObject private var editInstanceWindowState: EditInstanceWindowState
+    @EnvironmentObject private var shortcutSettings: ShortcutSettings
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openWindow) private var openWindow
 
     let appDatabase: AppDatabase
 
@@ -62,7 +65,12 @@ struct QueryPreviewWindowView: View {
                 onCommandI: nil,
                 onCommandO: nil
             )
-            QueryPreviewKeyHandler(onBack: goBack, onArrowLinkShortcut: handleArrowLinkShortcut)
+            QueryPreviewKeyHandler(
+                shortcutSettings: shortcutSettings,
+                onBack: goBack,
+                onEdit: handleEdit,
+                onArrowLinkShortcut: handleArrowLinkShortcut
+            )
         }
         .task {
             historyStack = []
@@ -140,6 +148,23 @@ struct QueryPreviewWindowView: View {
         windowState.requestOpen(instanceID: instanceID, queryTypeID: queryTypeID)
     }
 
+    /// Edit key (E): open the Edit Instance window for the previewed instance.
+    /// Does nothing if that window is already open (so an in-progress edit isn't
+    /// clobbered).
+    private func handleEdit() {
+        guard let query, !isEditInstanceWindowOpen() else { return }
+        let autoEditPointID: Int64? = query.kind == .pointMap ? query.pointMapPayload?.pointID : nil
+        editInstanceWindowState.requestOpen(instanceID: query.instanceID, autoEditPointID: autoEditPointID)
+        openWindow(id: "edit-instance")
+    }
+
+    private func isEditInstanceWindowOpen() -> Bool {
+        NSApp.windows.contains { window in
+            window.isVisible
+                && (window.identifier?.rawValue == "edit-instance" || window.title == "Edit Instance")
+        }
+    }
+
     /// Plain left/right arrow -> instance link shortcuts. Returns true if the event was handled.
     private func handleArrowLinkShortcut(_ key: LinkShortcutKey) -> Bool {
         guard let query else { return false }
@@ -160,23 +185,31 @@ struct QueryPreviewWindowView: View {
 }
 
 private struct QueryPreviewKeyHandler: NSViewRepresentable {
+    let shortcutSettings: ShortcutSettings
     let onBack: () -> Void
+    let onEdit: () -> Void
     let onArrowLinkShortcut: (LinkShortcutKey) -> Bool
 
     func makeNSView(context: Context) -> KeyView {
         let view = KeyView()
+        view.shortcutSettings = shortcutSettings
         view.onBack = onBack
+        view.onEdit = onEdit
         view.onArrowLinkShortcut = onArrowLinkShortcut
         return view
     }
 
     func updateNSView(_ nsView: KeyView, context: Context) {
+        nsView.shortcutSettings = shortcutSettings
         nsView.onBack = onBack
+        nsView.onEdit = onEdit
         nsView.onArrowLinkShortcut = onArrowLinkShortcut
     }
 
     final class KeyView: NSView {
+        var shortcutSettings: ShortcutSettings?
         var onBack: (() -> Void)?
+        var onEdit: (() -> Void)?
         var onArrowLinkShortcut: ((LinkShortcutKey) -> Bool)?
 
         private var monitor: Any?
@@ -203,6 +236,11 @@ private struct QueryPreviewKeyHandler: NSViewRepresentable {
                 // ⌘← navigates back through link history.
                 if flags == .command, event.keyCode == 123 {
                     self.onBack?()
+                    return nil
+                }
+                // Edit key (E) -> open the Edit Instance window.
+                if self.shortcutSettings?.binding(for: .studyEditInstance).matches(event) == true {
+                    self.onEdit?()
                     return nil
                 }
                 // Plain left/right arrow -> instance link shortcuts.

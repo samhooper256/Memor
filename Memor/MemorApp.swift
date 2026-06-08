@@ -85,6 +85,7 @@ struct MemorApp: App {
         Window("Query Preview", id: "query-preview") {
             QueryPreviewWindowView(appDatabase: appDatabase)
                 .environmentObject(queryPreviewWindowState)
+                .environmentObject(editInstanceWindowState)
                 .environmentObject(shortcutSettings)
         }
 
