@@ -15,7 +15,7 @@ Flashcards2/
   AppDatabase.swift                 Database class + init + CRUD + search parsing + SRS (large; incremental splits underway — see Database/)
   Utilities.swift                   Cross-cutting helpers (QueryRenderContent etc.) that don't yet belong elsewhere
   AddInstanceWindowView.swift       Thin wrappers only: AddInstanceWindowState, EditInstanceWindowState, QueryPreviewWindowState, AddInstanceWindowView, EditInstanceWindowView
-  InstanceSearchWindowView.swift    Instance search + Query search windows
+  SearchWindowView.swift            Unified "Search" window: SearchWindowState + SearchMode (Instances/Queries/Points & Boundaries), Shift+Tab to switch modes
   QueryPreviewWindowView.swift      Query preview WKWebView window
   TypesPageView.swift               Types list view + TypeRowView
   Database/
@@ -96,17 +96,23 @@ There are three classes of type, discriminated by `type.kind` ('object' | 'node'
 
 ## Search Query Language
 
+The unified "Search" window (and the ⌘K hyperlink popup) has three modes, each with its own language flavor, all parsed by `parseSearchExpression` with feature flags:
+- **Instances** (`searchInstances`): instances of every type, incl. PointMap/BoundaryMap instances.
+- **Queries** (`searchQueries`): individual studyable queries — standard object/node queries plus PointMap and BoundaryMap **Forward/Reverse** queries (one result per enabled direction, via `pointMapDirectionalFrom`/`boundaryMapDirectionalFrom`). **Invariant: the Queries language is exactly the Stacks language** — a Stack's search text in Queries mode returns exactly that Stack's studied queries (both consume the same parser + condition builders).
+- **Points & Boundaries** (`searchMapElements`): PointMap points and BoundaryMap boundaries themselves (one row per point/boundary). Uses a restricted grammar (`parseMapElementSearchQuery`, flag `allowsTypeCollectionId: false`): only quotes, parens, OR/NOT, `literal:`, and plain strings.
+
+Components:
 - Space-separated components combined with AND
 - `literal:text` - field contains text
 - `collection:name` or `col:name` - instance in named collection
 - `type:name` - instance of named type
 - `id:number` - the single instance with this ID
-- `:noqueries` - **instance search only** - instances with no query types enabled (no `query` rows; for PointMap/BoundaryMap, no points / boundary queries). Rejected in query search. The instance-vs-query distinction is enforced by the `allowsNoQueries` flag threaded through `parseSearchExpression`.
-- `:new` - **query search only** - queries that are new (`interval = 0`). Standard object/node queries only; PointMap/BoundaryMap results are always excluded when `:new` is present (their condition builders compile it to an always-false predicate, so `NOT :new` still includes them). Rejected in instance search. Enforced by the `allowsNew` flag threaded through `parseSearchExpression` (counterpart to `allowsNoQueries`).
+- `:noqueries` - **instance search only** - instances with no query types enabled. Enforced by the `allowsNoQueries` flag threaded through `parseSearchExpression`.
+- `:new` - **query search only** - queries that are new (`interval = 0`). Enforced by the `allowsNew` flag.
 - Components can use `or(...)` for OR logic
 - Double quotes for spaces inside components: `"literal:hi there"`
 - Empty query matches all
-- The two help windows (`InstanceSearchHelpWindowView` / `QuerySearchHelpWindowView`, opened from the `?` button beside each search box) document these components; only the instance one lists `:noqueries`.
+- Three help windows (`InstanceSearchHelpWindowView` / `QuerySearchHelpWindowView` / `MapElementSearchHelpWindowView`, opened from the `?` button beside the search box) document each mode's components; the `?` opens the one matching the current mode.
 
 ## Spaced Repetition
 
@@ -169,8 +175,9 @@ navigates to the linked instance).
 |---|---|
 | Go to Stacks / Instances / Collections / Types / Graph | ⌘1–⌘5 |
 | Add Instance | ⌘⇧A |
-| Search Instances | ⌘⇧S |
-| Search Queries | ⌘⌥S |
+| Open Search (preserves last mode) | ⌘⇧S |
+| Open Search in Queries mode | ⌘⌥S |
+| Search — switch mode (Instances / Queries / Points & Boundaries) | Shift+Tab |
 | Settings | ⌘, |
 | Study — reveal / Good | Space |
 | Study — Again / Hard / Good / Easy | 1 / 2 / 3 / 4 |

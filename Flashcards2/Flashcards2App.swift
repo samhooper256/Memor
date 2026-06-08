@@ -23,8 +23,7 @@ struct Flashcards2App: App {
     @StateObject private var addInstanceWindowState = AddInstanceWindowState()
     @StateObject private var editInstanceWindowState = EditInstanceWindowState()
     @StateObject private var queryPreviewWindowState = QueryPreviewWindowState()
-    @StateObject private var instanceSearchWindowState = InstanceSearchWindowState()
-    @StateObject private var querySearchWindowState = QuerySearchWindowState()
+    @StateObject private var searchWindowState = SearchWindowState()
     @StateObject private var stacksPageState = StacksPageState()
     @StateObject private var manageBoundariesWindowState = ManageBoundariesWindowState()
     @StateObject private var quickStudyState = QuickStudyState()
@@ -52,8 +51,7 @@ struct Flashcards2App: App {
                 .environmentObject(addInstanceWindowState)
                 .environmentObject(editInstanceWindowState)
                 .environmentObject(queryPreviewWindowState)
-                .environmentObject(instanceSearchWindowState)
-                .environmentObject(querySearchWindowState)
+                .environmentObject(searchWindowState)
                 .environmentObject(stacksPageState)
                 .environmentObject(quickStudyState)
                 .environmentObject(shortcutSettings)
@@ -90,18 +88,11 @@ struct Flashcards2App: App {
                 .environmentObject(shortcutSettings)
         }
 
-        Window("Search Instances", id: "instance-search") {
-            InstanceSearchWindowView(appDatabase: appDatabase)
-                .environmentObject(instanceSearchWindowState)
+        Window("Search", id: "search") {
+            SearchWindowView(appDatabase: appDatabase)
+                .environmentObject(searchWindowState)
                 .environmentObject(editInstanceWindowState)
                 .environmentObject(addInstanceWindowState)
-                .environmentObject(shortcutSettings)
-        }
-
-        Window("Search Queries", id: "query-search") {
-            QuerySearchWindowView(appDatabase: appDatabase)
-                .environmentObject(querySearchWindowState)
-                .environmentObject(editInstanceWindowState)
                 .environmentObject(stacksPageState)
                 .environmentObject(quickStudyState)
                 .environmentObject(shortcutSettings)
@@ -114,6 +105,11 @@ struct Flashcards2App: App {
 
         Window("Query Search Help", id: "query-search-help") {
             QuerySearchHelpWindowView()
+        }
+        .windowResizability(.contentSize)
+
+        Window("Point & Boundary Search Help", id: "map-element-search-help") {
+            MapElementSearchHelpWindowView()
         }
         .windowResizability(.contentSize)
 
@@ -178,9 +174,9 @@ struct Flashcards2App: App {
                 }
                 .shortcut(.openAddInstance, settings: shortcutSettings)
 
-                Button("Search Instances") {
-                    instanceSearchWindowState.requestOpen()
-                    openWindow(id: "instance-search")
+                Button("Search") {
+                    searchWindowState.requestOpen()
+                    openWindow(id: "search")
                 }
                 .shortcut(.openSearchInstances, settings: shortcutSettings)
 

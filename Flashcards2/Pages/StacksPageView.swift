@@ -10,7 +10,7 @@ import SwiftUI
 
 struct StacksPageView: View {
     @Environment(\.openWindow) private var openWindow
-    @EnvironmentObject private var querySearchWindowState: QuerySearchWindowState
+    @EnvironmentObject private var searchWindowState: SearchWindowState
     @EnvironmentObject private var stacksPageState: StacksPageState
     @EnvironmentObject private var navigationState: AppNavigationState
     @EnvironmentObject private var timeZoneSettings: TimeZoneSettings
@@ -57,7 +57,7 @@ struct StacksPageView: View {
         .onChange(of: navigationState.resetToHomeNonce) { _, _ in
             selectedStack = nil
         }
-        .onChange(of: querySearchWindowState.latestStacksDataChange) { _, _ in
+        .onChange(of: searchWindowState.latestStacksDataChange) { _, _ in
             guard selectedStack == nil else { return }
             Task {
                 await loadStacks()
@@ -101,8 +101,8 @@ struct StacksPageView: View {
 
                 HStack(spacing: 12) {
                     Button("Add Stack") {
-                        querySearchWindowState.requestOpen()
-                        openWindow(id: "query-search")
+                        searchWindowState.requestOpenQueries()
+                        openWindow(id: "search")
                     }
                     .buttonStyle(.borderedProminent)
 
@@ -154,8 +154,8 @@ struct StacksPageView: View {
                                     selectedStack = stack
                                 },
                                 onSearch: {
-                                    querySearchWindowState.requestOpen(searchText: stack.search)
-                                    openWindow(id: "query-search")
+                                    searchWindowState.requestOpen(searchText: stack.search)
+                                    openWindow(id: "search")
                                 },
                                 onDelete: {
                                     stackPendingDeletion = stack

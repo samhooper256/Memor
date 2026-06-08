@@ -101,7 +101,7 @@ final class InstancesPageState: ObservableObject {
 struct ContentView: View {
     @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var navigationState: AppNavigationState
-    @EnvironmentObject private var querySearchWindowState: QuerySearchWindowState
+    @EnvironmentObject private var searchWindowState: SearchWindowState
     @EnvironmentObject private var stacksPageState: StacksPageState
     @EnvironmentObject private var quickStudyState: QuickStudyState
     @EnvironmentObject private var shortcutSettings: ShortcutSettings
@@ -130,11 +130,11 @@ struct ContentView: View {
         .background {
             MainWindowQuerySearchShortcutHandler(shortcutSettings: shortcutSettings) {
                 if let activeStudyStack {
-                    querySearchWindowState.requestOpen(searchText: activeStudyStack.search)
+                    searchWindowState.requestOpen(searchText: activeStudyStack.search)
                 } else {
-                    querySearchWindowState.requestOpen()
+                    searchWindowState.requestOpenQueries()
                 }
-                openWindow(id: "query-search")
+                openWindow(id: "search")
             }
         }
         .onChange(of: quickStudyState.pendingSearch) { _, newValue in

@@ -116,14 +116,16 @@ struct SearchQueryTextField: NSViewRepresentable {
     var focusRequest: UUID?
     var onFocusChange: ((Bool) -> Void)?
     var highlightsNoQueries: Bool
+    var onBacktab: (() -> Void)?
 
-    init(_ placeholder: String, text: Binding<String>, onSubmit: (() -> Void)? = nil, focusRequest: UUID? = nil, highlightsNoQueries: Bool = true, onFocusChange: ((Bool) -> Void)? = nil) {
+    init(_ placeholder: String, text: Binding<String>, onSubmit: (() -> Void)? = nil, focusRequest: UUID? = nil, highlightsNoQueries: Bool = true, onFocusChange: ((Bool) -> Void)? = nil, onBacktab: (() -> Void)? = nil) {
         self.placeholder = placeholder
         self._text = text
         self.onSubmit = onSubmit
         self.focusRequest = focusRequest
         self.highlightsNoQueries = highlightsNoQueries
         self.onFocusChange = onFocusChange
+        self.onBacktab = onBacktab
     }
 
     func makeCoordinator() -> Coordinator {
@@ -159,6 +161,7 @@ struct SearchQueryTextField: NSViewRepresentable {
         textView.onSubmit = onSubmit
         textView.placeholderString = placeholder
         textView.onFocusChange = onFocusChange
+        textView.onBacktab = onBacktab
 
         if let textContainer = textView.textContainer {
             textContainer.widthTracksTextView = false
@@ -178,6 +181,7 @@ struct SearchQueryTextField: NSViewRepresentable {
         context.coordinator.onFocusChange = onFocusChange
         (textView as? SearchHighlightingTextView)?.onSubmit = onSubmit
         (textView as? SearchHighlightingTextView)?.onFocusChange = onFocusChange
+        (textView as? SearchHighlightingTextView)?.onBacktab = onBacktab
         if textView.string != text {
             textView.string = text
             context.coordinator.applySyntaxHighlighting()
@@ -228,6 +232,7 @@ struct SearchQueryTextField: NSViewRepresentable {
     final class SearchHighlightingTextView: NSTextView {
         var onSubmit: (() -> Void)?
         var onFocusChange: ((Bool) -> Void)?
+        var onBacktab: (() -> Void)?
         var placeholderString: String = ""
 
         override func keyDown(with event: NSEvent) {
@@ -237,6 +242,17 @@ struct SearchQueryTextField: NSViewRepresentable {
                 return
             }
             super.keyDown(with: event)
+        }
+
+        override func doCommand(by selector: Selector) {
+            // Shift+Tab arrives as insertBacktab. When a handler is installed,
+            // consume it (used to cycle the Search window's mode) instead of
+            // moving focus.
+            if selector == #selector(NSResponder.insertBacktab(_:)), let onBacktab {
+                onBacktab()
+                return
+            }
+            super.doCommand(by: selector)
         }
 
         override func draw(_ dirtyRect: NSRect) {

@@ -92,6 +92,31 @@ private let instanceSearchHelpComponents: [SearchHelpComponent] =
 private let querySearchHelpComponents: [SearchHelpComponent] =
     sharedSearchHelpComponents + [newSearchHelpComponent]
 
+// Point & boundary search supports only a restricted subset: text/literal,
+// OR/NOT, grouping, and quotes (no type:/collection:/col:/id:).
+private let mapElementSearchHelpComponents: [SearchHelpComponent] = [
+    SearchHelpComponent(
+        segments: [("literal:", searchOperatorColor), ("text", nil)],
+        description: "Match points or boundaries whose name (or their map's title) contains text. A bare word with no prefix works the same way."
+    ),
+    SearchHelpComponent(
+        segments: [("OR", searchLogicalColor)],
+        description: "Match if either neighboring component matches. Components are otherwise combined with AND."
+    ),
+    SearchHelpComponent(
+        segments: [("NOT", searchLogicalColor)],
+        description: "Exclude whatever the following component matches."
+    ),
+    SearchHelpComponent(
+        segments: [("(", searchPunctuationColor), (" … ", nil), (")", searchPunctuationColor)],
+        description: "Group components to control how OR and AND combine."
+    ),
+    SearchHelpComponent(
+        segments: [("\"", searchPunctuationColor), ("hi there", nil), ("\"", searchPunctuationColor)],
+        description: "Wrap a component in double quotes to include spaces."
+    )
+]
+
 private struct SearchHelpContentView: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -153,6 +178,15 @@ struct QuerySearchHelpWindowView: View {
         SearchHelpContentView(
             heading: "Query Search Components",
             components: querySearchHelpComponents
+        )
+    }
+}
+
+struct MapElementSearchHelpWindowView: View {
+    var body: some View {
+        SearchHelpContentView(
+            heading: "Point & Boundary Search Components",
+            components: mapElementSearchHelpComponents
         )
     }
 }

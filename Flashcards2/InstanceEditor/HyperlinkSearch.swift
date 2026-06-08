@@ -18,6 +18,15 @@ final class HyperlinkSearchPanel: NSPanel {
 enum HyperlinkSearchMode: Hashable {
     case instances
     case queries
+    case pointsAndBoundaries
+
+    var next: HyperlinkSearchMode {
+        switch self {
+        case .instances: return .queries
+        case .queries: return .pointsAndBoundaries
+        case .pointsAndBoundaries: return .instances
+        }
+    }
 }
 
 @MainActor
@@ -60,7 +69,7 @@ final class HyperlinkSearchController: ObservableObject {
         self.popupState = popupState
 
         let panel = HyperlinkSearchPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 320, height: 260),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 260),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
@@ -135,6 +144,7 @@ final class HyperlinkSearchPopupState: NSObject, ObservableObject, NSWindowDeleg
     @Published var mode: HyperlinkSearchMode = HyperlinkSearchPopupState.lastUsedMode
     @Published private(set) var instanceResults: [InstanceSearchResult] = []
     @Published private(set) var queryResults: [QuerySearchResult] = []
+    @Published private(set) var mapElementResults: [MapElementSearchResult] = []
     @Published private(set) var totalResultCount = 0
     @Published private(set) var errorMessage: String?
     @Published var highlightedID: String?
@@ -169,6 +179,7 @@ final class HyperlinkSearchPopupState: NSObject, ObservableObject, NSWindowDeleg
         switch mode {
         case .instances: return instanceResults.map { String($0.id) }
         case .queries: return queryResults.map(\.id)
+        case .pointsAndBoundaries: return mapElementResults.map(\.id)
         }
     }
 
@@ -176,6 +187,7 @@ final class HyperlinkSearchPopupState: NSObject, ObservableObject, NSWindowDeleg
         switch mode {
         case .instances: return instanceResults.isEmpty
         case .queries: return queryResults.isEmpty
+        case .pointsAndBoundaries: return mapElementResults.isEmpty
         }
     }
 
@@ -193,12 +205,21 @@ final class HyperlinkSearchPopupState: NSObject, ObservableObject, NSWindowDeleg
                     totalResultCount = all.count
                     instanceResults = Array(all.prefix(100))
                     queryResults = []
+                    mapElementResults = []
                 case .queries:
                     let sections = try appDatabase.searchQueries(query: query)
                     let all = sections.flatMap(\.queries)
                     totalResultCount = all.count
                     queryResults = Array(all.prefix(100))
                     instanceResults = []
+                    mapElementResults = []
+                case .pointsAndBoundaries:
+                    let sections = try appDatabase.searchMapElements(query: query)
+                    let all = sections.flatMap(\.elements)
+                    totalResultCount = all.count
+                    mapElementResults = Array(all.prefix(100))
+                    instanceResults = []
+                    queryResults = []
                 }
                 let ids = currentResultIDs
                 if let highlightedID, ids.contains(highlightedID) {
@@ -213,6 +234,7 @@ final class HyperlinkSearchPopupState: NSObject, ObservableObject, NSWindowDeleg
             } catch {
                 instanceResults = []
                 queryResults = []
+                mapElementResults = []
                 totalResultCount = 0
                 highlightedID = nil
                 errorMessage = "Invalid search query."
@@ -229,7 +251,7 @@ final class HyperlinkSearchPopupState: NSObject, ObservableObject, NSWindowDeleg
     }
 
     func toggleMode() {
-        setMode(mode == .instances ? .queries : .instances)
+        setMode(mode.next)
     }
 
     func select(instanceID: Int64) {
@@ -301,11 +323,21 @@ final class HyperlinkSearchPopupState: NSObject, ObservableObject, NSWindowDeleg
                 select(instanceID: instanceID)
             }
         case .queries:
+            // Query ids are "instanceID:queryTypeID:f|r"; ignore the direction —
+            // a point/boundary query links to its point/boundary.
             let parts = highlightedID.split(separator: ":")
-            guard parts.count == 2,
+            guard parts.count >= 2,
                   let instanceID = Int64(parts[0]),
                   let queryTypeID = Int64(parts[1]) else { return }
             select(instanceID: instanceID, queryTypeID: queryTypeID)
+        case .pointsAndBoundaries:
+            // Map-element ids are "instanceID:elementID:kind"; link to the
+            // point/boundary (elementID).
+            let parts = highlightedID.split(separator: ":")
+            guard parts.count >= 2,
+                  let instanceID = Int64(parts[0]),
+                  let elementID = Int64(parts[1]) else { return }
+            select(instanceID: instanceID, queryTypeID: elementID)
         }
     }
 
@@ -346,6 +378,7 @@ struct HyperlinkSearchPopupView: View {
 
                 modeChip(label: "Instances", mode: .instances, color: .blue)
                 modeChip(label: "Queries", mode: .queries, color: Color(nsColor: .magenta))
+                modeChip(label: "Points & Boundaries", mode: .pointsAndBoundaries, color: .yellow)
 
                 Text("(Shift+Tab)")
                     .font(.caption)
@@ -405,6 +438,26 @@ struct HyperlinkSearchPopupView: View {
                                             .foregroundStyle(isHighlighted ? Color.white : Color.primary)
                                         Text(result.queryTypeName)
                                             .foregroundStyle(isHighlighted ? Color.white : Color(nsColor: .magenta))
+                                        Spacer(minLength: 0)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 6)
+                                    .background(isHighlighted ? Color.accentColor.opacity(0.75) : Color.clear)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        case .pointsAndBoundaries:
+                            ForEach(state.mapElementResults, id: \.id) { result in
+                                let isHighlighted = state.highlightedID == result.id
+                                Button {
+                                    state.select(instanceID: result.instanceID, queryTypeID: result.elementID)
+                                } label: {
+                                    HStack(spacing: 8) {
+                                        Text(formatFieldDisplayValue(result.displayValue))
+                                            .foregroundStyle(isHighlighted ? Color.white : Color.primary)
+                                        Text(result.elementName)
+                                            .foregroundStyle(isHighlighted ? Color.white : Color.yellow)
                                         Spacer(minLength: 0)
                                     }
                                     .frame(maxWidth: .infinity, alignment: .leading)

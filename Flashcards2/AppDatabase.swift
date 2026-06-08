@@ -44,6 +44,10 @@ struct AppDatabase {
         let expression: SearchExpression?
     }
 
+    private struct MapElementSearchQuery {
+        let expression: SearchExpression?
+    }
+
     private indirect enum SearchExpression: Hashable {
         case literal(String)
         case collection(String)
@@ -1513,6 +1517,119 @@ struct AppDatabase {
         }
     }
 
+    /// Searches PointMap points and BoundaryMap boundaries (the map "elements"
+    /// themselves, not their per-direction queries). Uses the restricted
+    /// map-element search language (quotes, parentheses, OR/NOT, `literal:`,
+    /// plain strings only).
+    func searchMapElements(query: String) throws -> [MapElementSearchSection] {
+        let parsedQuery = try parseMapElementSearchQuery(query)
+
+        return try dbQueue.read { db in
+            var sections: [MapElementSearchSection] = []
+
+            // Points
+            let pointConditions = makePointMapSearchConditions(
+                expression: parsedQuery.expression,
+                pointAlias: "pp",
+                instanceAlias: "pi",
+                includePointName: true
+            )
+            let pointWhere = pointConditions.sql.isEmpty ? "" : "\nWHERE \(pointConditions.sql)"
+            struct PointRow: FetchableRecord, Decodable {
+                let instanceID: Int64
+                let pointID: Int64
+                let pointName: String
+                let title: String
+            }
+            let pointRows = try PointRow.fetchAll(
+                db,
+                sql: """
+                    SELECT
+                        pp.instance_id AS instanceID,
+                        pp.id AS pointID,
+                        COALESCE(pp.name, '') AS pointName,
+                        COALESCE(pi.title, '') AS title
+                    FROM pointmap_point AS pp
+                    JOIN pointmap_instance AS pi
+                        ON pi.instance_id = pp.instance_id\(pointWhere)
+                    ORDER BY pi.title COLLATE NOCASE, pp.name COLLATE NOCASE, pp.id
+                    """,
+                arguments: pointConditions.arguments
+            )
+            if !pointRows.isEmpty {
+                let pointMapTypeID = try Self.fetchPointMapTypeID(db: db)
+                sections.append(
+                    MapElementSearchSection(
+                        typeID: pointMapTypeID,
+                        typeName: POINTMAP_TYPE_NAME,
+                        elements: pointRows.map {
+                            MapElementSearchResult(
+                                instanceID: $0.instanceID,
+                                elementID: $0.pointID,
+                                displayValue: $0.title,
+                                elementName: $0.pointName,
+                                kind: .point
+                            )
+                        }
+                    )
+                )
+            }
+
+            // Boundaries
+            let boundaryConditions = makeBoundaryMapSearchConditions(
+                expression: parsedQuery.expression,
+                attachmentAlias: "bq",
+                instanceAlias: "bi",
+                boundaryAlias: "b",
+                includeBoundaryName: true
+            )
+            let boundaryWhere = boundaryConditions.sql.isEmpty ? "" : "\nWHERE \(boundaryConditions.sql)"
+            struct BoundaryRow: FetchableRecord, Decodable {
+                let instanceID: Int64
+                let attachmentID: Int64
+                let boundaryName: String
+                let title: String
+            }
+            let boundaryRows = try BoundaryRow.fetchAll(
+                db,
+                sql: """
+                    SELECT
+                        bq.instance_id AS instanceID,
+                        bq.id AS attachmentID,
+                        COALESCE(b.name, '') AS boundaryName,
+                        COALESCE(bi.title, '') AS title
+                    FROM boundarymap_attachment AS bq
+                    JOIN boundarymap_instance AS bi
+                        ON bi.instance_id = bq.instance_id
+                    JOIN boundary AS b
+                        ON b.id = bq.boundary_id\(boundaryWhere)
+                    ORDER BY bi.title COLLATE NOCASE, b.name COLLATE NOCASE, bq.id
+                    """,
+                arguments: boundaryConditions.arguments
+            )
+            if !boundaryRows.isEmpty {
+                let boundaryMapTypeID = try Self.fetchBoundaryMapTypeID(db: db)
+                sections.append(
+                    MapElementSearchSection(
+                        typeID: boundaryMapTypeID,
+                        typeName: BOUNDARYMAP_TYPE_NAME,
+                        elements: boundaryRows.map {
+                            MapElementSearchResult(
+                                instanceID: $0.instanceID,
+                                elementID: $0.attachmentID,
+                                displayValue: $0.title,
+                                elementName: $0.boundaryName,
+                                kind: .boundary
+                            )
+                        }
+                    )
+                )
+            }
+
+            return sections
+        }
+    }
+
     private func fetchPointMapQuerySearchRows(
         db: Database,
         expression: SearchExpression?
@@ -1530,6 +1647,7 @@ struct AppDatabase {
             let pointID: Int64
             let pointName: String
             let title: String
+            let isReverse: Bool
         }
 
         let rows = try Row.fetchAll(
@@ -1539,11 +1657,12 @@ struct AppDatabase {
                     pp.instance_id AS instanceID,
                     pp.id AS pointID,
                     COALESCE(pp.name, '') AS pointName,
-                    COALESCE(pi.title, '') AS title
-                FROM pointmap_point AS pp
+                    COALESCE(pi.title, '') AS title,
+                    pp.is_reverse AS isReverse
+                FROM \(Self.pointMapDirectionalFrom) AS pp
                 JOIN pointmap_instance AS pi
                     ON pi.instance_id = pp.instance_id\(whereClause)
-                ORDER BY pi.title COLLATE NOCASE, pp.name COLLATE NOCASE, pp.id
+                ORDER BY pi.title COLLATE NOCASE, pp.name COLLATE NOCASE, pp.id, pp.is_reverse
                 """,
             arguments: searchConditions.arguments
         )
@@ -1553,7 +1672,8 @@ struct AppDatabase {
                 instanceID: row.instanceID,
                 queryTypeID: row.pointID,
                 displayValue: row.title,
-                queryTypeName: row.pointName
+                queryTypeName: row.pointName + (row.isReverse ? " (Reverse)" : " (Forward)"),
+                isReverse: row.isReverse
             )
         }
     }
@@ -1723,6 +1843,87 @@ struct AppDatabase {
                         """,
                     arguments: [pair.queryTypeID, pair.instanceID]
                 )
+            }
+        }
+    }
+
+    /// Resets due dates for specific query targets, honoring direction for map
+    /// queries (a single Forward/Reverse direction), unlike the pair-based
+    /// variant which resets both directions of a point/boundary.
+    func resetQueryDueDates(targets: [QueryTarget]) throws {
+        guard !targets.isEmpty else { return }
+        try dbQueue.write { db in
+            for target in targets {
+                switch target.kind {
+                case .standard:
+                    try db.execute(
+                        sql: """
+                            UPDATE query
+                            SET query_state = 0, last_answered_timestamp = NULL, interval = 0
+                            WHERE instance_id = ? AND query_type_id = ?
+                            """,
+                        arguments: [target.instanceID, target.queryTypeID]
+                    )
+                case .point:
+                    try db.execute(
+                        sql: """
+                            UPDATE pointmap_query
+                            SET query_state = 0, last_answered_timestamp = NULL, interval = 0
+                            WHERE is_reverse = ? AND point_id IN (
+                                SELECT id FROM pointmap_point WHERE id = ? AND instance_id = ?
+                            )
+                            """,
+                        arguments: [target.isReverse ? 1 : 0, target.queryTypeID, target.instanceID]
+                    )
+                case .boundary:
+                    try db.execute(
+                        sql: """
+                            UPDATE boundarymap_query
+                            SET query_state = 0, last_answered_timestamp = NULL, interval = 0
+                            WHERE is_reverse = ? AND attachment_id IN (
+                                SELECT id FROM boundarymap_attachment WHERE id = ? AND instance_id = ?
+                            )
+                            """,
+                        arguments: [target.isReverse ? 1 : 0, target.queryTypeID, target.instanceID]
+                    )
+                }
+            }
+        }
+    }
+
+    /// Disables specific query targets by removing their backing query rows,
+    /// honoring direction for map queries. Never deletes instances.
+    func disableQueries(targets: [QueryTarget]) throws {
+        guard !targets.isEmpty else { return }
+        try dbQueue.write { db in
+            for target in targets {
+                switch target.kind {
+                case .standard:
+                    try db.execute(
+                        sql: "DELETE FROM query WHERE instance_id = ? AND query_type_id = ?",
+                        arguments: [target.instanceID, target.queryTypeID]
+                    )
+                case .point:
+                    try db.execute(
+                        sql: """
+                            DELETE FROM pointmap_query
+                            WHERE is_reverse = ? AND point_id IN (
+                                SELECT id FROM pointmap_point WHERE id = ? AND instance_id = ?
+                            )
+                            """,
+                        arguments: [target.isReverse ? 1 : 0, target.queryTypeID, target.instanceID]
+                    )
+                case .boundary:
+                    try db.execute(
+                        sql: """
+                            DELETE FROM boundarymap_query
+                            WHERE is_reverse = ? AND attachment_id IN (
+                                SELECT id FROM boundarymap_attachment WHERE id = ? AND instance_id = ?
+                            )
+                            """,
+                        arguments: [target.isReverse ? 1 : 0, target.queryTypeID, target.instanceID]
+                    )
+                }
             }
         }
     }
@@ -5517,6 +5718,7 @@ struct AppDatabase {
             let attachmentID: Int64
             let boundaryName: String
             let title: String
+            let isReverse: Bool
         }
 
         let rows = try Row.fetchAll(
@@ -5526,13 +5728,14 @@ struct AppDatabase {
                     bq.instance_id AS instanceID,
                     bq.id AS attachmentID,
                     COALESCE(b.name, '') AS boundaryName,
-                    COALESCE(bi.title, '') AS title
-                FROM boundarymap_attachment AS bq
+                    COALESCE(bi.title, '') AS title,
+                    bq.is_reverse AS isReverse
+                FROM \(Self.boundaryMapDirectionalFrom) AS bq
                 JOIN boundarymap_instance AS bi
                     ON bi.instance_id = bq.instance_id
                 JOIN boundary AS b
                     ON b.id = bq.boundary_id\(whereClause)
-                ORDER BY bi.title COLLATE NOCASE, b.name COLLATE NOCASE, bq.id
+                ORDER BY bi.title COLLATE NOCASE, b.name COLLATE NOCASE, bq.id, bq.is_reverse
                 """,
             arguments: searchConditions.arguments
         )
@@ -5542,7 +5745,8 @@ struct AppDatabase {
                 instanceID: row.instanceID,
                 queryTypeID: row.attachmentID,
                 displayValue: row.title,
-                queryTypeName: row.boundaryName
+                queryTypeName: row.boundaryName + (row.isReverse ? " (Reverse)" : " (Forward)"),
+                isReverse: row.isReverse
             )
         }
     }
@@ -6034,6 +6238,12 @@ struct AppDatabase {
         return QuerySearchQuery(expression: try parseSearchExpression(tokens, allowsNoQueries: false, allowsNew: true))
     }
 
+    private func parseMapElementSearchQuery(_ query: String) throws -> MapElementSearchQuery {
+        let tokens = try tokenizeSearchQueryComponents(query)
+        return MapElementSearchQuery(expression: try parseSearchExpression(
+            tokens, allowsNoQueries: false, allowsNew: false, allowsTypeCollectionId: false))
+    }
+
     private func tokenizeSearchQueryComponents(_ query: String) throws -> [String] {
         var tokens: [String] = []
         var currentToken = ""
@@ -6073,11 +6283,12 @@ struct AppDatabase {
         return tokens
     }
 
-    private func parseSearchExpression(_ tokens: [String], allowsNoQueries: Bool, allowsNew: Bool) throws -> SearchExpression? {
+    private func parseSearchExpression(_ tokens: [String], allowsNoQueries: Bool, allowsNew: Bool, allowsTypeCollectionId: Bool = true) throws -> SearchExpression? {
         struct Parser {
             let tokens: [String]
             let allowsNoQueries: Bool
             let allowsNew: Bool
+            let allowsTypeCollectionId: Bool
             var index = 0
 
             mutating func parseExpression() throws -> SearchExpression? {
@@ -6162,24 +6373,36 @@ struct AppDatabase {
                     }
                     return .literal(literal)
                 } else if token.hasPrefix("collection:") {
+                    guard allowsTypeCollectionId else {
+                        throw DatabaseError(message: "The collection: component cannot be used when searching points and boundaries.")
+                    }
                     let collectionName = String(token.dropFirst("collection:".count))
                     guard !collectionName.isEmpty else {
                         throw DatabaseError(message: "The collection: component requires a collection name.")
                     }
                     return .collection(collectionName)
                 } else if token.hasPrefix("col:") {
+                    guard allowsTypeCollectionId else {
+                        throw DatabaseError(message: "The col: component cannot be used when searching points and boundaries.")
+                    }
                     let collectionName = String(token.dropFirst("col:".count))
                     guard !collectionName.isEmpty else {
                         throw DatabaseError(message: "The col: component requires a collection name.")
                     }
                     return .collection(collectionName)
                 } else if token.hasPrefix("type:") {
+                    guard allowsTypeCollectionId else {
+                        throw DatabaseError(message: "The type: component cannot be used when searching points and boundaries.")
+                    }
                     let typeName = String(token.dropFirst("type:".count))
                     guard !typeName.isEmpty else {
                         throw DatabaseError(message: "The type: component requires a type name.")
                     }
                     return .type(typeName)
                 } else if token.hasPrefix("id:") {
+                    guard allowsTypeCollectionId else {
+                        throw DatabaseError(message: "The id: component cannot be used when searching points and boundaries.")
+                    }
                     let idString = String(token.dropFirst("id:".count))
                     guard !idString.isEmpty else {
                         throw DatabaseError(message: "The id: component requires an integer ID.")
@@ -6201,7 +6424,7 @@ struct AppDatabase {
             }
         }
 
-        var parser = Parser(tokens: tokens, allowsNoQueries: allowsNoQueries, allowsNew: allowsNew)
+        var parser = Parser(tokens: tokens, allowsNoQueries: allowsNoQueries, allowsNew: allowsNew, allowsTypeCollectionId: allowsTypeCollectionId)
         let expression = try parser.parseExpression()
         guard parser.index == tokens.count else {
             throw DatabaseError(message: "Search query has an unmatched parenthesis.")

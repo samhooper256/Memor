@@ -9,7 +9,7 @@ import AppKit
 import SwiftUI
 
 struct CollectionsPageView: View {
-    @EnvironmentObject private var instanceSearchWindowState: InstanceSearchWindowState
+    @EnvironmentObject private var searchWindowState: SearchWindowState
     @EnvironmentObject private var navigationState: AppNavigationState
     @EnvironmentObject private var shortcutSettings: ShortcutSettings
 
@@ -107,7 +107,7 @@ struct CollectionsPageView: View {
         .onChange(of: navigationState.resetToHomeNonce) { _, _ in
             selectedCollection = nil
         }
-        .onChange(of: instanceSearchWindowState.latestCollectionsDataChange) { _, _ in
+        .onChange(of: searchWindowState.latestCollectionsDataChange) { _, _ in
             guard selectedCollection == nil else { return }
             Task {
                 await loadCollections()
@@ -218,7 +218,7 @@ struct CollectionsPageView: View {
 
 private struct CollectionDetailPageView: View {
     @Environment(\.openWindow) private var openWindow
-    @EnvironmentObject private var instanceSearchWindowState: InstanceSearchWindowState
+    @EnvironmentObject private var searchWindowState: SearchWindowState
     @EnvironmentObject private var editInstanceWindowState: EditInstanceWindowState
 
     let collection: Collection
@@ -372,8 +372,8 @@ private struct CollectionDetailPageView: View {
                     }
 
                 Button("Add Instances") {
-                    instanceSearchWindowState.requestOpenForCollection(collection)
-                    openWindow(id: "instance-search")
+                    searchWindowState.requestOpenForCollection(collection)
+                    openWindow(id: "search")
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -435,13 +435,13 @@ private struct CollectionDetailPageView: View {
             visibleBeforeAnswer = collection.visibleBeforeAnswer
             await loadInstances()
         }
-        .onChange(of: instanceSearchWindowState.latestCollectionMembershipChange) { _, change in
+        .onChange(of: searchWindowState.latestCollectionMembershipChange) { _, change in
             guard change?.collectionID == collection.id else { return }
             Task {
                 await loadInstances()
             }
         }
-        .onChange(of: instanceSearchWindowState.latestCollectionsDataChange) { _, _ in
+        .onChange(of: searchWindowState.latestCollectionsDataChange) { _, _ in
             Task {
                 await loadInstances()
             }

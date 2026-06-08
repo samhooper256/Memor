@@ -239,8 +239,51 @@ struct QuerySearchResult: Identifiable, Hashable {
     let queryTypeID: Int64
     let displayValue: String
     let queryTypeName: String
+    // Map queries only: distinguishes a point/boundary's forward query from its
+    // reverse query. Standard queries are always forward. Included in `id` so the
+    // two directions are distinct, selectable rows.
+    var isReverse: Bool = false
 
-    var id: String { "\(instanceID):\(queryTypeID)" }
+    var id: String { "\(instanceID):\(queryTypeID):\(isReverse ? "r" : "f")" }
+}
+
+enum MapElementKind: String, Hashable {
+    case point
+    case boundary
+}
+
+struct MapElementSearchSection: Identifiable, Hashable {
+    let typeID: Int64
+    let typeName: String
+    let elements: [MapElementSearchResult]
+
+    var id: Int64 { typeID }
+}
+
+struct MapElementSearchResult: Identifiable, Hashable {
+    let instanceID: Int64
+    let elementID: Int64       // pointID or attachmentID
+    let displayValue: String   // instance title
+    let elementName: String    // point/boundary name
+    let kind: MapElementKind
+
+    var id: String { "\(instanceID):\(elementID):\(kind.rawValue)" }
+}
+
+enum QueryTargetKind: Hashable {
+    case standard   // `query` table, by (instance_id, query_type_id)
+    case point      // `pointmap_query`, by (point_id, is_reverse)
+    case boundary   // `boundarymap_query`, by (attachment_id, is_reverse)
+}
+
+// Identifies a single studyable query (a specific direction for map queries) so
+// it can be reset or disabled. `queryTypeID` is a query_type id for standard
+// queries, a point id for points, or an attachment id for boundaries.
+struct QueryTarget: Hashable {
+    let instanceID: Int64
+    let queryTypeID: Int64
+    let isReverse: Bool
+    let kind: QueryTargetKind
 }
 
 struct TypeInstancesPageData {
