@@ -405,7 +405,7 @@ struct SearchWindowView: View {
             if items.count == 1,
                let instanceID = items.first,
                duplicatableInstanceIDs.contains(instanceID) {
-                Button("Duplicate Instance") {
+                Button("Duplicate") {
                     addInstanceWindowState.requestOpenForDuplication(sourceInstanceID: instanceID)
                     openWindow(id: "add-instance")
                 }
