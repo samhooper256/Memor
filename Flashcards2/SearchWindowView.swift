@@ -396,7 +396,11 @@ struct SearchWindowView: View {
 
     private var instancesList: some View {
         List(selection: $selectedInstanceIDs) {
-            ForEach(instanceSections) { section in
+            // Identify sections by name (String), NOT by their Int64 typeID:
+            // with a Set<Int64> selection, ⌘A (Select All) otherwise injects the
+            // sections' Int64 ids into the selection, inflating the count with
+            // phantom ids (any typeID not coinciding with a real instance id).
+            ForEach(instanceSections, id: \.typeName) { section in
                 Section(section.typeName) {
                     ForEach(section.instances) { instance in
                         InstanceSearchRowView(
