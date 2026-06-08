@@ -610,7 +610,7 @@ struct QuerySearchWindowView: View {
                 }
             }
         } message: {
-            Text("This disables the selected queries on their instances. The instances themselves are not deleted. This action is irreversible.")
+            Text("The selected queries will be disabled, but their associated instances will not be deleted. This action is irreversible.")
         }
         .onDisappear {
             debounceTask?.cancel()
