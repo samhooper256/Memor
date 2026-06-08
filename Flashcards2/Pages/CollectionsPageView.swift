@@ -575,7 +575,6 @@ private struct CollectionRowView: View {
     let onDelete: () -> Void
 
     @State private var isHovered = false
-    @State private var isEditButtonHovered = false
     @State private var isDeleteButtonHovered = false
     @State private var isCopyButtonHovered = false
 
@@ -610,20 +609,6 @@ private struct CollectionRowView: View {
             Spacer(minLength: 0)
 
             HStack(spacing: 2) {
-                Button(action: onOpen) {
-                    Image(systemName: "pencil")
-                        .foregroundStyle(.blue)
-                        .padding(8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(isEditButtonHovered ? Color.blue.opacity(0.14) : Color.clear)
-                        )
-                }
-                .buttonStyle(.plain)
-                .onHover { hovering in
-                    isEditButtonHovered = hovering
-                }
-
                 Button(action: onDelete) {
                     Image(systemName: "trash")
                         .foregroundStyle(.red)
@@ -670,9 +655,14 @@ private struct CollectionRowView: View {
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .contentShape(Rectangle())
+        .pointerStyle(isHovered ? .link : .default)
         .overlay {
             RoundedRectangle(cornerRadius: 14)
                 .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
+        }
+        .onTapGesture {
+            isHovered = false
+            onOpen()
         }
         .onContinuousHover { phase in
             switch phase {
