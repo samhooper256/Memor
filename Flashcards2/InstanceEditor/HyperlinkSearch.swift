@@ -294,8 +294,10 @@ final class HyperlinkSearchPopupState: NSObject, ObservableObject, NSWindowDeleg
         let ids = currentResultIDs
         guard !ids.isEmpty else { return }
         if let highlightedID, let currentIndex = ids.firstIndex(of: highlightedID) {
-            let nextIndex = min(currentIndex + 1, ids.count - 1)
-            self.highlightedID = ids[nextIndex]
+            // Wrap to the top when moving down past the last result, mirroring
+            // moveSelectionUp's wrap from the top to the bottom.
+            let nextIndex = currentIndex + 1
+            self.highlightedID = nextIndex < ids.count ? ids[nextIndex] : ids.first
         } else {
             highlightedID = ids.first
         }
@@ -402,7 +404,8 @@ struct HyperlinkSearchPopupView: View {
 
             Divider()
 
-            ScrollView {
+            ScrollViewReader { proxy in
+              ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if let errorMessage = state.errorMessage {
                         Text(errorMessage)
@@ -426,6 +429,7 @@ struct HyperlinkSearchPopupView: View {
                                         .foregroundStyle(isHighlighted ? Color.white : Color.primary)
                                 }
                                 .buttonStyle(.plain)
+                                .id(String(result.id))
                             }
                         case .queries:
                             ForEach(state.queryResults, id: \.id) { result in
@@ -446,6 +450,7 @@ struct HyperlinkSearchPopupView: View {
                                     .background(isHighlighted ? Color.accentColor.opacity(0.75) : Color.clear)
                                 }
                                 .buttonStyle(.plain)
+                                .id(result.id)
                             }
                         case .pointsAndBoundaries:
                             ForEach(state.mapElementResults, id: \.id) { result in
@@ -466,13 +471,22 @@ struct HyperlinkSearchPopupView: View {
                                     .background(isHighlighted ? Color.accentColor.opacity(0.75) : Color.clear)
                                 }
                                 .buttonStyle(.plain)
+                                .id(result.id)
                             }
                         }
                     }
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(nsColor: .controlBackgroundColor))
+              .frame(maxWidth: .infinity, maxHeight: .infinity)
+              .background(Color(nsColor: .controlBackgroundColor))
+              .onChange(of: state.highlightedID) { _, newID in
+                  guard let newID else { return }
+                  // Scroll the minimal amount to bring the highlighted row into
+                  // view (anchor: nil). Handles arrow-key navigation up and down
+                  // as well as wrap-around from top↔bottom.
+                  proxy.scrollTo(newID, anchor: nil)
+              }
+            }
         }
         .background {
             RoundedRectangle(cornerRadius: 8)
