@@ -195,8 +195,8 @@ struct TypeDetailPageView: View {
                         onSetPrimary: { field in
                             Task { await setPrimaryField(field) }
                         },
-                        onMoveField: { fromID, toID in
-                            Task { await moveField(fromID: fromID, toID: toID) }
+                        onReorder: { orderedIDs in
+                            Task { await reorderFields(orderedIDs: orderedIDs) }
                         }
                     )
 
@@ -844,18 +844,13 @@ struct TypeDetailPageView: View {
         }
     }
 
-    // Reorders text fields by moving `fromID` to the position of `toID`, then
-    // persists the new display order (field_display_index renumbered 1...N).
+    // Persists a new text-field display order (field_display_index renumbered
+    // 1...N) from the drag-reordered list of field IDs.
     @MainActor
-    private func moveField(fromID: Int64, toID: Int64) async {
-        guard fromID != toID,
-              let fromIndex = fields.firstIndex(where: { $0.id == fromID }),
-              let toIndex = fields.firstIndex(where: { $0.id == toID }) else { return }
-
-        var reordered = fields
-        let moved = reordered.remove(at: fromIndex)
-        let insertIndex = reordered.firstIndex(where: { $0.id == toID }) ?? toIndex
-        reordered.insert(moved, at: insertIndex)
+    private func reorderFields(orderedIDs: [Int64]) async {
+        guard orderedIDs != fields.map(\.id) else { return }
+        let reordered = orderedIDs.compactMap { id in fields.first(where: { $0.id == id }) }
+        guard reordered.count == fields.count else { return }
         fields = reordered
 
         do {
@@ -1119,75 +1114,156 @@ private struct TypeDetailAlertsModifier: ViewModifier {
     }
 }
 
+private struct FieldRowFramePreferenceKey: PreferenceKey {
+    static let defaultValue: [Int64: CGRect] = [:]
+    static func reduce(value: inout [Int64: CGRect], nextValue: () -> [Int64: CGRect]) {
+        value.merge(nextValue()) { _, new in new }
+    }
+}
+
 private struct FieldsSectionView: View {
     let fields: [TypeField]
     var isNode: Bool = false
     let onEditField: (TypeField) -> Void
     let onDeleteField: (TypeField) -> Void
     var onSetPrimary: (TypeField) -> Void = { _ in }
-    var onMoveField: (_ fromID: Int64, _ toID: Int64) -> Void = { _, _ in }
+    var onReorder: (_ orderedIDs: [Int64]) -> Void = { _ in }
+
+    private static let coordinateSpaceName = "fieldsList"
+
+    // The field currently being dragged (rendered as an invisible "hole").
+    @State private var draggingID: Int64?
+    // The live visual order while dragging; nil when not dragging.
+    @State private var liveOrder: [Int64]?
+    // Continuously-captured row frames, and a snapshot frozen at drag start so
+    // the target index stays stable while rows reflow around the hole.
+    @State private var rowFrames: [Int64: CGRect] = [:]
+    @State private var frozenFrames: [Int64: CGRect] = [:]
+
+    private var displayedFields: [TypeField] {
+        guard let liveOrder else { return fields }
+        return liveOrder.compactMap { id in fields.first(where: { $0.id == id }) }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(fields.enumerated()), id: \.element.id) { index, field in
-                HStack(spacing: 12) {
-                    Image(systemName: "line.3.horizontal")
-                        .foregroundStyle(.secondary)
-                        .font(.caption)
+            ForEach(Array(displayedFields.enumerated()), id: \.element.id) { index, field in
+                fieldRow(field)
 
-                    Text(field.name)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    if isNode {
-                        Button {
-                            onSetPrimary(field)
-                        } label: {
-                            Label("Primary", systemImage: field.isPrimary ? "largecircle.fill.circle" : "circle")
-                                .labelStyle(.titleAndIcon)
-                                .font(.caption)
-                                .foregroundStyle(field.isPrimary ? Color.accentColor : Color.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Mark as the primary field")
-                    }
-
-                    Button {
-                        onEditField(field)
-                    } label: {
-                        Image(systemName: "pencil")
-                    }
-                    .buttonStyle(.plain)
-
-                    Button {
-                        onDeleteField(field)
-                    } label: {
-                        Image(systemName: "trash")
-                            .foregroundStyle(.red)
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .contentShape(Rectangle())
-                .pointerStyle(.grabIdle)
-                .draggable(String(field.id))
-                .dropDestination(for: String.self) { droppedItems, _ in
-                    guard let payload = droppedItems.first, let fromID = Int64(payload) else { return false }
-                    guard fromID != field.id else { return false }
-                    onMoveField(fromID, field.id)
-                    return true
-                }
-
-                if index < fields.count - 1 {
+                if index < displayedFields.count - 1 {
                     Divider()
                 }
             }
+        }
+        .coordinateSpace(name: Self.coordinateSpaceName)
+        .onPreferenceChange(FieldRowFramePreferenceKey.self) { frames in
+            rowFrames = frames
         }
         .background(Color(NSColor.controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay {
             RoundedRectangle(cornerRadius: 14)
                 .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
+        }
+    }
+
+    @ViewBuilder
+    private func fieldRow(_ field: TypeField) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "line.3.horizontal")
+                .foregroundStyle(.secondary)
+                .font(.caption)
+
+            Text(field.name)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if isNode {
+                Button {
+                    onSetPrimary(field)
+                } label: {
+                    Label("Primary", systemImage: field.isPrimary ? "largecircle.fill.circle" : "circle")
+                        .labelStyle(.titleAndIcon)
+                        .font(.caption)
+                        .foregroundStyle(field.isPrimary ? Color.accentColor : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Mark as the primary field")
+            }
+
+            Button {
+                onEditField(field)
+            } label: {
+                Image(systemName: "pencil")
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                onDeleteField(field)
+            } label: {
+                Image(systemName: "trash")
+                    .foregroundStyle(.red)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
+        // The dragged row becomes the hole: it keeps its size (so the gap is
+        // row-shaped) but is invisible.
+        .opacity(draggingID == field.id ? 0 : 1)
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: FieldRowFramePreferenceKey.self,
+                    value: [field.id: proxy.frame(in: .named(Self.coordinateSpaceName))]
+                )
+            }
+        )
+        .pointerStyle(draggingID == nil ? .grabIdle : .grabActive)
+        .gesture(reorderGesture(for: field))
+    }
+
+    private func reorderGesture(for field: TypeField) -> some Gesture {
+        DragGesture(minimumDistance: 5, coordinateSpace: .named(Self.coordinateSpaceName))
+            .onChanged { value in
+                if draggingID != field.id {
+                    draggingID = field.id
+                    frozenFrames = rowFrames
+                    liveOrder = fields.map(\.id)
+                }
+                updateLiveOrder(draggedID: field.id, locationY: value.location.y)
+            }
+            .onEnded { _ in
+                let finalOrder = liveOrder ?? fields.map(\.id)
+                let originalOrder = fields.map(\.id)
+                draggingID = nil
+                liveOrder = nil
+                frozenFrames = [:]
+                if finalOrder != originalOrder {
+                    onReorder(finalOrder)
+                }
+            }
+    }
+
+    // Places the dragged field into the slot under the pointer, using the frozen
+    // (drag-start) row midpoints so the computation doesn't oscillate as the
+    // visible rows reflow.
+    private func updateLiveOrder(draggedID: Int64, locationY: CGFloat) {
+        let others = fields.map(\.id).filter { $0 != draggedID }
+        var newIndex = 0
+        for id in others {
+            if let midY = frozenFrames[id]?.midY, midY < locationY {
+                newIndex += 1
+            }
+        }
+        newIndex = min(max(newIndex, 0), others.count)
+
+        var order = others
+        order.insert(draggedID, at: newIndex)
+        if order != liveOrder {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                liveOrder = order
+            }
         }
     }
 }
