@@ -141,9 +141,21 @@ struct SearchWindowView: View {
         }
     }
 
+    private var selectedCount: Int {
+        switch windowState.mode {
+        case .instances: return selectedInstanceIDs.count
+        case .queries: return selectedQueryIDs.count
+        case .pointsAndBoundaries: return selectedMapElementIDs.count
+        }
+    }
+
     private var resultsCountText: String {
         let noun = resultsCount == 1 ? "result" : "results"
-        return "\(resultsCount) \(noun)"
+        var text = "\(resultsCount) \(noun)"
+        if selectedCount > 1 {
+            text += " — \(selectedCount) selected"
+        }
+        return text
     }
 
     private var emptyStateText: String {
@@ -402,6 +414,12 @@ struct SearchWindowView: View {
         }
         .listStyle(.inset)
         .contextMenu(forSelectionType: Int64.self) { items in
+            if items.count == 1, let instanceID = items.first {
+                Button("Edit") {
+                    editInstanceWindowState.requestOpen(instanceID: instanceID)
+                    openWindow(id: "edit-instance")
+                }
+            }
             if items.count == 1,
                let instanceID = items.first,
                duplicatableInstanceIDs.contains(instanceID) {
@@ -446,12 +464,22 @@ struct SearchWindowView: View {
         }
         .listStyle(.inset)
         .contextMenu(forSelectionType: String.self) { items in
+            if items.count == 1,
+               let queryID = items.first,
+               let instanceIDPart = queryID.split(separator: ":").first,
+               let instanceID = Int64(instanceIDPart) {
+                Button("Edit Instance") {
+                    editInstanceWindowState.requestOpen(instanceID: instanceID)
+                    openWindow(id: "edit-instance")
+                }
+                Divider()
+            }
             if !items.isEmpty {
-                Button("Reset Due Dates") {
+                Button(items.count == 1 ? "Reset Due Date" : "Reset Due Dates") {
                     queryIDsPendingReset = items
                     isResetDueDatesConfirmationPresented = true
                 }
-                Button("Delete Queries", role: .destructive) {
+                Button(items.count == 1 ? "Delete Query" : "Delete Queries", role: .destructive) {
                     queryIDsPendingDelete = items
                     isDeleteQueriesConfirmationPresented = true
                 }
