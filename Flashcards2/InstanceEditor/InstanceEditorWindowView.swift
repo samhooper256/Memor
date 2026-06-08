@@ -1646,8 +1646,16 @@ struct InstanceEditorWindowView: View {
 
     private var collectionChecklistSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Collections")
-                .font(.headline)
+            HStack(spacing: 6) {
+                Text("Collections")
+                    .font(.headline)
+
+                if !selectedCollectionIDs.isEmpty {
+                    Text("(\(selectedCollectionIDs.count) selected)")
+                        .font(.headline)
+                        .foregroundStyle(.blue)
+                }
+            }
 
             CollectionSearchTextField(
                 text: $collectionSearchQuery,
