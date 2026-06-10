@@ -2902,6 +2902,80 @@ struct AppDatabase {
         return try makeStudyQuery(db: db, typeInfo: typeInfo, queryRow: queryRow)
     }
 
+    /// Builds a preview `StudyQuery` for a query type from its type alone, without
+    /// requiring a persisted instance. Used by the Add Instance window, where the
+    /// "instance" being previewed doesn't exist in the database yet. Field values
+    /// are left empty here and supplied by the caller via `StudyQuery.withFieldValues`.
+    /// For Node link queries the answer is computed from `linkTargetIDsByLinkFieldID`
+    /// (the link targets currently selected in the editor).
+    func fetchQueryTypePreview(
+        typeID: Int64,
+        queryTypeID: Int64,
+        linkTargetIDsByLinkFieldID: [Int64: [Int64]] = [:]
+    ) throws -> StudyQuery {
+        try dbQueue.read { db in
+            let typeInfos = try fetchInstanceSearchTypeInfos(db: db)
+            guard let typeInfo = typeInfos.first(where: { $0.typeID == typeID }) else {
+                throw DatabaseError(message: "Type not found.")
+            }
+
+            guard let queryRow = try StudyQueryRow.fetchOne(
+                db,
+                sql: """
+                    SELECT
+                        0 AS instanceID,
+                        query_type.id AS queryTypeID,
+                        0 AS interval,
+                        NULL AS maxInterval,
+                        NULL AS lastAnsweredTimestamp,
+                        0 AS queryState,
+                        query_type.name AS queryTypeName,
+                        query_type.question_html AS questionHTML,
+                        query_type.answer_html AS answerHTML,
+                        "type".css AS typeCSS,
+                        query_type.link_field_id AS linkFieldID
+                    FROM query_type
+                    JOIN "type"
+                        ON "type".id = query_type.type_id
+                    WHERE query_type.id = ?
+                        AND query_type.type_id = ?
+                    """,
+                arguments: [queryTypeID, typeID]
+            ) else {
+                throw DatabaseError(message: "Query type not found for type.")
+            }
+
+            // For Node link queries the answer is computed from the link targets
+            // currently selected in the editor, then wrapped exactly like a standard
+            // answer so the global template and question reference resolve normally.
+            var answerHTML = queryRow.answerHTML
+            if let linkFieldID = queryRow.linkFieldID {
+                let targetIDs = linkTargetIDsByLinkFieldID[linkFieldID] ?? []
+                let body = try Self.computeLinkQueryAnswerBody(db: db, targetInstanceIDs: targetIDs)
+                answerHTML = uniteQuestionAndAnswerWithDefaultSeparator(
+                    questionHTML: "{{#QuestionContent}}",
+                    answerHTML: body
+                )
+            }
+
+            return StudyQuery(
+                instanceID: 0,
+                queryTypeID: queryRow.queryTypeID,
+                interval: queryRow.interval,
+                maxInterval: queryRow.maxInterval,
+                lastAnsweredTimestamp: queryRow.lastAnsweredTimestamp,
+                queryState: QueryState(rawValue: queryRow.queryState) ?? .zero,
+                typeName: typeInfo.typeName,
+                queryTypeName: queryRow.queryTypeName,
+                questionHTML: queryRow.questionHTML,
+                answerHTML: answerHTML,
+                typeCSS: queryRow.typeCSS,
+                fieldValuesByName: [:],
+                linkFieldID: queryRow.linkFieldID
+            )
+        }
+    }
+
     func createType(name: String, kind: TypeKind) throws -> FlashcardType {
         try dbQueue.write { db in
             let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -4296,7 +4370,11 @@ struct AppDatabase {
                 """,
             arguments: [sourceInstanceID, linkFieldID]
         )
-        let links = try targetIDs.map { targetID -> String in
+        return try computeLinkQueryAnswerBody(db: db, targetInstanceIDs: targetIDs)
+    }
+
+    static func computeLinkQueryAnswerBody(db: Database, targetInstanceIDs: [Int64]) throws -> String {
+        let links = try targetInstanceIDs.map { targetID -> String in
             let value = try fetchNodePrimaryValue(db: db, instanceID: targetID)
             return "<a href=\"id:\(targetID)\">\(value)</a>"
         }

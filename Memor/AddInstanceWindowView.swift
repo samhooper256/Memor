@@ -62,8 +62,13 @@ final class EditInstanceWindowState: ObservableObject {
 @MainActor
 final class QueryPreviewWindowState: ObservableObject {
     @Published private(set) var requestedInstanceID: Int64?
+    // Non-nil only for draft previews from the Add Instance window, where the
+    // previewed "instance" has no row in the database yet — the query is built
+    // from the type + query type instead.
+    @Published private(set) var requestedTypeID: Int64?
     @Published private(set) var requestedQueryTypeID: Int64?
     @Published private(set) var requestedFieldValuesByName: [String: String]?
+    @Published private(set) var requestedLinkTargetIDsByLinkFieldID: [Int64: [Int64]]?
     @Published private(set) var requestNonce = UUID()
 
     func requestOpen(
@@ -72,15 +77,36 @@ final class QueryPreviewWindowState: ObservableObject {
         fieldValuesByName: [String: String]? = nil
     ) {
         requestedInstanceID = instanceID
+        requestedTypeID = nil
         requestedQueryTypeID = queryTypeID
         requestedFieldValuesByName = fieldValuesByName
+        requestedLinkTargetIDsByLinkFieldID = nil
         requestNonce = UUID()
     }
 
     func requestOpenFirstQuery(instanceID: Int64) {
         requestedInstanceID = instanceID
+        requestedTypeID = nil
         requestedQueryTypeID = nil
         requestedFieldValuesByName = nil
+        requestedLinkTargetIDsByLinkFieldID = nil
+        requestNonce = UUID()
+    }
+
+    /// Preview a query for an unsaved instance being composed in the Add Instance
+    /// window. The query is built from `typeID` + `queryTypeID` (no instance row),
+    /// with the editor's current field values and link targets supplied as overrides.
+    func requestOpenDraft(
+        typeID: Int64,
+        queryTypeID: Int64,
+        fieldValuesByName: [String: String],
+        linkTargetIDsByLinkFieldID: [Int64: [Int64]]
+    ) {
+        requestedInstanceID = nil
+        requestedTypeID = typeID
+        requestedQueryTypeID = queryTypeID
+        requestedFieldValuesByName = fieldValuesByName
+        requestedLinkTargetIDsByLinkFieldID = linkTargetIDsByLinkFieldID
         requestNonce = UUID()
     }
 }

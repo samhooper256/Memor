@@ -92,19 +92,29 @@ struct QueryPreviewWindowView: View {
 
     @MainActor
     private func loadPreview() async {
-        guard let instanceID = windowState.requestedInstanceID else {
-            query = nil
-            renderedAnswerHTML = ""
-            errorMessage = "No query preview selected."
-            return
-        }
-
         do {
-            let baseQuery = if let queryTypeID = windowState.requestedQueryTypeID {
-                try appDatabase.fetchQueryPreview(instanceID: instanceID, queryTypeID: queryTypeID)
+            let baseQuery: StudyQuery
+            if let typeID = windowState.requestedTypeID,
+               let queryTypeID = windowState.requestedQueryTypeID {
+                // Draft preview from the Add Instance window: no instance row yet.
+                baseQuery = try appDatabase.fetchQueryTypePreview(
+                    typeID: typeID,
+                    queryTypeID: queryTypeID,
+                    linkTargetIDsByLinkFieldID: windowState.requestedLinkTargetIDsByLinkFieldID ?? [:]
+                )
+            } else if let instanceID = windowState.requestedInstanceID {
+                baseQuery = if let queryTypeID = windowState.requestedQueryTypeID {
+                    try appDatabase.fetchQueryPreview(instanceID: instanceID, queryTypeID: queryTypeID)
+                } else {
+                    try appDatabase.fetchFirstQueryPreview(instanceID: instanceID)
+                }
             } else {
-                try appDatabase.fetchFirstQueryPreview(instanceID: instanceID)
+                query = nil
+                renderedAnswerHTML = ""
+                errorMessage = "No query preview selected."
+                return
             }
+
             let query: StudyQuery
             if let overrides = windowState.requestedFieldValuesByName {
                 query = baseQuery.withFieldValues(overrides)
@@ -152,7 +162,9 @@ struct QueryPreviewWindowView: View {
     /// Does nothing if that window is already open (so an in-progress edit isn't
     /// clobbered).
     private func handleEdit() {
-        guard let query, !isEditInstanceWindowOpen() else { return }
+        // A draft preview (from the Add Instance window) has no persisted instance
+        // to edit — its instanceID is 0.
+        guard let query, query.instanceID != 0, !isEditInstanceWindowOpen() else { return }
         let autoEditPointID: Int64? = query.kind == .pointMap ? query.pointMapPayload?.pointID : nil
         editInstanceWindowState.requestOpen(instanceID: query.instanceID, autoEditPointID: autoEditPointID)
         openWindow(id: "edit-instance")

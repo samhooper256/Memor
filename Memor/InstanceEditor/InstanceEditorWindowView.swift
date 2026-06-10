@@ -280,12 +280,10 @@ struct InstanceEditorWindowView: View {
             )
         }
         .background {
-            if mode == .edit {
-                EditorPreviewShortcutHandler(
-                    shortcutSettings: shortcutSettings,
-                    onPreviewTopQuery: previewTopmostCheckedQueryType
-                )
-            }
+            EditorPreviewShortcutHandler(
+                shortcutSettings: shortcutSettings,
+                onPreviewTopQuery: previewTopmostCheckedQueryType
+            )
         }
         .overlay(alignment: .topTrailing) {
             if let toast {
@@ -1588,21 +1586,16 @@ struct InstanceEditorWindowView: View {
                     )
                     .toggleStyle(.checkbox)
 
-                    if mode == .edit, let loadedInstanceID {
-                        Button {
-                            queryPreviewWindowState.requestOpen(
-                                instanceID: loadedInstanceID,
-                                queryTypeID: queryType.id,
-                                fieldValuesByName: liveFieldValuesByName()
-                            )
-                            openWindow(id: "query-preview")
-                        } label: {
-                            Image(systemName: "eye")
-                                .foregroundStyle(.gray)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Preview")
+                    Button {
+                        openPreview(queryTypeID: queryType.id)
+                    } label: {
+                        Image(systemName: "eye")
+                            .foregroundStyle(.gray)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Preview")
 
+                    if mode == .edit, let loadedInstanceID {
                         if let interval = queryIntervalsByQueryTypeID[queryType.id] {
                             if interval == 0 {
                                 Text("New")
@@ -2347,18 +2340,37 @@ struct InstanceEditorWindowView: View {
         })
     }
 
+    /// Opens the Query Preview window for one query type, using the editor's live
+    /// field values (and, in Add mode, live link targets) so the preview reflects
+    /// what's currently typed. In Edit mode the preview is keyed on the persisted
+    /// instance; in Add mode it's a draft preview built from the type alone.
+    private func openPreview(queryTypeID: Int64) {
+        switch mode {
+        case .edit:
+            guard let loadedInstanceID else { return }
+            queryPreviewWindowState.requestOpen(
+                instanceID: loadedInstanceID,
+                queryTypeID: queryTypeID,
+                fieldValuesByName: liveFieldValuesByName()
+            )
+        case .add:
+            guard let selectedTypeID else { return }
+            queryPreviewWindowState.requestOpenDraft(
+                typeID: selectedTypeID,
+                queryTypeID: queryTypeID,
+                fieldValuesByName: liveFieldValuesByName(),
+                linkTargetIDsByLinkFieldID: linkTargetsByLinkFieldID
+            )
+        }
+        openWindow(id: "query-preview")
+    }
+
     private func previewTopmostCheckedQueryType() {
-        guard mode == .edit, let loadedInstanceID else { return }
         let displayedQueryTypes = queryTypes.sorted { $0.id < $1.id }
         guard let topmost = displayedQueryTypes.first(where: { selectedQueryTypeIDs.contains($0.id) }) else {
             return
         }
-        queryPreviewWindowState.requestOpen(
-            instanceID: loadedInstanceID,
-            queryTypeID: topmost.id,
-            fieldValuesByName: liveFieldValuesByName()
-        )
-        openWindow(id: "query-preview")
+        openPreview(queryTypeID: topmost.id)
     }
 
     private func wrapFocusedSelection(openTag: String, closeTag: String) {
