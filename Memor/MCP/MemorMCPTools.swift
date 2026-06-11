@@ -117,6 +117,28 @@ enum MemorMCPTools {
             ))
 
         // PointMap
+        case "create_pointmap_instance":
+            return try jsonResult(createPointMapInstance(
+                title: try arguments.requireString("title"),
+                defaultCenterLat: try arguments.optionalDouble("default_center_lat") ?? 0,
+                defaultCenterLng: try arguments.optionalDouble("default_center_lng") ?? 0,
+                defaultZoom: try arguments.optionalDouble("default_zoom") ?? 2,
+                showAllPointsInQuestion: try arguments.optionalBool("show_all_points_in_question") ?? true,
+                pointItems: try arguments.optionalObjectArray("points") ?? [],
+                boundaryIDs: try arguments.optionalInt64Array("boundary_ids") ?? [],
+                appDatabase: appDatabase
+            ))
+        case "update_pointmap_instance":
+            return try jsonResult(updatePointMapInstance(
+                instanceID: try arguments.requireInt64("instance_id"),
+                title: try arguments.optionalString("title"),
+                defaultCenterLat: try arguments.optionalDouble("default_center_lat"),
+                defaultCenterLng: try arguments.optionalDouble("default_center_lng"),
+                defaultZoom: try arguments.optionalDouble("default_zoom"),
+                showAllPointsInQuestion: try arguments.optionalBool("show_all_points_in_question"),
+                boundaryIDs: try arguments.optionalInt64Array("boundary_ids"),
+                appDatabase: appDatabase
+            ))
         case "add_pointmap_point":
             let instanceID = try arguments.requireInt64("instance_id")
             let name = try arguments.requireString("name")
@@ -131,6 +153,56 @@ enum MemorMCPTools {
                 longitude: longitude,
                 forwardEnabled: forwardEnabled,
                 reverseEnabled: reverseEnabled,
+                appDatabase: appDatabase
+            ))
+        case "update_pointmap_point":
+            return try jsonResult(updatePointMapPoint(
+                instanceID: try arguments.requireInt64("instance_id"),
+                pointID: try arguments.requireInt64("point_id"),
+                name: try arguments.optionalString("name"),
+                latitude: try arguments.optionalDouble("latitude"),
+                longitude: try arguments.optionalDouble("longitude"),
+                forwardEnabled: try arguments.optionalBool("forward_enabled"),
+                reverseEnabled: try arguments.optionalBool("reverse_enabled"),
+                appDatabase: appDatabase
+            ))
+        case "delete_pointmap_point":
+            return try jsonResult(deletePointMapPoint(
+                instanceID: try arguments.requireInt64("instance_id"),
+                pointID: try arguments.requireInt64("point_id"),
+                appDatabase: appDatabase
+            ))
+
+        // BoundaryMap
+        case "create_boundarymap_instance":
+            return try jsonResult(createBoundaryMapInstance(
+                title: try arguments.requireString("title"),
+                defaultCenterLat: try arguments.optionalDouble("default_center_lat") ?? 0,
+                defaultCenterLng: try arguments.optionalDouble("default_center_lng") ?? 0,
+                defaultZoom: try arguments.optionalDouble("default_zoom") ?? 2,
+                showAllBoundariesInQuestion: try arguments.optionalBool("show_all_boundaries_in_question") ?? true,
+                boundaryItems: try arguments.optionalObjectArray("boundaries") ?? [],
+                appDatabase: appDatabase
+            ))
+        case "update_boundarymap_instance":
+            return try jsonResult(updateBoundaryMapInstance(
+                instanceID: try arguments.requireInt64("instance_id"),
+                title: try arguments.optionalString("title"),
+                defaultCenterLat: try arguments.optionalDouble("default_center_lat"),
+                defaultCenterLng: try arguments.optionalDouble("default_center_lng"),
+                defaultZoom: try arguments.optionalDouble("default_zoom"),
+                showAllBoundariesInQuestion: try arguments.optionalBool("show_all_boundaries_in_question"),
+                addBoundaryItems: try arguments.optionalObjectArray("add_boundaries"),
+                removeAttachmentIDs: try arguments.optionalInt64Array("remove_attachment_ids"),
+                setEnabledItems: try arguments.optionalObjectArray("set_enabled"),
+                appDatabase: appDatabase
+            ))
+        case "list_boundary_sets":
+            return try jsonResult(listBoundarySets(appDatabase: appDatabase))
+        case "list_boundaries":
+            return try jsonResult(listBoundaries(
+                boundarySetID: try arguments.requireInt64("boundary_set_id"),
+                nameContains: try arguments.optionalString("name_contains"),
                 appDatabase: appDatabase
             ))
 
@@ -548,6 +620,105 @@ enum MemorMCPTools {
 
     // MARK: - PointMap tools
 
+    private static func validateCoordinates(latitude: Double, longitude: Double) throws {
+        guard latitude >= -90, latitude <= 90 else {
+            throw MemorMCPToolError(message: "latitude must be between -90 and 90.")
+        }
+        guard longitude >= -180, longitude <= 180 else {
+            throw MemorMCPToolError(message: "longitude must be between -180 and 180.")
+        }
+    }
+
+    private static func parsePointDraft(_ item: [String: Value]) throws -> AppDatabase.PointMapPointDraft {
+        let latitude = try item.requireDouble("latitude")
+        let longitude = try item.requireDouble("longitude")
+        try validateCoordinates(latitude: latitude, longitude: longitude)
+        return AppDatabase.PointMapPointDraft(
+            name: try item.requireString("name"),
+            latitude: latitude,
+            longitude: longitude,
+            forwardEnabled: try item.optionalBool("forward_enabled") ?? true,
+            reverseEnabled: try item.optionalBool("reverse_enabled") ?? false
+        )
+    }
+
+    private static func validateBoundaryIDs(_ boundaryIDs: [Int64], appDatabase: AppDatabase) throws {
+        guard !boundaryIDs.isEmpty else { return }
+        let knownIDs = Set(try appDatabase.fetchAllBoundaryOptions().map(\.id))
+        let unknownIDs = boundaryIDs.filter { !knownIDs.contains($0) }
+        if !unknownIDs.isEmpty {
+            throw MemorMCPToolError(message: "Unknown boundary id(s): \(unknownIDs.map(String.init).joined(separator: ", ")). Use list_boundary_sets and list_boundaries to discover boundaries.")
+        }
+    }
+
+    private static func createPointMapInstance(
+        title: String,
+        defaultCenterLat: Double,
+        defaultCenterLng: Double,
+        defaultZoom: Double,
+        showAllPointsInQuestion: Bool,
+        pointItems: [[String: Value]],
+        boundaryIDs: [Int64],
+        appDatabase: AppDatabase
+    ) throws -> CreatedPointMapInstanceDTO {
+        if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw MemorMCPToolError(message: "`title` must not be empty.")
+        }
+        let drafts = try pointItems.enumerated().map { index, item in
+            do {
+                return try parsePointDraft(item)
+            } catch let error as MemorMCPToolError {
+                throw MemorMCPToolError(message: "points[\(index)]: \(error.message)")
+            }
+        }
+        try validateBoundaryIDs(boundaryIDs, appDatabase: appDatabase)
+        let instanceID = try appDatabase.makePointMapInstance(
+            title: title,
+            defaultCenterLat: defaultCenterLat,
+            defaultCenterLng: defaultCenterLng,
+            defaultZoom: defaultZoom,
+            showAllPointsInQuestion: showAllPointsInQuestion,
+            points: drafts,
+            boundaryIDs: boundaryIDs
+        )
+        postDatabaseChange()
+        return CreatedPointMapInstanceDTO(instanceID: instanceID, pointCount: drafts.count)
+    }
+
+    private static func updatePointMapInstance(
+        instanceID: Int64,
+        title: String?,
+        defaultCenterLat: Double?,
+        defaultCenterLng: Double?,
+        defaultZoom: Double?,
+        showAllPointsInQuestion: Bool?,
+        boundaryIDs: [Int64]?,
+        appDatabase: AppDatabase
+    ) throws -> OkDTO {
+        guard let current = try appDatabase.fetchPointMapInstance(instanceID: instanceID) else {
+            throw MemorMCPToolError(message: "No PointMap instance with id \(instanceID).")
+        }
+        if let title, title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw MemorMCPToolError(message: "`title` must not be empty.")
+        }
+        if let boundaryIDs {
+            try validateBoundaryIDs(boundaryIDs, appDatabase: appDatabase)
+        }
+        try appDatabase.updatePointMapInstance(
+            instanceID: instanceID,
+            title: title ?? current.instance.title,
+            defaultCenterLat: defaultCenterLat ?? current.instance.defaultCenterLat,
+            defaultCenterLng: defaultCenterLng ?? current.instance.defaultCenterLng,
+            defaultZoom: defaultZoom ?? current.instance.defaultZoom,
+            showAllPointsInQuestion: showAllPointsInQuestion ?? current.instance.showAllPointsInQuestion,
+            existingPoints: current.points,
+            newPoints: [],
+            boundaryIDs: boundaryIDs ?? current.boundaryIDs
+        )
+        postDatabaseChange()
+        return OkDTO()
+    }
+
     private static func addPointMapPoint(
         instanceID: Int64,
         name: String,
@@ -560,12 +731,7 @@ enum MemorMCPTools {
         guard (try? appDatabase.fetchPointMapInstance(instanceID: instanceID)) ?? nil != nil else {
             throw MemorMCPToolError(message: "No PointMap instance with id \(instanceID).")
         }
-        guard latitude >= -90, latitude <= 90 else {
-            throw MemorMCPToolError(message: "latitude must be between -90 and 90.")
-        }
-        guard longitude >= -180, longitude <= 180 else {
-            throw MemorMCPToolError(message: "longitude must be between -180 and 180.")
-        }
+        try validateCoordinates(latitude: latitude, longitude: longitude)
         let pointID = try appDatabase.addPointMapPoint(
             instanceID: instanceID,
             name: name,
@@ -576,6 +742,211 @@ enum MemorMCPTools {
         )
         postDatabaseChange()
         return CreatedPointDTO(pointID: pointID, instanceID: instanceID)
+    }
+
+    private static func updatePointMapPoint(
+        instanceID: Int64,
+        pointID: Int64,
+        name: String?,
+        latitude: Double?,
+        longitude: Double?,
+        forwardEnabled: Bool?,
+        reverseEnabled: Bool?,
+        appDatabase: AppDatabase
+    ) throws -> OkDTO {
+        guard let current = try appDatabase.fetchPointMapInstance(instanceID: instanceID) else {
+            throw MemorMCPToolError(message: "No PointMap instance with id \(instanceID).")
+        }
+        guard let index = current.points.firstIndex(where: { $0.id == pointID }) else {
+            throw MemorMCPToolError(message: "No point with id \(pointID) on PointMap instance \(instanceID).")
+        }
+        var points = current.points
+        let old = points[index]
+        let newLatitude = latitude ?? old.latitude
+        let newLongitude = longitude ?? old.longitude
+        try validateCoordinates(latitude: newLatitude, longitude: newLongitude)
+        points[index] = PointMapPoint(
+            id: old.id,
+            instanceID: old.instanceID,
+            name: name ?? old.name,
+            latitude: newLatitude,
+            longitude: newLongitude,
+            forwardEnabled: forwardEnabled ?? old.forwardEnabled,
+            reverseEnabled: reverseEnabled ?? old.reverseEnabled,
+            forwardInterval: old.forwardInterval,
+            reverseInterval: old.reverseInterval
+        )
+        try appDatabase.updatePointMapInstance(
+            instanceID: instanceID,
+            title: current.instance.title,
+            defaultCenterLat: current.instance.defaultCenterLat,
+            defaultCenterLng: current.instance.defaultCenterLng,
+            defaultZoom: current.instance.defaultZoom,
+            showAllPointsInQuestion: current.instance.showAllPointsInQuestion,
+            existingPoints: points,
+            newPoints: [],
+            boundaryIDs: current.boundaryIDs
+        )
+        postDatabaseChange()
+        return OkDTO()
+    }
+
+    private static func deletePointMapPoint(
+        instanceID: Int64,
+        pointID: Int64,
+        appDatabase: AppDatabase
+    ) throws -> OkDTO {
+        guard let current = try appDatabase.fetchPointMapInstance(instanceID: instanceID) else {
+            throw MemorMCPToolError(message: "No PointMap instance with id \(instanceID).")
+        }
+        guard current.points.contains(where: { $0.id == pointID }) else {
+            throw MemorMCPToolError(message: "No point with id \(pointID) on PointMap instance \(instanceID).")
+        }
+        try appDatabase.updatePointMapInstance(
+            instanceID: instanceID,
+            title: current.instance.title,
+            defaultCenterLat: current.instance.defaultCenterLat,
+            defaultCenterLng: current.instance.defaultCenterLng,
+            defaultZoom: current.instance.defaultZoom,
+            showAllPointsInQuestion: current.instance.showAllPointsInQuestion,
+            existingPoints: current.points.filter { $0.id != pointID },
+            newPoints: [],
+            boundaryIDs: current.boundaryIDs
+        )
+        postDatabaseChange()
+        return OkDTO()
+    }
+
+    // MARK: - BoundaryMap tools
+
+    private static func parseBoundaryDraft(_ item: [String: Value]) throws -> AppDatabase.BoundaryMapBoundaryDraft {
+        AppDatabase.BoundaryMapBoundaryDraft(
+            boundaryID: try item.requireInt64("boundary_id"),
+            forwardEnabled: try item.optionalBool("forward_enabled") ?? true,
+            reverseEnabled: try item.optionalBool("reverse_enabled") ?? false
+        )
+    }
+
+    private static func createBoundaryMapInstance(
+        title: String,
+        defaultCenterLat: Double,
+        defaultCenterLng: Double,
+        defaultZoom: Double,
+        showAllBoundariesInQuestion: Bool,
+        boundaryItems: [[String: Value]],
+        appDatabase: AppDatabase
+    ) throws -> CreatedBoundaryMapInstanceDTO {
+        if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw MemorMCPToolError(message: "`title` must not be empty.")
+        }
+        let drafts = try boundaryItems.enumerated().map { index, item in
+            do {
+                return try parseBoundaryDraft(item)
+            } catch let error as MemorMCPToolError {
+                throw MemorMCPToolError(message: "boundaries[\(index)]: \(error.message)")
+            }
+        }
+        try validateBoundaryIDs(drafts.map(\.boundaryID), appDatabase: appDatabase)
+        let instanceID = try appDatabase.makeBoundaryMapInstance(
+            title: title,
+            defaultCenterLat: defaultCenterLat,
+            defaultCenterLng: defaultCenterLng,
+            defaultZoom: defaultZoom,
+            showAllBoundariesInQuestion: showAllBoundariesInQuestion,
+            boundaries: drafts
+        )
+        postDatabaseChange()
+        return CreatedBoundaryMapInstanceDTO(instanceID: instanceID, attachmentCount: drafts.count)
+    }
+
+    private static func updateBoundaryMapInstance(
+        instanceID: Int64,
+        title: String?,
+        defaultCenterLat: Double?,
+        defaultCenterLng: Double?,
+        defaultZoom: Double?,
+        showAllBoundariesInQuestion: Bool?,
+        addBoundaryItems: [[String: Value]]?,
+        removeAttachmentIDs: [Int64]?,
+        setEnabledItems: [[String: Value]]?,
+        appDatabase: AppDatabase
+    ) throws -> OkDTO {
+        guard let current = try appDatabase.fetchBoundaryMapInstance(instanceID: instanceID) else {
+            throw MemorMCPToolError(message: "No BoundaryMap instance with id \(instanceID).")
+        }
+        if let title, title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw MemorMCPToolError(message: "`title` must not be empty.")
+        }
+
+        var attachments = current.attachments
+        if let removeAttachmentIDs {
+            let knownIDs = Set(attachments.map(\.id))
+            let unknownIDs = removeAttachmentIDs.filter { !knownIDs.contains($0) }
+            if !unknownIDs.isEmpty {
+                throw MemorMCPToolError(message: "No attachment(s) with id(s) \(unknownIDs.map(String.init).joined(separator: ", ")) on BoundaryMap instance \(instanceID).")
+            }
+            let removeSet = Set(removeAttachmentIDs)
+            attachments.removeAll { removeSet.contains($0.id) }
+        }
+        if let setEnabledItems {
+            for item in setEnabledItems {
+                let attachmentID = try item.requireInt64("attachment_id")
+                guard let index = attachments.firstIndex(where: { $0.id == attachmentID }) else {
+                    throw MemorMCPToolError(message: "No attachment with id \(attachmentID) on BoundaryMap instance \(instanceID).")
+                }
+                if let forward = try item.optionalBool("forward_enabled") {
+                    attachments[index].forwardEnabled = forward
+                }
+                if let reverse = try item.optionalBool("reverse_enabled") {
+                    attachments[index].reverseEnabled = reverse
+                }
+            }
+        }
+
+        var newDrafts: [AppDatabase.BoundaryMapBoundaryDraft] = []
+        if let addBoundaryItems {
+            newDrafts = try addBoundaryItems.enumerated().map { index, item in
+                do {
+                    return try parseBoundaryDraft(item)
+                } catch let error as MemorMCPToolError {
+                    throw MemorMCPToolError(message: "add_boundaries[\(index)]: \(error.message)")
+                }
+            }
+            try validateBoundaryIDs(newDrafts.map(\.boundaryID), appDatabase: appDatabase)
+        }
+
+        try appDatabase.updateBoundaryMapInstance(
+            instanceID: instanceID,
+            title: title ?? current.instance.title,
+            defaultCenterLat: defaultCenterLat ?? current.instance.defaultCenterLat,
+            defaultCenterLng: defaultCenterLng ?? current.instance.defaultCenterLng,
+            defaultZoom: defaultZoom ?? current.instance.defaultZoom,
+            showAllBoundariesInQuestion: showAllBoundariesInQuestion ?? current.instance.showAllBoundariesInQuestion,
+            existingAttachments: attachments,
+            newBoundaries: newDrafts
+        )
+        postDatabaseChange()
+        return OkDTO()
+    }
+
+    private static func listBoundarySets(appDatabase: AppDatabase) throws -> [BoundarySetDTO] {
+        try appDatabase.fetchBoundarySets().map(BoundarySetDTO.init)
+    }
+
+    private static func listBoundaries(
+        boundarySetID: Int64,
+        nameContains: String?,
+        appDatabase: AppDatabase
+    ) throws -> [BoundaryDTO] {
+        let sets = try appDatabase.fetchBoundarySets()
+        guard sets.contains(where: { $0.id == boundarySetID }) else {
+            throw MemorMCPToolError(message: "No boundary set with id \(boundarySetID).")
+        }
+        var boundaries = try appDatabase.fetchBoundaries(setID: boundarySetID)
+        if let nameContains, !nameContains.isEmpty {
+            boundaries = boundaries.filter { $0.name.localizedCaseInsensitiveContains(nameContains) }
+        }
+        return boundaries.map { BoundaryDTO(id: $0.id, name: $0.name) }
     }
 
     // MARK: - Collection tools
@@ -949,6 +1320,53 @@ enum MemorMCPTools {
             ),
 
             Tool(
+                name: "create_pointmap_instance",
+                description: "Create a new PointMap instance (a named map with studyable points). Optional points array seeds initial points, each {name, latitude, longitude, forward_enabled? (default true), reverse_enabled? (default false)}. default_center_lat/lng (default 0) and default_zoom (default 2) set the question map's initial viewport. boundary_ids optionally overlays boundary outlines on the map (discover via list_boundary_sets / list_boundaries).",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "title": stringValue,
+                        "default_center_lat": numberValue,
+                        "default_center_lng": numberValue,
+                        "default_zoom": numberValue,
+                        "show_all_points_in_question": boolValue,
+                        "points": .object([
+                            "type": .string("array"),
+                            "items": .object([
+                                "type": .string("object"),
+                                "properties": .object([
+                                    "name": stringValue,
+                                    "latitude": numberValue,
+                                    "longitude": numberValue,
+                                    "forward_enabled": boolValue,
+                                    "reverse_enabled": boolValue
+                                ]),
+                                "required": .array([.string("name"), .string("latitude"), .string("longitude")])
+                            ])
+                        ]),
+                        "boundary_ids": int64Array
+                    ]),
+                    "required": .array([.string("title")])
+                ])
+            ),
+            Tool(
+                name: "update_pointmap_instance",
+                description: "Update a PointMap instance's title, default viewport (center/zoom), show_all_points_in_question, and/or attached boundary outlines (boundary_ids replaces the full set). Omitted arguments keep their current values; points are untouched (use add/update/delete_pointmap_point).",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "instance_id": int64Number,
+                        "title": stringValue,
+                        "default_center_lat": numberValue,
+                        "default_center_lng": numberValue,
+                        "default_zoom": numberValue,
+                        "show_all_points_in_question": boolValue,
+                        "boundary_ids": int64Array
+                    ]),
+                    "required": .array([.string("instance_id")])
+                ])
+            ),
+            Tool(
                 name: "add_pointmap_point",
                 description: "Add a point (query) to an existing PointMap instance, identified by instance_id. Provide the point name and its latitude (-90..90) / longitude (-180..180). forward_enabled (default true) and reverse_enabled (default false) control which of the point's two queries are enabled; set both to false for a point with no active query.",
                 inputSchema: .object([
@@ -962,6 +1380,121 @@ enum MemorMCPTools {
                         "reverse_enabled": boolValue
                     ]),
                     "required": .array([.string("instance_id"), .string("name"), .string("latitude"), .string("longitude")])
+                ])
+            ),
+            Tool(
+                name: "update_pointmap_point",
+                description: "Update a point on a PointMap instance: name, coordinates, and/or which query directions are enabled. Omitted arguments keep their current values. WARNING: disabling a direction (forward_enabled/reverse_enabled = false) permanently deletes that direction's SRS progress; re-enabling starts it as new.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "instance_id": int64Number,
+                        "point_id": int64Number,
+                        "name": stringValue,
+                        "latitude": numberValue,
+                        "longitude": numberValue,
+                        "forward_enabled": boolValue,
+                        "reverse_enabled": boolValue
+                    ]),
+                    "required": .array([.string("instance_id"), .string("point_id")])
+                ])
+            ),
+            Tool(
+                name: "delete_pointmap_point",
+                description: "Delete a point from a PointMap instance, along with both of its queries and their SRS progress. Irreversible.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "instance_id": int64Number,
+                        "point_id": int64Number
+                    ]),
+                    "required": .array([.string("instance_id"), .string("point_id")])
+                ])
+            ),
+
+            Tool(
+                name: "create_boundarymap_instance",
+                description: "Create a new BoundaryMap instance (a named map whose studyable items are attached boundary outlines, e.g. countries or states). boundaries is an array of {boundary_id, forward_enabled? (default true), reverse_enabled? (default false)} — discover boundary IDs via list_boundary_sets / list_boundaries. default_center_lat/lng (default 0) and default_zoom (default 2) set the question map's initial viewport.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "title": stringValue,
+                        "default_center_lat": numberValue,
+                        "default_center_lng": numberValue,
+                        "default_zoom": numberValue,
+                        "show_all_boundaries_in_question": boolValue,
+                        "boundaries": .object([
+                            "type": .string("array"),
+                            "items": .object([
+                                "type": .string("object"),
+                                "properties": .object([
+                                    "boundary_id": int64Number,
+                                    "forward_enabled": boolValue,
+                                    "reverse_enabled": boolValue
+                                ]),
+                                "required": .array([.string("boundary_id")])
+                            ])
+                        ])
+                    ]),
+                    "required": .array([.string("title")])
+                ])
+            ),
+            Tool(
+                name: "update_boundarymap_instance",
+                description: "Update a BoundaryMap instance: title/viewport settings, attach new boundaries (add_boundaries: [{boundary_id, forward_enabled?, reverse_enabled?}]), detach attachments (remove_attachment_ids — deletes their queries and SRS progress), and/or toggle query directions on existing attachments (set_enabled: [{attachment_id, forward_enabled?, reverse_enabled?}]). Omitted arguments keep their current values. Attachment IDs come from get_instance. WARNING: disabling a direction permanently deletes that direction's SRS progress.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "instance_id": int64Number,
+                        "title": stringValue,
+                        "default_center_lat": numberValue,
+                        "default_center_lng": numberValue,
+                        "default_zoom": numberValue,
+                        "show_all_boundaries_in_question": boolValue,
+                        "add_boundaries": .object([
+                            "type": .string("array"),
+                            "items": .object([
+                                "type": .string("object"),
+                                "properties": .object([
+                                    "boundary_id": int64Number,
+                                    "forward_enabled": boolValue,
+                                    "reverse_enabled": boolValue
+                                ]),
+                                "required": .array([.string("boundary_id")])
+                            ])
+                        ]),
+                        "remove_attachment_ids": int64Array,
+                        "set_enabled": .object([
+                            "type": .string("array"),
+                            "items": .object([
+                                "type": .string("object"),
+                                "properties": .object([
+                                    "attachment_id": int64Number,
+                                    "forward_enabled": boolValue,
+                                    "reverse_enabled": boolValue
+                                ]),
+                                "required": .array([.string("attachment_id")])
+                            ])
+                        ])
+                    ]),
+                    "required": .array([.string("instance_id")])
+                ])
+            ),
+            Tool(
+                name: "list_boundary_sets",
+                description: "List the boundary sets (built-in collections of geographic boundary outlines, e.g. countries or US states) available for PointMap overlays and BoundaryMap attachments.",
+                inputSchema: .object(["type": .string("object"), "properties": .object([:])])
+            ),
+            Tool(
+                name: "list_boundaries",
+                description: "List the boundaries in a boundary set (id + name). Optional name_contains filters case-insensitively, which is recommended for large sets.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "boundary_set_id": int64Number,
+                        "name_contains": stringValue
+                    ]),
+                    "required": .array([.string("boundary_set_id")])
                 ])
             ),
 
@@ -1175,6 +1708,35 @@ private struct BatchCreateResultDTO: Encodable {
 private struct CreatedPointDTO: Encodable {
     let pointID: Int64
     let instanceID: Int64
+}
+
+private struct CreatedPointMapInstanceDTO: Encodable {
+    let instanceID: Int64
+    let pointCount: Int
+}
+
+private struct CreatedBoundaryMapInstanceDTO: Encodable {
+    let instanceID: Int64
+    let attachmentCount: Int
+}
+
+private struct BoundarySetDTO: Encodable {
+    let id: Int64
+    let name: String
+    let isBuiltin: Bool
+    let boundaryCount: Int
+
+    init(_ set: BoundarySet) {
+        id = set.id
+        name = set.name
+        isBuiltin = set.isBuiltin
+        boundaryCount = set.boundaryCount
+    }
+}
+
+private struct BoundaryDTO: Encodable {
+    let id: Int64
+    let name: String
 }
 
 private struct InstanceFieldValueDTO: Encodable {
@@ -1464,6 +2026,12 @@ private extension [String: Value] {
             if let s = elem.stringValue, let i = Int64(s) { return i }
             throw MemorMCPToolError(message: "Every element of `\(key)` must be an integer.")
         }
+    }
+
+    func optionalObjectArray(_ key: String) throws -> [[String: Value]]? {
+        guard let v = self[key] else { return nil }
+        if v.isNull { return nil }
+        return try requireObjectArray(key)
     }
 
     func requireObjectArray(_ key: String) throws -> [[String: Value]] {
