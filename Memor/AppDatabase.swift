@@ -48,7 +48,7 @@ struct AppDatabase {
         let expression: SearchExpression?
     }
 
-    private indirect enum SearchExpression: Hashable {
+    indirect enum SearchExpression: Hashable {
         case literal(String)
         case collection(String)
         case type(String)
@@ -792,6 +792,12 @@ struct AppDatabase {
                     var magentaQueryCount = 0
 
                     for typeInfo in typeInfos {
+                        guard Self.staticTruthValue(
+                            of: parsedQuery.expression,
+                            typeName: typeInfo.typeName,
+                            newIsAlwaysFalse: false
+                        ) != false else { continue }
+
                         let counts = try fetchQueryCategoryCounts(
                             db: db,
                             typeInfo: typeInfo,
@@ -804,25 +810,37 @@ struct AppDatabase {
                         magentaQueryCount += counts.magentaQueryCount
                     }
 
-                    let pointMapCounts = try fetchPointMapQueryCategoryCounts(
-                        db: db,
-                        parsedQuery: parsedQuery,
-                        startOfTomorrowTimestamp: startOfTomorrowTimestamp
-                    )
-                    blueQueryCount += pointMapCounts.blueQueryCount
-                    redQueryCount += pointMapCounts.redQueryCount
-                    greenQueryCount += pointMapCounts.greenQueryCount
-                    magentaQueryCount += pointMapCounts.magentaQueryCount
+                    if Self.staticTruthValue(
+                        of: parsedQuery.expression,
+                        typeName: POINTMAP_TYPE_NAME,
+                        newIsAlwaysFalse: true
+                    ) != false {
+                        let pointMapCounts = try fetchPointMapQueryCategoryCounts(
+                            db: db,
+                            parsedQuery: parsedQuery,
+                            startOfTomorrowTimestamp: startOfTomorrowTimestamp
+                        )
+                        blueQueryCount += pointMapCounts.blueQueryCount
+                        redQueryCount += pointMapCounts.redQueryCount
+                        greenQueryCount += pointMapCounts.greenQueryCount
+                        magentaQueryCount += pointMapCounts.magentaQueryCount
+                    }
 
-                    let boundaryMapCounts = try fetchBoundaryMapQueryCategoryCounts(
-                        db: db,
-                        parsedQuery: parsedQuery,
-                        startOfTomorrowTimestamp: startOfTomorrowTimestamp
-                    )
-                    blueQueryCount += boundaryMapCounts.blueQueryCount
-                    redQueryCount += boundaryMapCounts.redQueryCount
-                    greenQueryCount += boundaryMapCounts.greenQueryCount
-                    magentaQueryCount += boundaryMapCounts.magentaQueryCount
+                    if Self.staticTruthValue(
+                        of: parsedQuery.expression,
+                        typeName: BOUNDARYMAP_TYPE_NAME,
+                        newIsAlwaysFalse: true
+                    ) != false {
+                        let boundaryMapCounts = try fetchBoundaryMapQueryCategoryCounts(
+                            db: db,
+                            parsedQuery: parsedQuery,
+                            startOfTomorrowTimestamp: startOfTomorrowTimestamp
+                        )
+                        blueQueryCount += boundaryMapCounts.blueQueryCount
+                        redQueryCount += boundaryMapCounts.redQueryCount
+                        greenQueryCount += boundaryMapCounts.greenQueryCount
+                        magentaQueryCount += boundaryMapCounts.magentaQueryCount
+                    }
 
                     countsByStackID[stack.id] = StackQueryCounts(
                         blueQueryCount: blueQueryCount,
@@ -864,6 +882,12 @@ struct AppDatabase {
             var magentaQueryCount = 0
 
             for typeInfo in typeInfos {
+                guard Self.staticTruthValue(
+                    of: parsedQuery.expression,
+                    typeName: typeInfo.typeName,
+                    newIsAlwaysFalse: false
+                ) != false else { continue }
+
                 let counts = try fetchQueryCategoryCounts(
                     db: db,
                     typeInfo: typeInfo,
@@ -876,25 +900,37 @@ struct AppDatabase {
                 magentaQueryCount += counts.magentaQueryCount
             }
 
-            let pointMapCounts = try fetchPointMapQueryCategoryCounts(
-                db: db,
-                parsedQuery: parsedQuery,
-                startOfTomorrowTimestamp: startOfTomorrowTimestamp
-            )
-            blueQueryCount += pointMapCounts.blueQueryCount
-            redQueryCount += pointMapCounts.redQueryCount
-            greenQueryCount += pointMapCounts.greenQueryCount
-            magentaQueryCount += pointMapCounts.magentaQueryCount
+            if Self.staticTruthValue(
+                of: parsedQuery.expression,
+                typeName: POINTMAP_TYPE_NAME,
+                newIsAlwaysFalse: true
+            ) != false {
+                let pointMapCounts = try fetchPointMapQueryCategoryCounts(
+                    db: db,
+                    parsedQuery: parsedQuery,
+                    startOfTomorrowTimestamp: startOfTomorrowTimestamp
+                )
+                blueQueryCount += pointMapCounts.blueQueryCount
+                redQueryCount += pointMapCounts.redQueryCount
+                greenQueryCount += pointMapCounts.greenQueryCount
+                magentaQueryCount += pointMapCounts.magentaQueryCount
+            }
 
-            let boundaryMapCounts = try fetchBoundaryMapQueryCategoryCounts(
-                db: db,
-                parsedQuery: parsedQuery,
-                startOfTomorrowTimestamp: startOfTomorrowTimestamp
-            )
-            blueQueryCount += boundaryMapCounts.blueQueryCount
-            redQueryCount += boundaryMapCounts.redQueryCount
-            greenQueryCount += boundaryMapCounts.greenQueryCount
-            magentaQueryCount += boundaryMapCounts.magentaQueryCount
+            if Self.staticTruthValue(
+                of: parsedQuery.expression,
+                typeName: BOUNDARYMAP_TYPE_NAME,
+                newIsAlwaysFalse: true
+            ) != false {
+                let boundaryMapCounts = try fetchBoundaryMapQueryCategoryCounts(
+                    db: db,
+                    parsedQuery: parsedQuery,
+                    startOfTomorrowTimestamp: startOfTomorrowTimestamp
+                )
+                blueQueryCount += boundaryMapCounts.blueQueryCount
+                redQueryCount += boundaryMapCounts.redQueryCount
+                greenQueryCount += boundaryMapCounts.greenQueryCount
+                magentaQueryCount += boundaryMapCounts.magentaQueryCount
+            }
 
             return StackQueryCounts(
                 blueQueryCount: blueQueryCount,
