@@ -140,6 +140,21 @@ extension AppDatabase {
         return countsByStackID
     }
 
+    func refreshStackQueryCounts(for stack: Stack) throws -> StackQueryCounts {
+        let startOfTomorrowTimestamp = TimeZoneSettings.shared.startOfTomorrowTimestamp()
+        return try dbQueue.read { db in
+            let parsedQuery = try parseQuerySearchQuery(stack.search)
+            try validateCollectionSearchComponents(Self.collectionNames(in: parsedQuery.expression), db: db)
+
+            return try computeQueryCountGroups(
+                db: db,
+                groups: [parsedQuery.expression],
+                typeInfos: fetchInstanceSearchTypeInfos(db: db),
+                startOfTomorrowTimestamp: startOfTomorrowTimestamp
+            )[0]
+        }
+    }
+
     private func computeAllStackQueryCounts(
         db: Database,
         startOfTomorrowTimestamp: Int64
