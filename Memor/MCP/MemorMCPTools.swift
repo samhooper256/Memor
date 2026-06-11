@@ -85,6 +85,37 @@ enum MemorMCPTools {
             let query = try arguments.requireString("query")
             return try jsonResult(searchInstances(query: query, appDatabase: appDatabase))
 
+        // Nodes
+        case "update_node_links":
+            let instanceID = try arguments.requireInt64("instance_id")
+            let linkFieldKey: String
+            if let value = arguments["link_field"], let intKey = value.intValue {
+                linkFieldKey = String(intKey)
+            } else {
+                linkFieldKey = try arguments.requireString("link_field")
+            }
+            let setTargetIDs = try arguments.optionalInt64Array("set_target_ids")
+            let addTargetIDs = try arguments.optionalInt64Array("add_target_ids")
+            let removeTargetIDs = try arguments.optionalInt64Array("remove_target_ids")
+            return try jsonResult(updateNodeLinks(
+                instanceID: instanceID,
+                linkFieldKey: linkFieldKey,
+                setTargetIDs: setTargetIDs,
+                addTargetIDs: addTargetIDs,
+                removeTargetIDs: removeTargetIDs,
+                appDatabase: appDatabase
+            ))
+        case "search_node_candidates":
+            let typeID = try arguments.requireInt64("type_id")
+            let query = try arguments.optionalString("query") ?? ""
+            let excludingInstanceID = try arguments.optionalInt64("excluding_instance_id")
+            return try jsonResult(searchNodeCandidates(
+                typeID: typeID,
+                query: query,
+                excludingInstanceID: excludingInstanceID,
+                appDatabase: appDatabase
+            ))
+
         // PointMap
         case "add_pointmap_point":
             let instanceID = try arguments.requireInt64("instance_id")
@@ -424,6 +455,97 @@ enum MemorMCPTools {
         return sections.map(InstanceSearchSectionDTO.init)
     }
 
+    // MARK: - Node tools
+
+    private static func updateNodeLinks(
+        instanceID: Int64,
+        linkFieldKey: String,
+        setTargetIDs: [Int64]?,
+        addTargetIDs: [Int64]?,
+        removeTargetIDs: [Int64]?,
+        appDatabase: AppDatabase
+    ) throws -> NodeLinkFieldDTO {
+        if setTargetIDs != nil && (addTargetIDs != nil || removeTargetIDs != nil) {
+            throw MemorMCPToolError(message: "Provide either `set_target_ids` or `add_target_ids`/`remove_target_ids`, not both.")
+        }
+        if setTargetIDs == nil && addTargetIDs == nil && removeTargetIDs == nil {
+            throw MemorMCPToolError(message: "Provide `set_target_ids`, or `add_target_ids` and/or `remove_target_ids`.")
+        }
+
+        let current = try appDatabase.fetchInstanceEditorData(instanceID: instanceID)
+        guard let type = try appDatabase.fetchType(typeID: current.typeID), type.isNode else {
+            throw MemorMCPToolError(message: "Instance \(instanceID) is not a Node instance.")
+        }
+        let linkFields = try appDatabase.fetchLinkFields(forTypeID: current.typeID)
+        let linkField = try resolveLinkField(key: linkFieldKey, in: linkFields)
+
+        var targets = current.linkTargetsByLinkFieldID[linkField.id] ?? []
+        if let setTargetIDs {
+            var seen: Set<Int64> = []
+            targets = setTargetIDs.filter { seen.insert($0).inserted }
+        } else {
+            if let removeTargetIDs {
+                let removeSet = Set(removeTargetIDs)
+                targets.removeAll { removeSet.contains($0) }
+            }
+            if let addTargetIDs {
+                for targetID in addTargetIDs where !targets.contains(targetID) {
+                    targets.append(targetID)
+                }
+            }
+        }
+        try validateLinkCounts(
+            linkFields: linkFields,
+            links: [linkField.id: targets],
+            onlyLinkFieldIDs: [linkField.id]
+        )
+
+        // AppDatabase.updateInstance rewrites ALL links, so pass the full map
+        // with just this field changed.
+        var mergedLinks = current.linkTargetsByLinkFieldID
+        mergedLinks[linkField.id] = targets
+        try appDatabase.updateInstance(
+            instanceID: instanceID,
+            fieldValuesByFieldID: current.fieldValuesByFieldID,
+            queryTypeIDs: current.enabledQueryTypeIDs,
+            linksByLinkFieldID: mergedLinks
+        )
+        postDatabaseChange()
+
+        // Re-fetch so the returned targets carry display summaries.
+        let updated = try appDatabase.fetchInstanceEditorData(instanceID: instanceID)
+        let resultTargetIDs = updated.linkTargetsByLinkFieldID[linkField.id] ?? []
+        return NodeLinkFieldDTO(
+            linkFieldID: linkField.id,
+            name: linkField.name,
+            minCount: linkField.minCount,
+            maxCount: linkField.maxCount,
+            targets: resultTargetIDs.map { targetID in
+                NodeLinkTargetDTO(id: targetID, displayValue: updated.linkedNodeSummaries[targetID] ?? "")
+            }
+        )
+    }
+
+    private static func searchNodeCandidates(
+        typeID: Int64,
+        query: String,
+        excludingInstanceID: Int64?,
+        appDatabase: AppDatabase
+    ) throws -> [NodeLinkTargetDTO] {
+        guard let type = try appDatabase.fetchType(typeID: typeID) else {
+            throw MemorMCPToolError(message: "Type not found: \(typeID).")
+        }
+        guard type.isNode else {
+            throw MemorMCPToolError(message: "Type \(typeID) (\(type.name)) is not a Node type.")
+        }
+        let candidates = try appDatabase.fetchNodeCandidates(
+            forTypeID: typeID,
+            matching: query,
+            excludingInstanceID: excludingInstanceID
+        )
+        return candidates.map { NodeLinkTargetDTO(id: $0.id, displayValue: $0.displayValue) }
+    }
+
     // MARK: - PointMap tools
 
     private static func addPointMapPoint(
@@ -598,23 +720,7 @@ enum MemorMCPTools {
     ) throws -> [Int64: [Int64]] {
         var resolved: [Int64: [Int64]] = [:]
         for (key, value) in rawLinks {
-            let linkField: LinkField
-            if let id = Int64(key) {
-                guard let match = linkFields.first(where: { $0.id == id }) else {
-                    throw MemorMCPToolError(message: "No link field with id \(id) on this type.")
-                }
-                linkField = match
-            } else if let exact = linkFields.first(where: { $0.name == key }) {
-                linkField = exact
-            } else {
-                let caseInsensitive = linkFields.filter { $0.name.caseInsensitiveCompare(key) == .orderedSame }
-                if caseInsensitive.count == 1 {
-                    linkField = caseInsensitive[0]
-                } else {
-                    let available = linkFields.map { "\($0.name) (id \($0.id))" }.joined(separator: ", ")
-                    throw MemorMCPToolError(message: "Unknown link field `\(key)` in `links`. Available link fields: \(available).")
-                }
-            }
+            let linkField = try resolveLinkField(key: key, in: linkFields)
             guard let array = value.arrayValue else {
                 throw MemorMCPToolError(message: "Value for link field `\(key)` in `links` must be an array of target instance IDs.")
             }
@@ -627,6 +733,26 @@ enum MemorMCPTools {
             resolved[linkField.id] = targetIDs.filter { seen.insert($0).inserted }
         }
         return resolved
+    }
+
+    /// Resolves a link field from an ID (numeric string) or a name (exact
+    /// match first, then unique case-insensitive).
+    private static func resolveLinkField(key: String, in linkFields: [LinkField]) throws -> LinkField {
+        if let id = Int64(key) {
+            guard let match = linkFields.first(where: { $0.id == id }) else {
+                throw MemorMCPToolError(message: "No link field with id \(id) on this type.")
+            }
+            return match
+        }
+        if let exact = linkFields.first(where: { $0.name == key }) {
+            return exact
+        }
+        let caseInsensitive = linkFields.filter { $0.name.caseInsensitiveCompare(key) == .orderedSame }
+        if caseInsensitive.count == 1 {
+            return caseInsensitive[0]
+        }
+        let available = linkFields.map { "\($0.name) (id \($0.id))" }.joined(separator: ", ")
+        throw MemorMCPToolError(message: "Unknown link field `\(key)`. Available link fields: \(available).")
     }
 
     /// Validates link-target counts against each link field's min/max. When
@@ -790,6 +916,35 @@ enum MemorMCPTools {
                     "type": .string("object"),
                     "properties": .object(["query": stringValue]),
                     "required": .array([.string("query")])
+                ])
+            ),
+
+            Tool(
+                name: "update_node_links",
+                description: "Edit one link field's targets on a Node instance. Provide either set_target_ids (full ordered replacement) or add_target_ids/remove_target_ids (incremental); other link fields are untouched. link_field is the link field's name or ID. Targets must be instances of the same Node type (no self-links); the field's min/max target counts are enforced. Returns the field's resulting targets with display values.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "instance_id": int64Number,
+                        "link_field": stringValue,
+                        "set_target_ids": int64Array,
+                        "add_target_ids": int64Array,
+                        "remove_target_ids": int64Array
+                    ]),
+                    "required": .array([.string("instance_id"), .string("link_field")])
+                ])
+            ),
+            Tool(
+                name: "search_node_candidates",
+                description: "Search instances of a Node type to find link targets. Matches against the type's primary field only; empty query lists all. Returns at most 100 results (id + display_value). excluding_instance_id omits one instance, e.g. the instance being linked from (self-links are not allowed).",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "type_id": int64Number,
+                        "query": stringValue,
+                        "excluding_instance_id": int64Number
+                    ]),
+                    "required": .array([.string("type_id")])
                 ])
             ),
 
