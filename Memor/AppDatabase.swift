@@ -2313,6 +2313,30 @@ struct AppDatabase {
         }
     }
 
+    func fetchQuerySRSInfo(forInstanceID instanceID: Int64) throws -> [QuerySRSInfo] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT query_type_id, interval, query_state, last_answered_timestamp, max_interval
+                    FROM query
+                    WHERE instance_id = ?
+                    ORDER BY query_type_id
+                    """,
+                arguments: [instanceID]
+            )
+            return rows.map { row in
+                QuerySRSInfo(
+                    queryTypeID: row["query_type_id"] as Int64? ?? 0,
+                    interval: row["interval"] as Int64? ?? 0,
+                    queryState: QueryState(rawValue: row["query_state"] as Int? ?? 0) ?? .zero,
+                    lastAnsweredTimestamp: row["last_answered_timestamp"] as Int64?,
+                    maxInterval: row["max_interval"] as Int64?
+                )
+            }
+        }
+    }
+
     func revertStudyResponse(
         instanceID: Int64,
         queryTypeID: Int64,

@@ -311,6 +311,15 @@ struct InstanceEditorData: Hashable {
     var linkedNodeSummaries: [Int64: String] = [:]
 }
 
+// Per-query SRS state for one instance, used by the MCP get_instance tool.
+struct QuerySRSInfo: Hashable {
+    let queryTypeID: Int64
+    let interval: Int64
+    let queryState: QueryState
+    let lastAnsweredTimestamp: Int64?
+    let maxInterval: Int64?
+}
+
 struct StackQueryCounts: Hashable {
     let blueQueryCount: Int
     let redQueryCount: Int
