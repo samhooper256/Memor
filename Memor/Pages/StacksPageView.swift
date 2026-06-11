@@ -145,6 +145,7 @@ struct StacksPageView: View {
                             StackRowView(
                                 stack: stack,
                                 queryCounts: stacksPageState.queryCounts(for: stack.id),
+                                isRefreshing: stacksPageState.isRefreshing,
                                 onOpen: {
                                     Task {
                                         await openStudyMode(for: stack)
@@ -231,6 +232,7 @@ struct StacksPageView: View {
 private struct StackRowView: View {
     let stack: Stack
     let queryCounts: StackQueryCounts?
+    let isRefreshing: Bool
     let onOpen: () -> Void
     let onEdit: () -> Void
     let onSearch: () -> Void
@@ -319,7 +321,10 @@ private struct StackRowView: View {
             }
             .opacity(isHovered ? 1 : 0)
 
-            if let queryCounts {
+            if isRefreshing {
+                ProgressView()
+                    .controlSize(.small)
+            } else if let queryCounts {
                 HStack(spacing: 12) {
                     Text("\(queryCounts.magentaQueryCount)")
                         .foregroundStyle(queryCounts.magentaQueryCount == 0 ? Color.secondary : Color(nsColor: .magenta))

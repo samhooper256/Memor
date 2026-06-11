@@ -68,8 +68,11 @@ final class StacksPageState: ObservableObject {
     @Published private(set) var queryCountsByStackID: [Int64: StackQueryCounts?] = [:]
     @Published private(set) var lastUpdatedTimestamp: Date?
     @Published private(set) var averageQueryInterval: Double?
+    @Published private(set) var isRefreshing = false
 
     func refresh(appDatabase: AppDatabase) async throws {
+        isRefreshing = true
+        defer { isRefreshing = false }
         let data = try await appDatabase.refreshStacksPageData()
         queryCountsByStackID = data.queryCountsByStackID
         lastUpdatedTimestamp = data.lastUpdatedTimestamp
