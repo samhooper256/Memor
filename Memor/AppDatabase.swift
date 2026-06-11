@@ -9,7 +9,7 @@ import Foundation
 import GRDB
 
 struct AppDatabase {
-    private struct InstanceSearchTypeFieldInfo: FetchableRecord, Decodable {
+    nonisolated private struct InstanceSearchTypeFieldInfo: FetchableRecord, Decodable {
         let typeID: Int64
         let typeName: String
         let fieldIndex: Int
@@ -29,7 +29,7 @@ struct AppDatabase {
         }
     }
 
-    struct InstanceSearchTypeInfo {
+    nonisolated struct InstanceSearchTypeInfo {
         let typeID: Int64
         let typeName: String
         let displayFieldIndex: Int
@@ -40,7 +40,7 @@ struct AppDatabase {
         let expression: SearchExpression?
     }
 
-    struct QuerySearchQuery {
+    nonisolated struct QuerySearchQuery {
         let expression: SearchExpression?
     }
 
@@ -48,7 +48,7 @@ struct AppDatabase {
         let expression: SearchExpression?
     }
 
-    indirect enum SearchExpression: Hashable {
+    nonisolated indirect enum SearchExpression: Hashable {
         case literal(String)
         case collection(String)
         case type(String)
@@ -4588,7 +4588,7 @@ struct AppDatabase {
         globalQueryCSSCache.set(globalQueryCSS)
     }
 
-    func fetchInstanceSearchTypeInfos(db: Database) throws -> [InstanceSearchTypeInfo] {
+    nonisolated func fetchInstanceSearchTypeInfos(db: Database) throws -> [InstanceSearchTypeInfo] {
         let rows = try InstanceSearchTypeFieldInfo.fetchAll(
             db,
             sql: """
@@ -5095,7 +5095,7 @@ struct AppDatabase {
     // a drop-in replacement for `pointmap_point AS pp` so every existing
     // `pp.interval` / `pp.name` predicate keeps working while forward and reverse
     // are counted/scheduled as independent study units.
-    static let pointMapDirectionalFrom = """
+    nonisolated static let pointMapDirectionalFrom = """
         (
             SELECT p.id AS id, p.instance_id AS instance_id, p.name AS name,
                    p.latitude AS latitude, p.longitude AS longitude,
@@ -5106,7 +5106,7 @@ struct AppDatabase {
         )
         """
 
-    static let boundaryMapDirectionalFrom = """
+    nonisolated static let boundaryMapDirectionalFrom = """
         (
             SELECT a.id AS id, a.instance_id AS instance_id, a.boundary_id AS boundary_id,
                    q.interval AS interval, q.last_answered_timestamp AS last_answered_timestamp,
@@ -5126,7 +5126,7 @@ struct AppDatabase {
         let title: String
     }
 
-    private func makePointMapSearchCondition(
+    nonisolated private func makePointMapSearchCondition(
         _ expression: SearchExpression,
         pointAlias: String,
         instanceAlias: String,
@@ -5209,7 +5209,7 @@ struct AppDatabase {
         }
     }
 
-    func makePointMapSearchConditions(
+    nonisolated func makePointMapSearchConditions(
         expression: SearchExpression?,
         pointAlias: String,
         instanceAlias: String,
@@ -5647,7 +5647,7 @@ struct AppDatabase {
         }
     }
 
-    private func makeBoundaryMapSearchCondition(
+    nonisolated private func makeBoundaryMapSearchCondition(
         _ expression: SearchExpression,
         attachmentAlias: String,
         instanceAlias: String,
@@ -5731,7 +5731,7 @@ struct AppDatabase {
         }
     }
 
-    func makeBoundaryMapSearchConditions(
+    nonisolated func makeBoundaryMapSearchConditions(
         expression: SearchExpression?,
         attachmentAlias: String,
         instanceAlias: String,
@@ -6317,7 +6317,7 @@ struct AppDatabase {
         return InstanceSearchQuery(expression: try parseSearchExpression(tokens, allowsNoQueries: true, allowsNew: false))
     }
 
-    func parseQuerySearchQuery(_ query: String) throws -> QuerySearchQuery {
+    nonisolated func parseQuerySearchQuery(_ query: String) throws -> QuerySearchQuery {
         let tokens = try tokenizeSearchQueryComponents(query)
         return QuerySearchQuery(expression: try parseSearchExpression(tokens, allowsNoQueries: false, allowsNew: true))
     }
@@ -6328,7 +6328,7 @@ struct AppDatabase {
             tokens, allowsNoQueries: false, allowsNew: false, allowsTypeCollectionId: false))
     }
 
-    private func tokenizeSearchQueryComponents(_ query: String) throws -> [String] {
+    nonisolated private func tokenizeSearchQueryComponents(_ query: String) throws -> [String] {
         var tokens: [String] = []
         var currentToken = ""
         var isInsideQuotes = false
@@ -6367,7 +6367,7 @@ struct AppDatabase {
         return tokens
     }
 
-    private func parseSearchExpression(_ tokens: [String], allowsNoQueries: Bool, allowsNew: Bool, allowsTypeCollectionId: Bool = true) throws -> SearchExpression? {
+    nonisolated private func parseSearchExpression(_ tokens: [String], allowsNoQueries: Bool, allowsNew: Bool, allowsTypeCollectionId: Bool = true) throws -> SearchExpression? {
         struct Parser {
             let tokens: [String]
             let allowsNoQueries: Bool
@@ -6530,7 +6530,7 @@ struct AppDatabase {
         )
     }
 
-    func makeQuerySearchConditions(
+    nonisolated func makeQuerySearchConditions(
         tableAlias: String,
         typeName: String,
         fieldIndices: [Int],
@@ -6544,7 +6544,7 @@ struct AppDatabase {
         )
     }
 
-    private func makeSearchConditions(
+    nonisolated private func makeSearchConditions(
         tableAlias: String,
         typeName: String,
         fieldIndices: [Int],
@@ -6562,7 +6562,7 @@ struct AppDatabase {
         )
     }
 
-    private func makeSearchCondition(
+    nonisolated private func makeSearchCondition(
         _ expression: SearchExpression,
         tableAlias: String,
         typeName: String,
@@ -6643,7 +6643,7 @@ struct AppDatabase {
         }
     }
 
-    func validateCollectionSearchComponents(
+    nonisolated func validateCollectionSearchComponents(
         _ collectionNames: [String],
         db: Database
     ) throws {
@@ -6664,14 +6664,14 @@ struct AppDatabase {
         }
     }
 
-    private static func escapeSQLiteLikePattern(_ value: String) -> String {
+    nonisolated private static func escapeSQLiteLikePattern(_ value: String) -> String {
         value
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "%", with: "\\%")
             .replacingOccurrences(of: "_", with: "\\_")
     }
 
-    static func collectionNames(in expression: SearchExpression?) -> [String] {
+    nonisolated static func collectionNames(in expression: SearchExpression?) -> [String] {
         guard let expression else { return [] }
 
         switch expression {

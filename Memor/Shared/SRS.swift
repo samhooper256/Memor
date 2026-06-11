@@ -7,9 +7,9 @@
 
 import Foundation
 
-let QUERY_STARTER_DELAY_AGAIN = 60
-let QUERY_STARTER_DELAY_HARD = 360
-let QUERY_STARTER_DELAY_GOOD = 600
+nonisolated let QUERY_STARTER_DELAY_AGAIN = 60
+nonisolated let QUERY_STARTER_DELAY_HARD = 360
+nonisolated let QUERY_STARTER_DELAY_GOOD = 600
 
 enum QueryState: Int, Sendable, Hashable {
     case zero = 0

@@ -75,23 +75,16 @@ extension AppDatabase {
     /// One search expression shared by every stack whose search parses to it
     /// (identical and empty searches collapse into a single group), so each
     /// scan target is read once per refresh instead of once per stack.
-    private struct StackCountGroup {
+    nonisolated private struct StackCountGroup {
         let expression: SearchExpression?
         var stackIDs: [Int64]
     }
 
-    private struct GroupCountTotals {
+    nonisolated private struct GroupCountTotals {
         var blue = 0
         var red = 0
         var green = 0
         var magenta = 0
-
-        mutating func add(_ counts: QueryCategoryCounts) {
-            blue += counts.blueQueryCount
-            red += counts.redQueryCount
-            green += counts.greenQueryCount
-            magenta += counts.magentaQueryCount
-        }
 
         var stackQueryCounts: StackQueryCounts {
             StackQueryCounts(
@@ -155,7 +148,7 @@ extension AppDatabase {
         }
     }
 
-    private func computeAllStackQueryCounts(
+    nonisolated private func computeAllStackQueryCounts(
         db: Database,
         startOfTomorrowTimestamp: Int64
     ) throws -> [Int64: StackQueryCounts?] {
@@ -208,7 +201,7 @@ extension AppDatabase {
 
     /// Computes the four color-bucket counts for every expression in `groups`,
     /// scanning each type table at most once for all groups combined.
-    func computeQueryCountGroups(
+    nonisolated func computeQueryCountGroups(
         db: Database,
         groups: [SearchExpression?],
         typeInfos: [InstanceSearchTypeInfo],
@@ -331,7 +324,7 @@ extension AppDatabase {
     /// `fromClause`, computing each row's color bucket once and a 0/1 match
     /// flag per group, and adds the 4-per-group SUM results into `totals`.
     /// `srsAlias` is the alias exposing `interval` and `last_answered_timestamp`.
-    private func addBatchedCategoryCounts(
+    nonisolated private func addBatchedCategoryCounts(
         db: Database,
         fromClause: String,
         srsAlias: String,

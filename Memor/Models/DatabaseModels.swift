@@ -9,8 +9,8 @@ import CoreLocation
 import Foundation
 import GRDB
 
-let POINTMAP_TYPE_NAME = "PointMap"
-let BOUNDARYMAP_TYPE_NAME = "BoundaryMap"
+nonisolated let POINTMAP_TYPE_NAME = "PointMap"
+nonisolated let BOUNDARYMAP_TYPE_NAME = "BoundaryMap"
 
 // Open classes of user-creatable type. (Map types are a separate, closed class
 // identified by name + is_builtin and are not represented here; they carry
@@ -320,7 +320,7 @@ struct QuerySRSInfo: Hashable {
     let maxInterval: Int64?
 }
 
-struct StackQueryCounts: Hashable {
+nonisolated struct StackQueryCounts: Hashable {
     let blueQueryCount: Int
     let redQueryCount: Int
     let greenQueryCount: Int
