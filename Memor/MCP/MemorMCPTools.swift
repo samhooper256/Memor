@@ -83,7 +83,12 @@ enum MemorMCPTools {
             return try getInstanceResult(instanceID: instanceID, appDatabase: appDatabase)
         case "search_instances":
             let query = try arguments.requireString("query")
-            return try jsonResult(searchInstances(query: query, appDatabase: appDatabase))
+            return try jsonResult(searchInstances(
+                query: query,
+                limit: Int(try arguments.optionalInt64("limit") ?? 50),
+                includeFieldValues: try arguments.optionalBool("include_field_values") ?? false,
+                appDatabase: appDatabase
+            ))
 
         // Nodes
         case "update_node_links":
@@ -238,7 +243,11 @@ enum MemorMCPTools {
         // Queries
         case "search_queries":
             let query = try arguments.requireString("query")
-            return try jsonResult(searchQueries(query: query, appDatabase: appDatabase))
+            return try jsonResult(searchQueries(
+                query: query,
+                limit: Int(try arguments.optionalInt64("limit") ?? 50),
+                appDatabase: appDatabase
+            ))
         case "reset_due_dates":
             return try jsonResult(resetDueDates(
                 search: try arguments.optionalString("search"),
@@ -268,7 +277,10 @@ enum MemorMCPTools {
 
         // Stacks
         case "list_stacks":
-            return try jsonResult(listStacks(appDatabase: appDatabase))
+            return try jsonResult(listStacks(
+                includeCounts: try arguments.optionalBool("include_counts") ?? false,
+                appDatabase: appDatabase
+            ))
         case "create_stack":
             let name = try arguments.requireString("name")
             let search = try arguments.requireString("search")
@@ -550,9 +562,52 @@ enum MemorMCPTools {
         )
     }
 
-    private static func searchInstances(query: String, appDatabase: AppDatabase) throws -> [InstanceSearchSectionDTO] {
+    private static func searchInstances(
+        query: String,
+        limit: Int,
+        includeFieldValues: Bool,
+        appDatabase: AppDatabase
+    ) throws -> [InstanceSearchSectionDTO] {
+        guard limit >= 1 else {
+            throw MemorMCPToolError(message: "`limit` must be at least 1.")
+        }
         let sections = try appDatabase.searchInstances(query: query)
-        return sections.map(InstanceSearchSectionDTO.init)
+        var remaining = limit
+        return try sections.map { section in
+            let totalCount = section.instances.count
+            let taken = Array(section.instances.prefix(max(0, remaining)))
+            remaining -= taken.count
+
+            // Map types have no text fields, so fetchFields returns [] for them
+            // and we skip the per-instance value lookups.
+            var typeFields: [TypeField] = []
+            if includeFieldValues, !taken.isEmpty {
+                typeFields = try appDatabase.fetchFields(forTypeID: section.typeID)
+            }
+
+            let instances = try taken.map { instance -> InstanceSearchResultDTO in
+                var fields: [InstanceFieldValueDTO]? = nil
+                if includeFieldValues, !typeFields.isEmpty {
+                    let data = try appDatabase.fetchInstanceEditorData(instanceID: instance.id)
+                    fields = typeFields.map { field in
+                        InstanceFieldValueDTO(
+                            fieldID: field.id,
+                            name: field.name,
+                            value: data.fieldValuesByFieldID[field.id] ?? ""
+                        )
+                    }
+                }
+                return InstanceSearchResultDTO(id: instance.id, displayValue: instance.displayValue, fields: fields)
+            }
+
+            return InstanceSearchSectionDTO(
+                typeID: section.typeID,
+                typeName: section.typeName,
+                totalCount: totalCount,
+                truncated: instances.count < totalCount,
+                instances: instances
+            )
+        }
     }
 
     // MARK: - Node tools
@@ -1038,8 +1093,24 @@ enum MemorMCPTools {
 
     // MARK: - Query tools
 
-    private static func searchQueries(query: String, appDatabase: AppDatabase) throws -> [QuerySearchSectionDTO] {
-        try appDatabase.searchQueries(query: query).map(QuerySearchSectionDTO.init)
+    private static func searchQueries(query: String, limit: Int, appDatabase: AppDatabase) throws -> [QuerySearchSectionDTO] {
+        guard limit >= 1 else {
+            throw MemorMCPToolError(message: "`limit` must be at least 1.")
+        }
+        let sections = try appDatabase.searchQueries(query: query)
+        var remaining = limit
+        return sections.map { section in
+            let totalCount = section.queries.count
+            let taken = Array(section.queries.prefix(max(0, remaining)))
+            remaining -= taken.count
+            return QuerySearchSectionDTO(
+                typeID: section.typeID,
+                typeName: section.typeName,
+                totalCount: totalCount,
+                truncated: taken.count < totalCount,
+                queries: taken.map(QuerySearchResultDTO.init)
+            )
+        }
     }
 
     // MARK: - Rendering & docs tools
@@ -1249,8 +1320,18 @@ enum MemorMCPTools {
 
     // MARK: - Stack tools
 
-    private static func listStacks(appDatabase: AppDatabase) throws -> [StackDTO] {
-        try appDatabase.fetchStacks().map(StackDTO.init)
+    private static func listStacks(includeCounts: Bool, appDatabase: AppDatabase) throws -> [StackDTO] {
+        let stacks = try appDatabase.fetchStacks()
+        guard includeCounts else {
+            return stacks.map { StackDTO($0) }
+        }
+        // refreshStackQueryCounts recomputes each stack's blue/red/green/magenta
+        // counts (its only write is the stacks_last_updated_timestamp global). A
+        // stack whose search fails to parse gets nil counts.
+        let countsByStackID = try appDatabase.refreshStackQueryCounts()
+        return stacks.map { stack in
+            StackDTO(stack, counts: countsByStackID[stack.id] ?? nil)
+        }
     }
 
     private static func createStack(name: String, search: String, appDatabase: AppDatabase) throws -> StackDTO {
@@ -1515,10 +1596,14 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "search_instances",
-                description: "Search instances using Memor's instance search query language (e.g. \"literal:text col:Math type:Term\"). Empty string matches all.",
+                description: "Search instances using Memor's instance search language: space-separated components combined with AND (literal:text, type:name, collection:name / col:name, id:number, :noqueries, OR, NOT, parentheses, double quotes for spaces; empty string matches all) — call describe_search_syntax for full documentation. Results are grouped by type with per-type total_count/truncated; at most `limit` instances are returned overall (default 50). Set include_field_values to also return each instance's full field values (Object/Node instances only).",
                 inputSchema: .object([
                     "type": .string("object"),
-                    "properties": .object(["query": stringValue]),
+                    "properties": .object([
+                        "query": stringValue,
+                        "limit": int64Number,
+                        "include_field_values": boolValue
+                    ]),
                     "required": .array([.string("query")])
                 ])
             ),
@@ -1814,10 +1899,13 @@ enum MemorMCPTools {
 
             Tool(
                 name: "search_queries",
-                description: "Search queries (flashcards) using Memor's query search language. Empty string matches all queries.",
+                description: "Search queries (individual flashcards) using Memor's query search language — the same language Stack `search` expressions use, so a Stack's search returns exactly that Stack's queries. Components: literal:text, type:name, collection:name / col:name, id:number, :new, OR, NOT, parentheses, double quotes for spaces; empty string matches all. Call describe_search_syntax for full documentation. Results are grouped by type with per-type total_count/truncated; at most `limit` queries are returned overall (default 50). For map queries, query_type_id is a point/attachment ID and is_reverse distinguishes the reverse card.",
                 inputSchema: .object([
                     "type": .string("object"),
-                    "properties": .object(["query": stringValue]),
+                    "properties": .object([
+                        "query": stringValue,
+                        "limit": int64Number
+                    ]),
                     "required": .array([.string("query")])
                 ])
             ),
@@ -1897,12 +1985,15 @@ enum MemorMCPTools {
 
             Tool(
                 name: "list_stacks",
-                description: "List all stacks (saved query searches).",
-                inputSchema: .object(["type": .string("object"), "properties": .object([:])])
+                description: "List all stacks (saved query searches that the user studies). Set include_counts to also compute each stack's query counts by SRS color: blue (new), red (seen, due soon), green (answered correctly recently), magenta (interval >= 1 day); null counts mean the stack's search failed to parse.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object(["include_counts": boolValue])
+                ])
             ),
             Tool(
                 name: "create_stack",
-                description: "Create a new stack with a name and a query search expression.",
+                description: "Create a new stack with a name and a query search expression (see search_queries / describe_search_syntax for the language; the stack contains exactly the queries its search matches).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -1914,7 +2005,7 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "update_stack",
-                description: "Rename a stack and/or change its search expression. Provide at least one of name or search.",
+                description: "Rename a stack and/or change its query search expression (see search_queries / describe_search_syntax for the language). Provide at least one of name or search.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -2208,23 +2299,16 @@ private struct BoundaryMapInstanceDTO: Encodable {
 private struct InstanceSearchResultDTO: Encodable {
     let id: Int64
     let displayValue: String
-
-    init(_ r: InstanceSearchResult) {
-        id = r.id
-        displayValue = r.displayValue
-    }
+    // Present only when include_field_values is requested (never for map instances).
+    let fields: [InstanceFieldValueDTO]?
 }
 
 private struct InstanceSearchSectionDTO: Encodable {
     let typeID: Int64
     let typeName: String
+    let totalCount: Int
+    let truncated: Bool
     let instances: [InstanceSearchResultDTO]
-
-    init(_ s: InstanceSearchSection) {
-        typeID = s.typeID
-        typeName = s.typeName
-        instances = s.instances.map(InstanceSearchResultDTO.init)
-    }
 }
 
 private struct CollectionDTO: Encodable {
@@ -2258,36 +2342,49 @@ private struct QuerySearchResultDTO: Encodable {
     let queryTypeID: Int64
     let displayValue: String
     let queryTypeName: String
+    // Map queries only: distinguishes a point/boundary's reverse card.
+    let isReverse: Bool
 
     init(_ r: QuerySearchResult) {
         instanceID = r.instanceID
         queryTypeID = r.queryTypeID
         displayValue = r.displayValue
         queryTypeName = r.queryTypeName
+        isReverse = r.isReverse
     }
 }
 
 private struct QuerySearchSectionDTO: Encodable {
     let typeID: Int64
     let typeName: String
+    let totalCount: Int
+    let truncated: Bool
     let queries: [QuerySearchResultDTO]
-
-    init(_ s: QuerySearchSection) {
-        typeID = s.typeID
-        typeName = s.typeName
-        queries = s.queries.map(QuerySearchResultDTO.init)
-    }
 }
 
 private struct StackDTO: Encodable {
     let id: Int64
     let name: String
     let search: String
+    let description: String
+    let isPinned: Bool
+    // Present only when include_counts is requested; nil counts mean the
+    // stack's search failed to parse.
+    let blueQueryCount: Int?
+    let redQueryCount: Int?
+    let greenQueryCount: Int?
+    let magentaQueryCount: Int?
 
-    init(_ s: Stack) {
+    init(_ s: Stack, counts: StackQueryCounts? = nil) {
         id = s.id
         name = s.name
         search = s.search
+        description = s.description
+        isPinned = s.isPinned
+        blueQueryCount = counts?.blueQueryCount
+        redQueryCount = counts?.redQueryCount
+        greenQueryCount = counts?.greenQueryCount
+        magentaQueryCount = counts?.magentaQueryCount
     }
 }
 
