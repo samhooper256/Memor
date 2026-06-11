@@ -219,6 +219,17 @@ Claude Desktop  ──stdio JSON-RPC──▶  memor-mcp  ──HTTP /mcp──�
 - **Stdio helper** (`memor-mcp/main.swift`): a separate command-line tool target. The build embeds the binary in `Memor.app/Contents/MacOS/` via a Copy Files build phase. Claude Desktop's `claude_desktop_config.json` points `"command"` at `/Applications/Memor.app/Contents/MacOS/memor-mcp`.
 - **Sandbox**: requires `com.apple.security.network.server` in [Memor.entitlements](Memor.entitlements). The listener binds loopback only.
 
+### Tool surface (~37 tools in `MemorMCPTools.swift`)
+
+- **Types**: `list_types`, `get_type` (read-only — schema management is intentionally NOT exposed).
+- **Instances**: `create_instance` / `create_instances` (per-item batch results), `update_instance`, `delete_instance`, `get_instance` (field values, per-query SRS status, node links; map-shaped payload for map instances), `search_instances` (limit + optional full field values). Field values can be keyed by field name or field ID; Node instances accept a `links` map.
+- **Nodes**: `update_node_links` (set/add/remove one link field's targets), `search_node_candidates`.
+- **Maps**: `create_pointmap_instance`, `update_pointmap_instance`, `add_pointmap_point`, `update_pointmap_point`, `delete_pointmap_point`, `create_boundarymap_instance`, `update_boundarymap_instance`, `list_boundary_sets`, `list_boundaries`.
+- **SRS maintenance**: `reset_due_dates` (by search or pairs), `set_queries_enabled`, `set_max_interval`. Auto-studying (`applyStudyResponse` etc.) is intentionally NOT exposed.
+- **Collections**: list/get/create/delete/rename + add/remove instance(s).
+- **Queries/Stacks**: `search_queries` (limit; `is_reverse` for map queries), `render_query` (final question/answer HTML, or map payload), `describe_search_syntax`, `list_stacks` (optional color counts), `create_stack`, `update_stack`, `delete_stack`.
+- **`update_instance` / `update_node_links` must pass the FULL merged links map** to `AppDatabase.updateInstance` — it rewrites all node links from what it's given, so passing only the changed fields would wipe the rest. The MCP layer merges with `fetchInstanceEditorData`'s current links before every write.
+
 ### Non-obvious gotchas (do not "simplify" these away)
 
 - **`memor-mcp` reads stdin with raw `Darwin.read(0, …)`, not `FileHandle.standardInput`.** Foundation's `FileHandle` buffers pipe reads from a parent process and doesn't return bytes until the pipe is closed, producing a ~60s hang per JSON-RPC message when spawned by Claude Desktop. Raw POSIX `read(2)` returns as soon as any bytes arrive.
