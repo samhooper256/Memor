@@ -70,9 +70,10 @@ final class StacksPageState: ObservableObject {
     @Published private(set) var averageQueryInterval: Double?
 
     func refresh(appDatabase: AppDatabase) async throws {
-        queryCountsByStackID = try appDatabase.refreshStackQueryCounts()
-        lastUpdatedTimestamp = try appDatabase.fetchStacksLastUpdatedTimestamp()
-        averageQueryInterval = try appDatabase.fetchAverageQueryInterval()
+        let data = try await appDatabase.refreshStacksPageData()
+        queryCountsByStackID = data.queryCountsByStackID
+        lastUpdatedTimestamp = data.lastUpdatedTimestamp
+        averageQueryInterval = data.averageQueryInterval
     }
 
     func loadLastUpdatedTimestamp(appDatabase: AppDatabase) async throws {

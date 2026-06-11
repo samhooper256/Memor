@@ -96,6 +96,41 @@ extension AppDatabase {
         }
     }
 
+    /// Refreshes everything the Stacks page shows — per-stack color counts,
+    /// the last-updated timestamp, and the average query interval — in one
+    /// async write, so the main actor suspends instead of blocking.
+    func refreshStacksPageData() async throws -> StacksRefreshData {
+        let startOfTomorrowTimestamp = TimeZoneSettings.shared.startOfTomorrowTimestamp()
+        let data = try await dbQueue.write { db in
+            let countsByStackID = try self.computeAllStackQueryCounts(
+                db: db,
+                startOfTomorrowTimestamp: startOfTomorrowTimestamp
+            )
+
+            let timestamp = Int(Date().timeIntervalSince1970)
+            try db.execute(
+                sql: """
+                    UPDATE globals
+                    SET value = ?
+                    WHERE name = ?
+                    """,
+                arguments: [String(timestamp), "stacks_last_updated_timestamp"]
+            )
+
+            return StacksRefreshData(
+                queryCountsByStackID: countsByStackID,
+                lastUpdatedTimestamp: Date(timeIntervalSince1970: TimeInterval(timestamp)),
+                averageQueryInterval: try Double.fetchOne(db, sql: "SELECT AVG(interval) FROM query")
+            )
+        }
+
+        #if DEBUG
+        assertStackCountParity(with: data.queryCountsByStackID)
+        #endif
+
+        return data
+    }
+
     func refreshStackQueryCounts() throws -> [Int64: StackQueryCounts?] {
         let startOfTomorrowTimestamp = TimeZoneSettings.shared.startOfTomorrowTimestamp()
         let countsByStackID = try dbQueue.write { db -> [Int64: StackQueryCounts?] in
@@ -120,6 +155,14 @@ extension AppDatabase {
         }
 
         #if DEBUG
+        assertStackCountParity(with: countsByStackID)
+        #endif
+
+        return countsByStackID
+    }
+
+    #if DEBUG
+    private func assertStackCountParity(with countsByStackID: [Int64: StackQueryCounts?]) {
         do {
             let legacyCountsByStackID = try legacyRefreshStackQueryCounts()
             if legacyCountsByStackID != countsByStackID {
@@ -128,10 +171,8 @@ extension AppDatabase {
         } catch {
             print("⚠️ Stack count parity oracle failed: \(error)")
         }
-        #endif
-
-        return countsByStackID
     }
+    #endif
 
     func refreshStackQueryCounts(for stack: Stack) throws -> StackQueryCounts {
         let startOfTomorrowTimestamp = TimeZoneSettings.shared.startOfTomorrowTimestamp()

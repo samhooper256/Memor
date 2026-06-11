@@ -327,6 +327,15 @@ nonisolated struct StackQueryCounts: Hashable {
     let magentaQueryCount: Int
 }
 
+// Everything the Stacks page shows after a refresh, computed in one database
+// round trip. A nil counts value means that stack's search failed to parse or
+// validate.
+nonisolated struct StacksRefreshData {
+    let queryCountsByStackID: [Int64: StackQueryCounts?]
+    let lastUpdatedTimestamp: Date
+    let averageQueryInterval: Double?
+}
+
 enum StudyResponseRating: CaseIterable, Hashable {
     case again
     case hard
