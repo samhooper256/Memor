@@ -239,6 +239,24 @@ enum MemorMCPTools {
         case "search_queries":
             let query = try arguments.requireString("query")
             return try jsonResult(searchQueries(query: query, appDatabase: appDatabase))
+        case "reset_due_dates":
+            return try jsonResult(resetDueDates(
+                search: try arguments.optionalString("search"),
+                queryItems: try arguments.optionalObjectArray("queries"),
+                appDatabase: appDatabase
+            ))
+        case "set_queries_enabled":
+            return try jsonResult(setQueriesEnabled(
+                enabled: try arguments.requireBool("enabled"),
+                queryItems: try arguments.requireObjectArray("queries"),
+                appDatabase: appDatabase
+            ))
+        case "set_max_interval":
+            return try jsonResult(setMaxIntervalTool(
+                instanceID: try arguments.requireInt64("instance_id"),
+                maxInterval: try arguments.optionalInt64("max_interval"),
+                appDatabase: appDatabase
+            ))
 
         // Stacks
         case "list_stacks":
@@ -398,15 +416,17 @@ enum MemorMCPTools {
         rawLinks: [String: Value]?,
         appDatabase: AppDatabase
     ) throws -> OkDTO {
+        // Map instances have no field table, so detect them before
+        // fetchInstanceEditorData (which would throw an unhelpful SQL error).
+        if try appDatabase.fetchPointMapInstanceTitle(instanceID: instanceID) != nil {
+            throw MemorMCPToolError(message: "Use update_pointmap_instance / update_pointmap_point to edit PointMap instances.")
+        }
+        if try appDatabase.fetchBoundaryMapInstanceTitle(instanceID: instanceID) != nil {
+            throw MemorMCPToolError(message: "Use update_boundarymap_instance to edit BoundaryMap instances.")
+        }
         let current = try appDatabase.fetchInstanceEditorData(instanceID: instanceID)
         guard let type = try appDatabase.fetchType(typeID: current.typeID) else {
             throw MemorMCPToolError(message: "Type not found: \(current.typeID).")
-        }
-        if type.name == POINTMAP_TYPE_NAME {
-            throw MemorMCPToolError(message: "Use update_pointmap_instance / update_pointmap_point to edit PointMap instances.")
-        }
-        if type.name == BOUNDARYMAP_TYPE_NAME {
-            throw MemorMCPToolError(message: "Use update_boundarymap_instance to edit BoundaryMap instances.")
         }
         if rawLinks != nil && !type.isNode {
             throw MemorMCPToolError(message: "`links` is only valid for Node types; instance \(instanceID) is not a Node instance.")
@@ -1014,6 +1034,101 @@ enum MemorMCPTools {
         try appDatabase.searchQueries(query: query).map(QuerySearchSectionDTO.init)
     }
 
+    // MARK: - SRS maintenance tools
+
+    private static func parseQueryPairs(_ items: [[String: Value]], argumentLabel: String) throws -> [(instanceID: Int64, queryTypeID: Int64)] {
+        if items.isEmpty {
+            throw MemorMCPToolError(message: "`\(argumentLabel)` must contain at least one item.")
+        }
+        return try items.enumerated().map { index, item in
+            do {
+                return (
+                    instanceID: try item.requireInt64("instance_id"),
+                    queryTypeID: try item.requireInt64("query_type_id")
+                )
+            } catch let error as MemorMCPToolError {
+                throw MemorMCPToolError(message: "\(argumentLabel)[\(index)]: \(error.message)")
+            }
+        }
+    }
+
+    private static func resetDueDates(
+        search: String?,
+        queryItems: [[String: Value]]?,
+        appDatabase: AppDatabase
+    ) throws -> OkDTO {
+        switch (search, queryItems) {
+        case (let search?, nil):
+            try appDatabase.resetQueryDueDates(query: search)
+        case (nil, let items?):
+            let pairs = try parseQueryPairs(items, argumentLabel: "queries")
+            try appDatabase.resetQueryDueDates(instanceIDAndQueryTypeIDPairs: pairs)
+        default:
+            throw MemorMCPToolError(message: "Provide exactly one of `search` or `queries`.")
+        }
+        postDatabaseChange()
+        return OkDTO()
+    }
+
+    private static func setQueriesEnabled(
+        enabled: Bool,
+        queryItems: [[String: Value]],
+        appDatabase: AppDatabase
+    ) throws -> OkDTO {
+        let pairs = try parseQueryPairs(queryItems, argumentLabel: "queries")
+        if enabled {
+            // setQueryEnabled(true, ...) blindly inserts a query row, so validate
+            // each pair first: reject map instances (their queries are keyed by
+            // point/attachment, not query type) and query types from other types.
+            var queryTypeIDsByTypeID: [Int64: Set<Int64>] = [:]
+            for pair in pairs {
+                if try appDatabase.fetchPointMapInstanceTitle(instanceID: pair.instanceID) != nil {
+                    throw MemorMCPToolError(message: "Instance \(pair.instanceID) is a PointMap instance; use update_pointmap_point to enable its queries.")
+                }
+                if try appDatabase.fetchBoundaryMapInstanceTitle(instanceID: pair.instanceID) != nil {
+                    throw MemorMCPToolError(message: "Instance \(pair.instanceID) is a BoundaryMap instance; use update_boundarymap_instance's set_enabled to enable its queries.")
+                }
+                let data = try appDatabase.fetchInstanceEditorData(instanceID: pair.instanceID)
+                let validQueryTypeIDs: Set<Int64>
+                if let cached = queryTypeIDsByTypeID[data.typeID] {
+                    validQueryTypeIDs = cached
+                } else {
+                    validQueryTypeIDs = Set(try appDatabase.fetchQueryTypes(forTypeID: data.typeID).map(\.id))
+                    queryTypeIDsByTypeID[data.typeID] = validQueryTypeIDs
+                }
+                guard validQueryTypeIDs.contains(pair.queryTypeID) else {
+                    throw MemorMCPToolError(message: "Query type \(pair.queryTypeID) does not belong to instance \(pair.instanceID)'s type.")
+                }
+            }
+            for pair in pairs {
+                try appDatabase.setQueryEnabled(true, instanceID: pair.instanceID, queryTypeID: pair.queryTypeID)
+            }
+        } else {
+            try appDatabase.disableQueries(instanceIDAndQueryTypeIDPairs: pairs)
+        }
+        postDatabaseChange()
+        return OkDTO()
+    }
+
+    private static func setMaxIntervalTool(
+        instanceID: Int64,
+        maxInterval: Int64?,
+        appDatabase: AppDatabase
+    ) throws -> OkDTO {
+        if let maxInterval, maxInterval <= 0 {
+            throw MemorMCPToolError(message: "`max_interval` must be a positive number of seconds, or null to clear.")
+        }
+        if try appDatabase.fetchPointMapInstanceTitle(instanceID: instanceID) != nil
+            || appDatabase.fetchBoundaryMapInstanceTitle(instanceID: instanceID) != nil {
+            throw MemorMCPToolError(message: "max_interval applies to standard queries only; instance \(instanceID) is a map instance.")
+        }
+        // Validates the instance exists.
+        _ = try appDatabase.fetchInstanceEditorData(instanceID: instanceID)
+        try appDatabase.setMaxInterval(forInstanceID: instanceID, maxInterval: maxInterval)
+        postDatabaseChange()
+        return OkDTO()
+    }
+
     // MARK: - Stack tools
 
     private static func listStacks(appDatabase: AppDatabase) throws -> [StackDTO] {
@@ -1586,6 +1701,62 @@ enum MemorMCPTools {
                     "type": .string("object"),
                     "properties": .object(["query": stringValue]),
                     "required": .array([.string("query")])
+                ])
+            ),
+
+            Tool(
+                name: "reset_due_dates",
+                description: "Reset queries to new (interval 0, never answered), erasing their SRS progress. Provide exactly one of: `search` (a query-search expression; resets every matching query, including map queries) or `queries` (an array of {instance_id, query_type_id} pairs; for map instances query_type_id is a point/attachment ID and both directions reset). Irreversible.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "search": stringValue,
+                        "queries": .object([
+                            "type": .string("array"),
+                            "items": .object([
+                                "type": .string("object"),
+                                "properties": .object([
+                                    "instance_id": int64Number,
+                                    "query_type_id": int64Number
+                                ]),
+                                "required": .array([.string("instance_id"), .string("query_type_id")])
+                            ])
+                        ])
+                    ])
+                ])
+            ),
+            Tool(
+                name: "set_queries_enabled",
+                description: "Enable or disable queries given as {instance_id, query_type_id} pairs. Disabling deletes the query row — its SRS progress is permanently lost (for map instances, query_type_id is a point/attachment ID and both directions are disabled). Enabling creates the query as new and works on Object/Node instances only; to enable map queries use update_pointmap_point or update_boundarymap_instance.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "enabled": boolValue,
+                        "queries": .object([
+                            "type": .string("array"),
+                            "items": .object([
+                                "type": .string("object"),
+                                "properties": .object([
+                                    "instance_id": int64Number,
+                                    "query_type_id": int64Number
+                                ]),
+                                "required": .array([.string("instance_id"), .string("query_type_id")])
+                            ])
+                        ])
+                    ]),
+                    "required": .array([.string("enabled"), .string("queries")])
+                ])
+            ),
+            Tool(
+                name: "set_max_interval",
+                description: "Cap the SRS interval for all of an Object/Node instance's queries, in seconds (e.g. 604800 = 7 days). Pass null (or omit max_interval) to remove the cap.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "instance_id": int64Number,
+                        "max_interval": int64Number
+                    ]),
+                    "required": .array([.string("instance_id")])
                 ])
             ),
 
