@@ -238,33 +238,76 @@ extension AppDatabase {
             )
         }
 
+        var pointMapGroups: [(groupIndex: Int, sql: String, arguments: StatementArguments)] = []
+        var boundaryMapGroups: [(groupIndex: Int, sql: String, arguments: StatementArguments)] = []
         for (groupIndex, expression) in groups.enumerated() {
-            let parsedQuery = QuerySearchQuery(expression: expression)
-
-            if Self.staticTruthValue(
+            switch Self.staticTruthValue(
                 of: expression,
                 typeName: POINTMAP_TYPE_NAME,
                 newIsAlwaysFalse: true
-            ) != false {
-                totals[groupIndex].add(try fetchPointMapQueryCategoryCounts(
-                    db: db,
-                    parsedQuery: parsedQuery,
-                    startOfTomorrowTimestamp: startOfTomorrowTimestamp
-                ))
+            ) {
+            case .some(false):
+                break
+            case .some(true):
+                pointMapGroups.append((groupIndex, "1", StatementArguments()))
+            case .none:
+                let condition = makePointMapSearchConditions(
+                    expression: expression,
+                    pointAlias: "pp",
+                    instanceAlias: "pi",
+                    includePointName: true
+                )
+                pointMapGroups.append((groupIndex, condition.sql, condition.arguments))
             }
 
-            if Self.staticTruthValue(
+            switch Self.staticTruthValue(
                 of: expression,
                 typeName: BOUNDARYMAP_TYPE_NAME,
                 newIsAlwaysFalse: true
-            ) != false {
-                totals[groupIndex].add(try fetchBoundaryMapQueryCategoryCounts(
-                    db: db,
-                    parsedQuery: parsedQuery,
-                    startOfTomorrowTimestamp: startOfTomorrowTimestamp
-                ))
+            ) {
+            case .some(false):
+                break
+            case .some(true):
+                boundaryMapGroups.append((groupIndex, "1", StatementArguments()))
+            case .none:
+                let condition = makeBoundaryMapSearchConditions(
+                    expression: expression,
+                    attachmentAlias: "bq",
+                    instanceAlias: "bi",
+                    boundaryAlias: "b",
+                    includeBoundaryName: true
+                )
+                boundaryMapGroups.append((groupIndex, condition.sql, condition.arguments))
             }
         }
+
+        try addBatchedCategoryCounts(
+            db: db,
+            fromClause: """
+                FROM \(Self.pointMapDirectionalFrom) AS pp
+                JOIN pointmap_instance AS pi
+                    ON pi.instance_id = pp.instance_id
+                """,
+            srsAlias: "pp",
+            includedGroups: pointMapGroups,
+            startOfTomorrowTimestamp: startOfTomorrowTimestamp,
+            totals: &totals
+        )
+
+        try addBatchedCategoryCounts(
+            db: db,
+            fromClause: """
+                FROM \(Self.boundaryMapDirectionalFrom) AS bq
+                JOIN boundarymap_instance AS bi
+                    ON bi.instance_id = bq.instance_id
+                JOIN boundary AS b
+                    ON b.id = bq.boundary_id
+                """,
+            srsAlias: "bq",
+            includedGroups: boundaryMapGroups,
+            startOfTomorrowTimestamp: startOfTomorrowTimestamp,
+            totals: &totals
+        )
 
         return totals.map(\.stackQueryCounts)
     }
