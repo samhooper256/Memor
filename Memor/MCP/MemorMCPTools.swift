@@ -556,7 +556,7 @@ enum MemorMCPTools {
             isNode: type.isNode,
             maxInterval: data.maxInterval,
             fields: fieldRows,
-            enabledQueryTypeIDs: Array(data.enabledQueryTypeIDs).sorted(),
+            enabledQueryTypeIds: Array(data.enabledQueryTypeIDs).sorted(),
             queries: queries,
             links: links
         )
@@ -1985,7 +1985,7 @@ enum MemorMCPTools {
 
             Tool(
                 name: "list_stacks",
-                description: "List all stacks (saved query searches that the user studies). Set include_counts to also compute each stack's query counts by SRS color: blue (new), red (seen, due soon), green (answered correctly recently), magenta (interval >= 1 day); null counts mean the stack's search failed to parse.",
+                description: "List all stacks (saved query searches that the user studies). Set include_counts to also compute each stack's query counts by SRS color: blue (new), red (seen, due soon), green (answered correctly recently), magenta (interval >= 1 day); null counts mean the stack's search failed to parse. Computing counts can take tens of seconds on large databases — omit include_counts unless you need them.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object(["include_counts": boolValue])
@@ -2208,7 +2208,8 @@ private struct InstanceDetailDTO: Encodable {
     let isNode: Bool
     let maxInterval: Int64?
     let fields: [InstanceFieldValueDTO]
-    let enabledQueryTypeIDs: [Int64]
+    // Named `Ids` (not `IDs`) so snake-case encoding yields enabled_query_type_ids.
+    let enabledQueryTypeIds: [Int64]
     let queries: [InstanceQueryInfoDTO]
     // Node instances only.
     let links: [NodeLinkFieldDTO]?
@@ -2244,7 +2245,8 @@ private struct PointMapInstanceDTO: Encodable {
     let defaultCenterLng: Double
     let defaultZoom: Double
     let showAllPointsInQuestion: Bool
-    let boundaryIDs: [Int64]
+    // Named `Ids` (not `IDs`) so snake-case encoding yields boundary_ids.
+    let boundaryIds: [Int64]
     let points: [PointMapPointDTO]
 
     init(_ instance: PointMapInstanceWithPoints) {
@@ -2254,7 +2256,7 @@ private struct PointMapInstanceDTO: Encodable {
         defaultCenterLng = instance.instance.defaultCenterLng
         defaultZoom = instance.instance.defaultZoom
         showAllPointsInQuestion = instance.instance.showAllPointsInQuestion
-        boundaryIDs = instance.boundaryIDs
+        boundaryIds = instance.boundaryIDs
         points = instance.points.map(PointMapPointDTO.init)
     }
 }
