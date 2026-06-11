@@ -20,6 +20,7 @@ Memor/
   TypesPageView.swift               Types list view + TypeRowView
   Database/
     AppDatabase+Schema.swift        createSchema (run every launch) + idempotent migration helpers; canonical table/index definitions
+    AppDatabase+StackCounts.swift   Stacks-tab refresh: staticTruthValue expression pruning + batched per-type/per-map color-count SQL (refreshStacksPageData / refreshStackQueryCounts)
   Models/
     DatabaseModels.swift            All plain-data structs/enums returned by AppDatabase
   Pages/

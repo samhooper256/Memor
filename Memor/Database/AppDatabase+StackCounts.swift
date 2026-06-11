@@ -101,6 +101,10 @@ extension AppDatabase {
     /// async write, so the main actor suspends instead of blocking.
     func refreshStacksPageData() async throws -> StacksRefreshData {
         let startOfTomorrowTimestamp = TimeZoneSettings.shared.startOfTomorrowTimestamp()
+        #if DEBUG
+        let refreshStart = ContinuousClock.now
+        defer { print("Stacks refresh took \(ContinuousClock.now - refreshStart)") }
+        #endif
         let data = try await dbQueue.write { db in
             let countsByStackID = try self.computeAllStackQueryCounts(
                 db: db,
@@ -123,10 +127,6 @@ extension AppDatabase {
                 averageQueryInterval: try Double.fetchOne(db, sql: "SELECT AVG(interval) FROM query")
             )
         }
-
-        #if DEBUG
-        assertStackCountParity(with: data.queryCountsByStackID)
-        #endif
 
         return data
     }
@@ -154,25 +154,8 @@ extension AppDatabase {
             return countsByStackID
         }
 
-        #if DEBUG
-        assertStackCountParity(with: countsByStackID)
-        #endif
-
         return countsByStackID
     }
-
-    #if DEBUG
-    private func assertStackCountParity(with countsByStackID: [Int64: StackQueryCounts?]) {
-        do {
-            let legacyCountsByStackID = try legacyRefreshStackQueryCounts()
-            if legacyCountsByStackID != countsByStackID {
-                print("⚠️ Stack count parity mismatch — batched: \(countsByStackID), legacy: \(legacyCountsByStackID)")
-            }
-        } catch {
-            print("⚠️ Stack count parity oracle failed: \(error)")
-        }
-    }
-    #endif
 
     func refreshStackQueryCounts(for stack: Stack) throws -> StackQueryCounts {
         let startOfTomorrowTimestamp = TimeZoneSettings.shared.startOfTomorrowTimestamp()

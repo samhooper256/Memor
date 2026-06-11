@@ -120,13 +120,6 @@ struct AppDatabase {
         let bookmarkData: Data
     }
 
-    struct QueryCategoryCounts: FetchableRecord, Decodable {
-        let blueQueryCount: Int
-        let redQueryCount: Int
-        let greenQueryCount: Int
-        let magentaQueryCount: Int
-    }
-
     private struct StudyTypeSummary {
         let typeInfo: InstanceSearchTypeInfo
         let totalCount: Int
@@ -748,130 +741,6 @@ struct AppDatabase {
             return Date(timeIntervalSince1970: timestamp)
         }
     }
-
-    func fetchAverageQueryInterval() throws -> Double? {
-        try dbQueue.read { db in
-            try Double.fetchOne(
-                db,
-                sql: "SELECT AVG(interval) FROM query"
-            )
-        }
-    }
-
-    #if DEBUG
-    // Pre-batching implementation, kept temporarily as a parity oracle for the
-    // batched refreshStackQueryCounts in AppDatabase+StackCounts.swift.
-    func legacyRefreshStackQueryCounts() throws -> [Int64: StackQueryCounts?] {
-        let startOfTomorrowTimestamp = TimeZoneSettings.shared.startOfTomorrowTimestamp()
-        return try dbQueue.write { db in
-            let stacks = try Stack.fetchAll(
-                db,
-                sql: """
-                    SELECT
-                        id,
-                        name,
-                        search,
-                        COALESCE(description, '') AS description,
-                        is_pinned AS isPinned,
-                        0 AS blueQueryCount,
-                        0 AS redQueryCount,
-                        0 AS greenQueryCount,
-                        0 AS magentaQueryCount
-                    FROM stack
-                    ORDER BY is_pinned DESC, name COLLATE NOCASE, id
-                    """
-            )
-            let typeInfos = try fetchInstanceSearchTypeInfos(db: db)
-            var countsByStackID: [Int64: StackQueryCounts?] = [:]
-
-            for stack in stacks {
-                do {
-                    let parsedQuery = try parseQuerySearchQuery(stack.search)
-                    try validateCollectionSearchComponents(Self.collectionNames(in: parsedQuery.expression), db: db)
-
-                    var blueQueryCount = 0
-                    var redQueryCount = 0
-                    var greenQueryCount = 0
-                    var magentaQueryCount = 0
-
-                    for typeInfo in typeInfos {
-                        guard Self.staticTruthValue(
-                            of: parsedQuery.expression,
-                            typeName: typeInfo.typeName,
-                            newIsAlwaysFalse: false
-                        ) != false else { continue }
-
-                        let counts = try fetchQueryCategoryCounts(
-                            db: db,
-                            typeInfo: typeInfo,
-                            parsedQuery: parsedQuery,
-                            startOfTomorrowTimestamp: startOfTomorrowTimestamp
-                        )
-                        blueQueryCount += counts.blueQueryCount
-                        redQueryCount += counts.redQueryCount
-                        greenQueryCount += counts.greenQueryCount
-                        magentaQueryCount += counts.magentaQueryCount
-                    }
-
-                    if Self.staticTruthValue(
-                        of: parsedQuery.expression,
-                        typeName: POINTMAP_TYPE_NAME,
-                        newIsAlwaysFalse: true
-                    ) != false {
-                        let pointMapCounts = try fetchPointMapQueryCategoryCounts(
-                            db: db,
-                            parsedQuery: parsedQuery,
-                            startOfTomorrowTimestamp: startOfTomorrowTimestamp
-                        )
-                        blueQueryCount += pointMapCounts.blueQueryCount
-                        redQueryCount += pointMapCounts.redQueryCount
-                        greenQueryCount += pointMapCounts.greenQueryCount
-                        magentaQueryCount += pointMapCounts.magentaQueryCount
-                    }
-
-                    if Self.staticTruthValue(
-                        of: parsedQuery.expression,
-                        typeName: BOUNDARYMAP_TYPE_NAME,
-                        newIsAlwaysFalse: true
-                    ) != false {
-                        let boundaryMapCounts = try fetchBoundaryMapQueryCategoryCounts(
-                            db: db,
-                            parsedQuery: parsedQuery,
-                            startOfTomorrowTimestamp: startOfTomorrowTimestamp
-                        )
-                        blueQueryCount += boundaryMapCounts.blueQueryCount
-                        redQueryCount += boundaryMapCounts.redQueryCount
-                        greenQueryCount += boundaryMapCounts.greenQueryCount
-                        magentaQueryCount += boundaryMapCounts.magentaQueryCount
-                    }
-
-                    countsByStackID[stack.id] = StackQueryCounts(
-                        blueQueryCount: blueQueryCount,
-                        redQueryCount: redQueryCount,
-                        greenQueryCount: greenQueryCount,
-                        magentaQueryCount: magentaQueryCount
-                    )
-                } catch {
-                    countsByStackID[stack.id] = nil as StackQueryCounts?
-                }
-            }
-
-            try db.execute(
-                sql: """
-                    UPDATE globals
-                    SET value = ?
-                    WHERE name = ?
-                    """,
-                arguments: [
-                    String(Int(Date().timeIntervalSince1970)),
-                    "stacks_last_updated_timestamp"
-                ]
-            )
-
-            return countsByStackID
-        }
-    }
-    #endif
 
     func createCollection(name: String) throws -> Collection {
         try dbQueue.write { db in
@@ -4756,62 +4625,6 @@ struct AppDatabase {
         }
     }
 
-    private func fetchQueryCategoryCounts(
-        db: Database,
-        typeInfo: InstanceSearchTypeInfo,
-        parsedQuery: QuerySearchQuery,
-        startOfTomorrowTimestamp: Int64
-    ) throws -> QueryCategoryCounts {
-        let tableName = "\"type\(typeInfo.typeID)\""
-        let tableAlias = "instance_table"
-        let searchConditions = makeQuerySearchConditions(
-            tableAlias: tableAlias,
-            typeName: typeInfo.typeName,
-            fieldIndices: typeInfo.allFieldIndices,
-            expression: parsedQuery.expression
-        )
-        let whereClause = searchConditions.sql.isEmpty ? "" : "WHERE \(searchConditions.sql)"
-        return try QueryCategoryCounts.fetchOne(
-            db,
-            sql: """
-                SELECT
-                    COALESCE(SUM(CASE WHEN query.interval = 0 THEN 1 ELSE 0 END), 0) AS blueQueryCount,
-                    COALESCE(SUM(CASE
-                        WHEN query.interval != 0 AND query.interval <= \(QUERY_STARTER_DELAY_GOOD)
-                        THEN 1
-                        ELSE 0
-                    END), 0) AS redQueryCount,
-                    COALESCE(SUM(CASE
-                        WHEN query.interval > \(QUERY_STARTER_DELAY_GOOD)
-                            AND query.last_answered_timestamp + query.interval < ?
-                        THEN 1
-                        ELSE 0
-                    END), 0) AS greenQueryCount,
-                    COALESCE(SUM(CASE
-                        WHEN NOT (
-                            query.interval <= \(QUERY_STARTER_DELAY_GOOD)
-                            OR (
-                                query.interval > \(QUERY_STARTER_DELAY_GOOD)
-                                AND query.last_answered_timestamp + query.interval < ?
-                            )
-                        )
-                        THEN 1
-                        ELSE 0
-                    END), 0) AS magentaQueryCount
-                FROM \(tableName) AS \(tableAlias)
-                JOIN query
-                    ON query.instance_id = \(tableAlias).id
-                \(whereClause)
-                """,
-            arguments: [startOfTomorrowTimestamp, startOfTomorrowTimestamp] + searchConditions.arguments
-        ) ?? QueryCategoryCounts(
-            blueQueryCount: 0,
-            redQueryCount: 0,
-            greenQueryCount: 0,
-            magentaQueryCount: 0
-        )
-    }
-
     private func fetchStudyTypeSummary(
         db: Database,
         typeInfo: InstanceSearchTypeInfo,
@@ -5537,60 +5350,6 @@ struct AppDatabase {
         )
     }
 
-    func fetchPointMapQueryCategoryCounts(
-        db: Database,
-        parsedQuery: QuerySearchQuery,
-        startOfTomorrowTimestamp: Int64
-    ) throws -> QueryCategoryCounts {
-        let searchConditions = makePointMapSearchConditions(
-            expression: parsedQuery.expression,
-            pointAlias: "pp",
-            instanceAlias: "pi",
-            includePointName: true
-        )
-        let whereClause = searchConditions.sql.isEmpty ? "" : "WHERE \(searchConditions.sql)"
-
-        return try QueryCategoryCounts.fetchOne(
-            db,
-            sql: """
-                SELECT
-                    COALESCE(SUM(CASE WHEN pp.interval = 0 THEN 1 ELSE 0 END), 0) AS blueQueryCount,
-                    COALESCE(SUM(CASE
-                        WHEN pp.interval != 0 AND pp.interval <= \(QUERY_STARTER_DELAY_GOOD)
-                        THEN 1
-                        ELSE 0
-                    END), 0) AS redQueryCount,
-                    COALESCE(SUM(CASE
-                        WHEN pp.interval > \(QUERY_STARTER_DELAY_GOOD)
-                            AND pp.last_answered_timestamp + pp.interval < ?
-                        THEN 1
-                        ELSE 0
-                    END), 0) AS greenQueryCount,
-                    COALESCE(SUM(CASE
-                        WHEN NOT (
-                            pp.interval <= \(QUERY_STARTER_DELAY_GOOD)
-                            OR (
-                                pp.interval > \(QUERY_STARTER_DELAY_GOOD)
-                                AND pp.last_answered_timestamp + pp.interval < ?
-                            )
-                        )
-                        THEN 1
-                        ELSE 0
-                    END), 0) AS magentaQueryCount
-                FROM \(Self.pointMapDirectionalFrom) AS pp
-                JOIN pointmap_instance AS pi
-                    ON pi.instance_id = pp.instance_id
-                \(whereClause)
-                """,
-            arguments: [startOfTomorrowTimestamp, startOfTomorrowTimestamp] + searchConditions.arguments
-        ) ?? QueryCategoryCounts(
-            blueQueryCount: 0,
-            redQueryCount: 0,
-            greenQueryCount: 0,
-            magentaQueryCount: 0
-        )
-    }
-
     // MARK: - BoundaryMap study/search helpers
 
     private struct BoundaryMapStudyRow: FetchableRecord, Decodable {
@@ -6228,63 +5987,6 @@ struct AppDatabase {
             fieldValuesByName: [:],
             kind: .boundaryMap,
             boundaryMapPayload: payload
-        )
-    }
-
-    func fetchBoundaryMapQueryCategoryCounts(
-        db: Database,
-        parsedQuery: QuerySearchQuery,
-        startOfTomorrowTimestamp: Int64
-    ) throws -> QueryCategoryCounts {
-        let searchConditions = makeBoundaryMapSearchConditions(
-            expression: parsedQuery.expression,
-            attachmentAlias: "bq",
-            instanceAlias: "bi",
-            boundaryAlias: "b",
-            includeBoundaryName: true
-        )
-        let whereClause = searchConditions.sql.isEmpty ? "" : "WHERE \(searchConditions.sql)"
-
-        return try QueryCategoryCounts.fetchOne(
-            db,
-            sql: """
-                SELECT
-                    COALESCE(SUM(CASE WHEN bq.interval = 0 THEN 1 ELSE 0 END), 0) AS blueQueryCount,
-                    COALESCE(SUM(CASE
-                        WHEN bq.interval != 0 AND bq.interval <= \(QUERY_STARTER_DELAY_GOOD)
-                        THEN 1
-                        ELSE 0
-                    END), 0) AS redQueryCount,
-                    COALESCE(SUM(CASE
-                        WHEN bq.interval > \(QUERY_STARTER_DELAY_GOOD)
-                            AND bq.last_answered_timestamp + bq.interval < ?
-                        THEN 1
-                        ELSE 0
-                    END), 0) AS greenQueryCount,
-                    COALESCE(SUM(CASE
-                        WHEN NOT (
-                            bq.interval <= \(QUERY_STARTER_DELAY_GOOD)
-                            OR (
-                                bq.interval > \(QUERY_STARTER_DELAY_GOOD)
-                                AND bq.last_answered_timestamp + bq.interval < ?
-                            )
-                        )
-                        THEN 1
-                        ELSE 0
-                    END), 0) AS magentaQueryCount
-                FROM \(Self.boundaryMapDirectionalFrom) AS bq
-                JOIN boundarymap_instance AS bi
-                    ON bi.instance_id = bq.instance_id
-                JOIN boundary AS b
-                    ON b.id = bq.boundary_id
-                \(whereClause)
-                """,
-            arguments: [startOfTomorrowTimestamp, startOfTomorrowTimestamp] + searchConditions.arguments
-        ) ?? QueryCategoryCounts(
-            blueQueryCount: 0,
-            redQueryCount: 0,
-            greenQueryCount: 0,
-            magentaQueryCount: 0
         )
     }
 
