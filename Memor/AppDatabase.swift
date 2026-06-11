@@ -29,7 +29,7 @@ struct AppDatabase {
         }
     }
 
-    private struct InstanceSearchTypeInfo {
+    struct InstanceSearchTypeInfo {
         let typeID: Int64
         let typeName: String
         let displayFieldIndex: Int
@@ -40,7 +40,7 @@ struct AppDatabase {
         let expression: SearchExpression?
     }
 
-    private struct QuerySearchQuery {
+    struct QuerySearchQuery {
         let expression: SearchExpression?
     }
 
@@ -120,7 +120,7 @@ struct AppDatabase {
         let bookmarkData: Data
     }
 
-    private struct QueryCategoryCounts: FetchableRecord, Decodable {
+    struct QueryCategoryCounts: FetchableRecord, Decodable {
         let blueQueryCount: Int
         let redQueryCount: Int
         let greenQueryCount: Int
@@ -758,7 +758,10 @@ struct AppDatabase {
         }
     }
 
-    func refreshStackQueryCounts() throws -> [Int64: StackQueryCounts?] {
+    #if DEBUG
+    // Pre-batching implementation, kept temporarily as a parity oracle for the
+    // batched refreshStackQueryCounts in AppDatabase+StackCounts.swift.
+    func legacyRefreshStackQueryCounts() throws -> [Int64: StackQueryCounts?] {
         let startOfTomorrowTimestamp = TimeZoneSettings.shared.startOfTomorrowTimestamp()
         return try dbQueue.write { db in
             let stacks = try Stack.fetchAll(
@@ -868,6 +871,7 @@ struct AppDatabase {
             return countsByStackID
         }
     }
+    #endif
 
     func refreshStackQueryCounts(for stack: Stack) throws -> StackQueryCounts {
         let startOfTomorrowTimestamp = TimeZoneSettings.shared.startOfTomorrowTimestamp()
@@ -4656,7 +4660,7 @@ struct AppDatabase {
         globalQueryCSSCache.set(globalQueryCSS)
     }
 
-    private func fetchInstanceSearchTypeInfos(db: Database) throws -> [InstanceSearchTypeInfo] {
+    func fetchInstanceSearchTypeInfos(db: Database) throws -> [InstanceSearchTypeInfo] {
         let rows = try InstanceSearchTypeFieldInfo.fetchAll(
             db,
             sql: """
@@ -5277,7 +5281,7 @@ struct AppDatabase {
         }
     }
 
-    private func makePointMapSearchConditions(
+    func makePointMapSearchConditions(
         expression: SearchExpression?,
         pointAlias: String,
         instanceAlias: String,
@@ -5605,7 +5609,7 @@ struct AppDatabase {
         )
     }
 
-    private func fetchPointMapQueryCategoryCounts(
+    func fetchPointMapQueryCategoryCounts(
         db: Database,
         parsedQuery: QuerySearchQuery,
         startOfTomorrowTimestamp: Int64
@@ -5799,7 +5803,7 @@ struct AppDatabase {
         }
     }
 
-    private func makeBoundaryMapSearchConditions(
+    func makeBoundaryMapSearchConditions(
         expression: SearchExpression?,
         attachmentAlias: String,
         instanceAlias: String,
@@ -6299,7 +6303,7 @@ struct AppDatabase {
         )
     }
 
-    private func fetchBoundaryMapQueryCategoryCounts(
+    func fetchBoundaryMapQueryCategoryCounts(
         db: Database,
         parsedQuery: QuerySearchQuery,
         startOfTomorrowTimestamp: Int64
@@ -6385,7 +6389,7 @@ struct AppDatabase {
         return InstanceSearchQuery(expression: try parseSearchExpression(tokens, allowsNoQueries: true, allowsNew: false))
     }
 
-    private func parseQuerySearchQuery(_ query: String) throws -> QuerySearchQuery {
+    func parseQuerySearchQuery(_ query: String) throws -> QuerySearchQuery {
         let tokens = try tokenizeSearchQueryComponents(query)
         return QuerySearchQuery(expression: try parseSearchExpression(tokens, allowsNoQueries: false, allowsNew: true))
     }
@@ -6598,7 +6602,7 @@ struct AppDatabase {
         )
     }
 
-    private func makeQuerySearchConditions(
+    func makeQuerySearchConditions(
         tableAlias: String,
         typeName: String,
         fieldIndices: [Int],
@@ -6711,7 +6715,7 @@ struct AppDatabase {
         }
     }
 
-    private func validateCollectionSearchComponents(
+    func validateCollectionSearchComponents(
         _ collectionNames: [String],
         db: Database
     ) throws {
@@ -6739,7 +6743,7 @@ struct AppDatabase {
             .replacingOccurrences(of: "_", with: "\\_")
     }
 
-    private static func collectionNames(in expression: SearchExpression?) -> [String] {
+    static func collectionNames(in expression: SearchExpression?) -> [String] {
         guard let expression else { return [] }
 
         switch expression {

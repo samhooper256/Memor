@@ -71,4 +71,282 @@ extension AppDatabase {
 
         return evaluate(expression)
     }
+
+    /// One search expression shared by every stack whose search parses to it
+    /// (identical and empty searches collapse into a single group), so each
+    /// scan target is read once per refresh instead of once per stack.
+    private struct StackCountGroup {
+        let expression: SearchExpression?
+        var stackIDs: [Int64]
+    }
+
+    private struct GroupCountTotals {
+        var blue = 0
+        var red = 0
+        var green = 0
+        var magenta = 0
+
+        mutating func add(_ counts: QueryCategoryCounts) {
+            blue += counts.blueQueryCount
+            red += counts.redQueryCount
+            green += counts.greenQueryCount
+            magenta += counts.magentaQueryCount
+        }
+
+        var stackQueryCounts: StackQueryCounts {
+            StackQueryCounts(
+                blueQueryCount: blue,
+                redQueryCount: red,
+                greenQueryCount: green,
+                magentaQueryCount: magenta
+            )
+        }
+    }
+
+    func refreshStackQueryCounts() throws -> [Int64: StackQueryCounts?] {
+        let startOfTomorrowTimestamp = TimeZoneSettings.shared.startOfTomorrowTimestamp()
+        let countsByStackID = try dbQueue.write { db -> [Int64: StackQueryCounts?] in
+            let countsByStackID = try computeAllStackQueryCounts(
+                db: db,
+                startOfTomorrowTimestamp: startOfTomorrowTimestamp
+            )
+
+            try db.execute(
+                sql: """
+                    UPDATE globals
+                    SET value = ?
+                    WHERE name = ?
+                    """,
+                arguments: [
+                    String(Int(Date().timeIntervalSince1970)),
+                    "stacks_last_updated_timestamp"
+                ]
+            )
+
+            return countsByStackID
+        }
+
+        #if DEBUG
+        do {
+            let legacyCountsByStackID = try legacyRefreshStackQueryCounts()
+            if legacyCountsByStackID != countsByStackID {
+                print("⚠️ Stack count parity mismatch — batched: \(countsByStackID), legacy: \(legacyCountsByStackID)")
+            }
+        } catch {
+            print("⚠️ Stack count parity oracle failed: \(error)")
+        }
+        #endif
+
+        return countsByStackID
+    }
+
+    private func computeAllStackQueryCounts(
+        db: Database,
+        startOfTomorrowTimestamp: Int64
+    ) throws -> [Int64: StackQueryCounts?] {
+        let stackRows = try Row.fetchAll(db, sql: "SELECT id, search FROM stack")
+        let typeInfos = try fetchInstanceSearchTypeInfos(db: db)
+
+        var countsByStackID: [Int64: StackQueryCounts?] = [:]
+        var groups: [StackCountGroup] = []
+        var groupIndexByExpression: [SearchExpression?: Int] = [:]
+        var validatedCollectionNames: Set<String> = []
+
+        for stackRow in stackRows {
+            let stackID: Int64 = stackRow["id"]
+            let search: String = stackRow["search"] ?? ""
+            do {
+                let parsedQuery = try parseQuerySearchQuery(search)
+                let unvalidatedNames = Self.collectionNames(in: parsedQuery.expression)
+                    .filter { !validatedCollectionNames.contains($0) }
+                try validateCollectionSearchComponents(unvalidatedNames, db: db)
+                validatedCollectionNames.formUnion(unvalidatedNames)
+
+                if let groupIndex = groupIndexByExpression[parsedQuery.expression] {
+                    groups[groupIndex].stackIDs.append(stackID)
+                } else {
+                    groupIndexByExpression[parsedQuery.expression] = groups.count
+                    groups.append(StackCountGroup(expression: parsedQuery.expression, stackIDs: [stackID]))
+                }
+            } catch {
+                // A stack whose search fails to parse or references a missing
+                // collection gets nil counts and is excluded from the batches,
+                // so it cannot poison the other stacks' refresh.
+                countsByStackID[stackID] = nil as StackQueryCounts?
+            }
+        }
+
+        let groupCounts = try computeQueryCountGroups(
+            db: db,
+            groups: groups.map(\.expression),
+            typeInfos: typeInfos,
+            startOfTomorrowTimestamp: startOfTomorrowTimestamp
+        )
+        for (group, counts) in zip(groups, groupCounts) {
+            for stackID in group.stackIDs {
+                countsByStackID[stackID] = counts
+            }
+        }
+
+        return countsByStackID
+    }
+
+    /// Computes the four color-bucket counts for every expression in `groups`,
+    /// scanning each type table at most once for all groups combined.
+    func computeQueryCountGroups(
+        db: Database,
+        groups: [SearchExpression?],
+        typeInfos: [InstanceSearchTypeInfo],
+        startOfTomorrowTimestamp: Int64
+    ) throws -> [StackQueryCounts] {
+        var totals = [GroupCountTotals](repeating: GroupCountTotals(), count: groups.count)
+
+        for typeInfo in typeInfos {
+            var includedGroups: [(groupIndex: Int, sql: String, arguments: StatementArguments)] = []
+            for (groupIndex, expression) in groups.enumerated() {
+                switch Self.staticTruthValue(
+                    of: expression,
+                    typeName: typeInfo.typeName,
+                    newIsAlwaysFalse: false
+                ) {
+                case .some(false):
+                    continue
+                case .some(true):
+                    includedGroups.append((groupIndex, "1", StatementArguments()))
+                case .none:
+                    let condition = makeQuerySearchConditions(
+                        tableAlias: "instance_table",
+                        typeName: typeInfo.typeName,
+                        fieldIndices: typeInfo.allFieldIndices,
+                        expression: expression
+                    )
+                    includedGroups.append((groupIndex, condition.sql, condition.arguments))
+                }
+            }
+
+            try addBatchedCategoryCounts(
+                db: db,
+                fromClause: """
+                    FROM "type\(typeInfo.typeID)" AS instance_table
+                    JOIN query
+                        ON query.instance_id = instance_table.id
+                    """,
+                srsAlias: "query",
+                includedGroups: includedGroups,
+                startOfTomorrowTimestamp: startOfTomorrowTimestamp,
+                totals: &totals
+            )
+        }
+
+        for (groupIndex, expression) in groups.enumerated() {
+            let parsedQuery = QuerySearchQuery(expression: expression)
+
+            if Self.staticTruthValue(
+                of: expression,
+                typeName: POINTMAP_TYPE_NAME,
+                newIsAlwaysFalse: true
+            ) != false {
+                totals[groupIndex].add(try fetchPointMapQueryCategoryCounts(
+                    db: db,
+                    parsedQuery: parsedQuery,
+                    startOfTomorrowTimestamp: startOfTomorrowTimestamp
+                ))
+            }
+
+            if Self.staticTruthValue(
+                of: expression,
+                typeName: BOUNDARYMAP_TYPE_NAME,
+                newIsAlwaysFalse: true
+            ) != false {
+                totals[groupIndex].add(try fetchBoundaryMapQueryCategoryCounts(
+                    db: db,
+                    parsedQuery: parsedQuery,
+                    startOfTomorrowTimestamp: startOfTomorrowTimestamp
+                ))
+            }
+        }
+
+        return totals.map(\.stackQueryCounts)
+    }
+
+    /// Runs one statement (or a few, if SQLite limits force chunking) over
+    /// `fromClause`, computing each row's color bucket once and a 0/1 match
+    /// flag per group, and adds the 4-per-group SUM results into `totals`.
+    /// `srsAlias` is the alias exposing `interval` and `last_answered_timestamp`.
+    private func addBatchedCategoryCounts(
+        db: Database,
+        fromClause: String,
+        srsAlias: String,
+        includedGroups: [(groupIndex: Int, sql: String, arguments: StatementArguments)],
+        startOfTomorrowTimestamp: Int64,
+        totals: inout [GroupCountTotals]
+    ) throws {
+        guard !includedGroups.isEmpty else { return }
+
+        // Stay far below SQLite's bound-parameter and result-column limits.
+        // All condition arguments are positional, so the placeholder count in
+        // the SQL text is exactly the argument count.
+        let maxArgumentsPerStatement = 500
+        let maxGroupsPerStatement = 120
+
+        var chunk: [(groupIndex: Int, sql: String, arguments: StatementArguments)] = []
+        var chunkArgumentCount = 0
+
+        func flushChunk() throws {
+            guard !chunk.isEmpty else { return }
+
+            var matchColumns: [String] = []
+            var sumColumns: [String] = []
+            var arguments = StatementArguments([startOfTomorrowTimestamp, startOfTomorrowTimestamp])
+            for (chunkIndex, group) in chunk.enumerated() {
+                matchColumns.append("(\(group.sql)) AS m\(chunkIndex)")
+                for bucket in 0...3 {
+                    sumColumns.append("COALESCE(SUM(CASE WHEN m\(chunkIndex) AND bucket = \(bucket) THEN 1 ELSE 0 END), 0)")
+                }
+                arguments += group.arguments
+            }
+
+            let sql = """
+                SELECT
+                    \(sumColumns.joined(separator: ",\n        "))
+                FROM (
+                    SELECT
+                        CASE
+                            WHEN \(srsAlias).interval = 0 THEN 0
+                            WHEN \(srsAlias).interval <= \(QUERY_STARTER_DELAY_GOOD) THEN 1
+                            WHEN \(srsAlias).last_answered_timestamp + \(srsAlias).interval < ? THEN 2
+                            WHEN \(srsAlias).last_answered_timestamp + \(srsAlias).interval >= ? THEN 3
+                            ELSE -1
+                        END AS bucket,
+                        \(matchColumns.joined(separator: ",\n            "))
+                    \(fromClause)
+                )
+                """
+
+            guard let row = try Row.fetchOne(db, sql: sql, arguments: arguments) else {
+                throw DatabaseError(message: "Failed to fetch batched stack query counts.")
+            }
+            for (chunkIndex, group) in chunk.enumerated() {
+                totals[group.groupIndex].blue += row[chunkIndex * 4]
+                totals[group.groupIndex].red += row[chunkIndex * 4 + 1]
+                totals[group.groupIndex].green += row[chunkIndex * 4 + 2]
+                totals[group.groupIndex].magenta += row[chunkIndex * 4 + 3]
+            }
+
+            chunk = []
+            chunkArgumentCount = 0
+        }
+
+        for group in includedGroups {
+            let argumentCount = group.sql.count(where: { $0 == "?" })
+            if !chunk.isEmpty,
+               chunk.count >= maxGroupsPerStatement
+                || chunkArgumentCount + argumentCount > maxArgumentsPerStatement {
+                try flushChunk()
+            }
+            chunk.append(group)
+            chunkArgumentCount += argumentCount
+        }
+        try flushChunk()
+    }
 }
