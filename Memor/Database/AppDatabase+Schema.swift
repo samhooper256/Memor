@@ -89,6 +89,11 @@ extension AppDatabase {
                 ) STRICT
                 """)
 
+            try db.execute(sql: """
+                CREATE INDEX IF NOT EXISTS idx_instance_collection_instance
+                    ON instance_id_collection_id(instance_id, collection_id)
+                """)
+
             // Directed edges between instances of a Node type. Cascades clean up
             // edges when either endpoint instance, or the link field, is deleted.
             try db.execute(sql: """
