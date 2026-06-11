@@ -257,6 +257,14 @@ enum MemorMCPTools {
                 maxInterval: try arguments.optionalInt64("max_interval"),
                 appDatabase: appDatabase
             ))
+        case "render_query":
+            return try jsonResult(renderQuery(
+                instanceID: try arguments.requireInt64("instance_id"),
+                queryTypeID: try arguments.optionalInt64("query_type_id"),
+                appDatabase: appDatabase
+            ))
+        case "describe_search_syntax":
+            return try jsonResult(SearchSyntaxDTO(documentation: searchSyntaxDocumentation))
 
         // Stacks
         case "list_stacks":
@@ -1034,6 +1042,116 @@ enum MemorMCPTools {
         try appDatabase.searchQueries(query: query).map(QuerySearchSectionDTO.init)
     }
 
+    // MARK: - Rendering & docs tools
+
+    private static func renderQuery(
+        instanceID: Int64,
+        queryTypeID: Int64?,
+        appDatabase: AppDatabase
+    ) throws -> RenderedQueryDTO {
+        let query: StudyQuery
+        if let queryTypeID {
+            query = try appDatabase.fetchQueryPreview(instanceID: instanceID, queryTypeID: queryTypeID)
+        } else {
+            query = try appDatabase.fetchFirstQueryPreview(instanceID: instanceID)
+        }
+
+        switch query.kind {
+        case .standard:
+            return RenderedQueryDTO(
+                kind: "standard",
+                instanceID: query.instanceID,
+                typeName: query.typeName,
+                queryTypeID: query.queryTypeID,
+                queryTypeName: query.queryTypeName,
+                questionHTML: try buildRenderedQuestionHTML(appDatabase: appDatabase, query: query),
+                answerHTML: try buildRenderedAnswerHTML(appDatabase: appDatabase, query: query),
+                instanceTitle: nil,
+                point: nil,
+                showAllPointsInQuestion: nil,
+                boundary: nil,
+                showAllBoundariesInQuestion: nil
+            )
+        case .pointMap:
+            guard let payload = query.pointMapPayload else {
+                throw MemorMCPToolError(message: "PointMap query payload missing.")
+            }
+            let point = payload.points.first(where: { $0.id == payload.pointID })
+            return RenderedQueryDTO(
+                kind: "pointmap",
+                instanceID: query.instanceID,
+                typeName: query.typeName,
+                queryTypeID: query.queryTypeID,
+                queryTypeName: query.queryTypeName,
+                questionHTML: nil,
+                answerHTML: nil,
+                instanceTitle: payload.instanceTitle,
+                point: point.map { RenderedPointDTO(id: $0.id, name: $0.name, latitude: $0.latitude, longitude: $0.longitude) },
+                showAllPointsInQuestion: payload.showAllPointsInQuestion,
+                boundary: nil,
+                showAllBoundariesInQuestion: nil
+            )
+        case .boundaryMap:
+            guard let payload = query.boundaryMapPayload else {
+                throw MemorMCPToolError(message: "BoundaryMap query payload missing.")
+            }
+            return RenderedQueryDTO(
+                kind: "boundarymap",
+                instanceID: query.instanceID,
+                typeName: query.typeName,
+                queryTypeID: query.queryTypeID,
+                queryTypeName: query.queryTypeName,
+                questionHTML: nil,
+                answerHTML: nil,
+                instanceTitle: payload.instanceTitle,
+                point: nil,
+                showAllPointsInQuestion: nil,
+                boundary: RenderedBoundaryDTO(
+                    attachmentID: payload.attachmentID,
+                    boundaryID: payload.boundaryID,
+                    name: payload.boundaryName
+                ),
+                showAllBoundariesInQuestion: payload.showAllBoundariesInQuestion
+            )
+        }
+    }
+
+    // Mirrors the in-app search help windows (Windows/SearchHelpWindowView.swift);
+    // keep the two in sync when the grammar changes.
+    private static let searchSyntaxDocumentation = """
+        Memor has two search languages used by the MCP tools:
+
+        1. INSTANCE SEARCH — used by search_instances. Matches instances of every type, \
+        including PointMap and BoundaryMap instances.
+        2. QUERY SEARCH — used by search_queries, reset_due_dates' `search`, and Stack \
+        `search` expressions. Matches individual studyable queries (flashcards). A Stack \
+        is exactly a saved query search: a Stack's search text returns precisely that \
+        Stack's queries.
+
+        Shared syntax (both languages):
+        - Components are separated by spaces and combined with AND. An empty search matches everything.
+        - literal:text — match items with a field containing text (case-insensitive substring). \
+        A bare word with no prefix works the same way.
+        - type:name — restrict to items of the named type.
+        - collection:name (or col:name) — restrict to items in the named collection.
+        - id:number — restrict to the single instance with this ID.
+        - OR — match if either neighboring component matches (e.g. type:Term OR type:Concept).
+        - NOT — exclude whatever the following component matches (e.g. NOT col:Archived).
+        - ( … ) — group components to control how OR and AND combine.
+        - Double quotes wrap a component containing spaces: "literal:hi there".
+
+        Instance search only:
+        - :noqueries — match only instances that have no query types enabled.
+
+        Query search only:
+        - :new — match only queries that are new (never studied).
+
+        Examples:
+        - type:Term col:Math — Term instances in the Math collection (or, in query search, their queries).
+        - (col:Math OR col:Physics) :new — new queries in either collection.
+        - "literal:Pythagorean theorem" NOT type:Proof — items containing the phrase, excluding Proof instances.
+        """
+
     // MARK: - SRS maintenance tools
 
     private static func parseQueryPairs(_ items: [[String: Value]], argumentLabel: String) throws -> [(instanceID: Int64, queryTypeID: Int64)] {
@@ -1759,6 +1877,23 @@ enum MemorMCPTools {
                     "required": .array([.string("instance_id")])
                 ])
             ),
+            Tool(
+                name: "render_query",
+                description: "Render a flashcard exactly as the user will see it. For Object/Node queries, returns the final question_html and answer_html with field values substituted, the global template applied, and CSS inlined. For PointMap/BoundaryMap instances, pass a point/attachment ID as query_type_id and the result describes the map card (highlighted point or boundary) instead of HTML. Omit query_type_id to render the instance's first query.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "instance_id": int64Number,
+                        "query_type_id": int64Number
+                    ]),
+                    "required": .array([.string("instance_id")])
+                ])
+            ),
+            Tool(
+                name: "describe_search_syntax",
+                description: "Get full documentation for Memor's search query languages: instance search (search_instances) and query search (search_queries, reset_due_dates, and Stack search expressions).",
+                inputSchema: .object(["type": .string("object"), "properties": .object([:])])
+            ),
 
             Tool(
                 name: "list_stacks",
@@ -1908,6 +2043,40 @@ private struct BoundarySetDTO: Encodable {
 private struct BoundaryDTO: Encodable {
     let id: Int64
     let name: String
+}
+
+private struct RenderedPointDTO: Encodable {
+    let id: Int64
+    let name: String
+    let latitude: Double
+    let longitude: Double
+}
+
+private struct RenderedBoundaryDTO: Encodable {
+    let attachmentID: Int64
+    let boundaryID: Int64
+    let name: String
+}
+
+private struct RenderedQueryDTO: Encodable {
+    let kind: String
+    let instanceID: Int64
+    let typeName: String
+    let queryTypeID: Int64
+    let queryTypeName: String
+    // Standard (object/node) queries only.
+    let questionHTML: String?
+    let answerHTML: String?
+    // Map queries only.
+    let instanceTitle: String?
+    let point: RenderedPointDTO?
+    let showAllPointsInQuestion: Bool?
+    let boundary: RenderedBoundaryDTO?
+    let showAllBoundariesInQuestion: Bool?
+}
+
+private struct SearchSyntaxDTO: Encodable {
+    let documentation: String
 }
 
 private struct InstanceFieldValueDTO: Encodable {
