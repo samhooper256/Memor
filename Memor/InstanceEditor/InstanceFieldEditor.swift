@@ -252,6 +252,7 @@ struct InstanceTextView: NSViewRepresentable {
 
         let textView = CommandAwareTextView()
         textView.delegate = context.coordinator
+        textView.allowsUndo = true
         textView.drawsBackground = false
         textView.isRichText = false
         textView.isAutomaticTextReplacementEnabled = false
@@ -295,6 +296,9 @@ struct InstanceTextView: NSViewRepresentable {
 
         if textView.string != text {
             textView.string = text
+            // External reset (instance load, save-and-clear, type change) invalidates
+            // undo entries' ranges into the old text.
+            textView.undoManager?.removeAllActions()
             context.coordinator.applySyntaxHighlighting()
             if let layoutManager = textView.layoutManager, let textContainer = textView.textContainer {
                 layoutManager.invalidateLayout(forCharacterRange: NSRange(location: 0, length: (text as NSString).length), actualCharacterRange: nil)
