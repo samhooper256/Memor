@@ -65,6 +65,64 @@ struct AddInstanceTabBar: View {
     @State private var isNewTabHovered = false
 }
 
+/// Window-scoped monitor for the Add Instance window's fixed tab shortcuts:
+/// ⌘1–⌘9 select a tab, ⌘W closes the current one. Intentionally non-customizable
+/// (like Escape/arrows). ⌘digits are consumed even when out of range so the
+/// app-level Navigate menu's ⌘1–⌘5 can't fire while this window is key; ⌘W is
+/// consumed so the default File ▸ Close can't bypass the tab-close flow.
+/// Mounted in AddInstanceWindowView, outside the per-tab editor subtree, so the
+/// monitor survives tab switches; the Edit Instance window is unaffected.
+struct AddInstanceTabKeyHandler: NSViewRepresentable {
+    let onSelectTabIndex: (Int) -> Void
+    let onCloseCurrentTab: () -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = MonitorView()
+        view.onSelectTabIndex = onSelectTabIndex
+        view.onCloseCurrentTab = onCloseCurrentTab
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        guard let monitorView = nsView as? MonitorView else { return }
+        monitorView.onSelectTabIndex = onSelectTabIndex
+        monitorView.onCloseCurrentTab = onCloseCurrentTab
+    }
+
+    final class MonitorView: NSView {
+        var onSelectTabIndex: ((Int) -> Void)?
+        var onCloseCurrentTab: (() -> Void)?
+        private var monitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if monitor == nil, window != nil {
+                monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                    guard let self, let window = self.window, event.window === window else { return event }
+                    let modifierFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                    guard modifierFlags == [.command],
+                          let characters = event.charactersIgnoringModifiers else {
+                        return event
+                    }
+                    if characters.lowercased() == "w" {
+                        self.onCloseCurrentTab?()
+                        return nil
+                    }
+                    if let digit = Int(characters), (1...9).contains(digit) {
+                        self.onSelectTabIndex?(digit - 1)
+                        return nil
+                    }
+                    return event
+                }
+            }
+        }
+
+        deinit {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+        }
+    }
+}
+
 private struct AddInstanceTabChip: View {
     // Observed directly so the title updates live while the user types in the
     // draft's first field (the window state's objectWillChange doesn't fire for

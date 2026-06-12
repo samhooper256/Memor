@@ -210,6 +210,18 @@ struct AddInstanceWindowView: View {
         .onAppear {
             windowState.ensureAtLeastOneTab()
         }
+        .background {
+            AddInstanceTabKeyHandler(
+                onSelectTabIndex: { index in
+                    guard windowState.drafts.indices.contains(index) else { return }
+                    selectTab(windowState.drafts[index].id)
+                },
+                onCloseCurrentTab: {
+                    guard let id = windowState.selectedDraftID else { return }
+                    requestCloseTab(id)
+                }
+            )
+        }
     }
 
     private func selectTab(_ id: UUID) {
