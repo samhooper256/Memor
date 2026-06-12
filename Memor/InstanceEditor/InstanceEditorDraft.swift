@@ -31,6 +31,7 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
 
     @Published var selectedTypeIsPointMap = false
     @Published var selectedTypeIsBoundaryMap = false
+    @Published var selectedTypeName: String?
 
     // MARK: Core editing state
 
@@ -157,25 +158,25 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
     }
 
     /// Tab label: the first display field's content (raw HTML, shown as-is),
-    /// condensed to one line and capped at 64 characters; "(no FieldName)" when empty.
+    /// condensed to one line and capped at 64 characters; "New TypeName" while empty.
     var tabTitle: String {
         let raw: String
-        let fallbackName: String
         if selectedTypeIsPointMap {
             raw = pointMapTitle
-            fallbackName = "Title"
         } else if selectedTypeIsBoundaryMap {
             raw = boundaryMapTitle
-            fallbackName = "Title"
         } else if let firstField = fields.first {
             raw = fieldValues[firstField.id] ?? ""
-            fallbackName = firstField.name
         } else {
-            return "New Instance"
+            raw = ""
         }
         let condensed = raw
             .replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return condensed.isEmpty ? "(no \(fallbackName))" : String(condensed.prefix(64))
+        if condensed.isEmpty {
+            guard let selectedTypeName else { return "New Instance" }
+            return "New \(selectedTypeName)"
+        }
+        return String(condensed.prefix(64))
     }
 }

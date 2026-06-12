@@ -81,11 +81,12 @@ struct InstanceEditorWindowView: View {
         selectedType?.isNode ?? false
     }
 
-    /// Mirrors the selected type's map-kind onto the draft so it can compute
-    /// isDirty/tabTitle without access to the window-level `types` list.
+    /// Mirrors the selected type's map-kind and name onto the draft so it can
+    /// compute isDirty/tabTitle without access to the window-level `types` list.
     private func syncDraftTypeFlags() {
         draft.selectedTypeIsPointMap = isPointMapSelected
         draft.selectedTypeIsBoundaryMap = isBoundaryMapSelected
+        draft.selectedTypeName = selectedType?.name
     }
 
     private var linkCountsAreValid: Bool {
