@@ -117,10 +117,13 @@ struct AddInstanceWindowView: View {
 
     let appDatabase: AppDatabase
 
+    @StateObject private var draft = InstanceEditorDraft()
+
     var body: some View {
         InstanceEditorWindowView(
             appDatabase: appDatabase,
             mode: .add,
+            draft: draft,
             requestedTypeID: windowState.requestedTypeID,
             requestedInstanceID: nil,
             requestedDuplicateSourceInstanceID: windowState.requestedDuplicateSourceInstanceID,
@@ -143,10 +146,13 @@ struct EditInstanceWindowView: View {
 
     let appDatabase: AppDatabase
 
+    @StateObject private var draft = InstanceEditorDraft()
+
     var body: some View {
         InstanceEditorWindowView(
             appDatabase: appDatabase,
             mode: .edit,
+            draft: draft,
             requestedTypeID: nil,
             requestedInstanceID: windowState.requestedInstanceID,
             requestedAutoEditPointID: windowState.requestedAutoEditPointID,

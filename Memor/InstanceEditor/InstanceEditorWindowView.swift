@@ -25,6 +25,7 @@ struct InstanceEditorWindowView: View {
 
     let appDatabase: AppDatabase
     let mode: InstanceEditorMode
+    @ObservedObject var draft: InstanceEditorDraft
     let requestedTypeID: Int64?
     let requestedInstanceID: Int64?
     var requestedDuplicateSourceInstanceID: Int64? = nil
@@ -36,30 +37,13 @@ struct InstanceEditorWindowView: View {
     let onTypeChanged: ((Int64) -> Void)?
 
     @State private var types: [FlashcardType] = []
-    @State private var selectedTypeID: Int64?
-    @State private var loadedTypeID: Int64?
-    @State private var loadedInstanceID: Int64?
-    @State private var fields: [TypeField] = []
-    @State private var queryTypes: [QueryType] = []
-    @State private var selectedQueryTypeIDs: Set<Int64> = []
-    @State private var queryIntervalsByQueryTypeID: [Int64: Int64] = [:]
-    @State private var fieldValues: [Int64: String] = [:]
     @State private var toast: ToastMessage?
     @State private var toastTask: Task<Void, Never>?
     @State private var allCollectionItems: [CollectionChecklistItem] = []
-    @State private var selectedCollectionIDs: Set<Int64> = []
     @State private var collectionSearchQuery = ""
-    @State private var stickyFieldIDs: Set<Int64> = []
-    @State private var maxIntervalText: String = ""
-    @State private var showAdvanced: Bool = false
     @StateObject private var focusController = AddInstanceFieldFocusController()
     @StateObject private var hyperlinkSearchController = HyperlinkSearchController()
     @StateObject private var typePickerController = TypePickerController()
-
-    // Node-type-specific state
-    @State private var linkFields: [LinkField] = []
-    @State private var linkTargetsByLinkFieldID: [Int64: [Int64]] = [:]
-    @State private var nodeSummariesByID: [Int64: String] = [:]
 
     // Deletion confirmations for the map query lists
     @State private var pendingPointMapDeletion: Set<PointMapEntryRef> = []
@@ -70,73 +54,20 @@ struct InstanceEditorWindowView: View {
     // Confirmation for deleting the whole instance being edited (edit mode only).
     @State private var isInstanceDeletionConfirmationPresented = false
 
-    // PointMap-specific state
-    @State private var pointMapTitle: String = ""
-    @State private var pointMapCameraPosition: MapCameraPosition = .region(
-        MKCoordinateRegion(
-            center: CLLocationCoordinate2D(latitude: 0, longitude: 0),
-            span: MKCoordinateSpan(latitudeDelta: 90, longitudeDelta: 90)
-        )
-    )
-    @State private var pointMapCurrentRegion: MKCoordinateRegion = MKCoordinateRegion(
-        center: CLLocationCoordinate2D(latitude: 0, longitude: 0),
-        span: MKCoordinateSpan(latitudeDelta: 90, longitudeDelta: 90)
-    )
-    @State private var pointMapExistingPoints: [PointMapPoint] = []
-    @State private var pointMapNewPoints: [PointMapPointDraftEntry] = []
+    // Transient map presentation state (per-mounted-editor; per-instance map data lives on the draft)
     @State private var pointMapHoveredEntryID: String?
     @State private var pointMapMapSelection: String?
     @State private var pointMapListSelection: Set<PointMapEntryRef> = []
     @State private var boundaryMapListSelection: Set<BoundaryMapEntryRef> = []
-    @State private var pointMapSortMode: PointMapSortMode = .creation
-    @State private var pointMapShowAdvanced: Bool = false
-    @State private var pointMapExplicitLat: String = ""
-    @State private var pointMapExplicitLng: String = ""
-    @State private var pointMapExplicitZoom: String = ""
-    @State private var pointMapShowAllPointsInQuestion: Bool = true
-    @State private var pointMapApplyCurrentViewport: Bool = false
-    @State private var pointMapLoadedDefaultCenterLat: Double?
-    @State private var pointMapLoadedDefaultCenterLng: Double?
-    @State private var pointMapLoadedDefaultZoom: Double?
     @StateObject private var pointMapPointController = AddPointPopupController()
     @State private var closeInterceptor = InstanceEditorCloseInterceptor()
-    @StateObject private var boundaryPickerState = BoundaryPickerState()
     @State private var isBoundaryPickerPresented = false
-    @State private var pointMapBoundaryGeometries: [BoundaryGeometry] = []
     @State private var isIDCopyButtonHovered = false
-
-    // BoundaryMap-specific state
-    @State private var boundaryMapTitle: String = ""
-    @State private var boundaryMapCameraPosition: MapCameraPosition = .region(
-        MKCoordinateRegion(
-            center: CLLocationCoordinate2D(latitude: 0, longitude: 0),
-            span: MKCoordinateSpan(latitudeDelta: 90, longitudeDelta: 90)
-        )
-    )
-    @State private var boundaryMapCurrentRegion: MKCoordinateRegion = MKCoordinateRegion(
-        center: CLLocationCoordinate2D(latitude: 0, longitude: 0),
-        span: MKCoordinateSpan(latitudeDelta: 90, longitudeDelta: 90)
-    )
-    @State private var boundaryMapExistingAttachments: [BoundaryMapAttachedBoundary] = []
-    @State private var boundaryMapNewAttachments: [BoundaryMapAttachmentDraft] = []
-    @State private var boundaryMapDeletedExistingIDs: Set<Int64> = []
-    @State private var boundaryMapSortMode: BoundaryMapSortMode = .creation
-    @State private var boundaryMapShowAdvanced: Bool = false
-    @State private var boundaryMapExplicitLat: String = ""
-    @State private var boundaryMapExplicitLng: String = ""
-    @State private var boundaryMapExplicitZoom: String = ""
-    @State private var boundaryMapShowAllBoundariesInQuestion: Bool = true
-    @State private var boundaryMapApplyCurrentViewport: Bool = false
-    @State private var boundaryMapLoadedDefaultCenterLat: Double?
-    @State private var boundaryMapLoadedDefaultCenterLng: Double?
-    @State private var boundaryMapLoadedDefaultZoom: Double?
-    @StateObject private var boundaryMapPickerState = BoundaryPickerState()
     @State private var isBoundaryMapPickerPresented = false
-    @State private var boundaryMapGeometries: [BoundaryGeometry] = []
 
     private var selectedType: FlashcardType? {
-        guard let selectedTypeID else { return nil }
-        return types.first(where: { $0.id == selectedTypeID })
+        guard let selectedTypeID = draft.selectedTypeID else { return nil }
+        return types.first(where: { $0.id == draft.selectedTypeID })
     }
 
     private var isPointMapSelected: Bool {
@@ -154,8 +85,8 @@ struct InstanceEditorWindowView: View {
     }
 
     private var linkCountsAreValid: Bool {
-        for linkField in linkFields {
-            let count = linkTargetsByLinkFieldID[linkField.id]?.count ?? 0
+        for linkField in draft.linkFields {
+            let count = draft.linkTargetsByLinkFieldID[linkField.id]?.count ?? 0
             if count < linkField.minCount { return false }
             if let maxCount = linkField.maxCount, count > maxCount { return false }
         }
@@ -163,14 +94,14 @@ struct InstanceEditorWindowView: View {
     }
 
     private var canSubmit: Bool {
-        guard selectedTypeID != nil else { return false }
+        guard draft.selectedTypeID != nil else { return false }
         if isPointMapSelected {
-            return !pointMapTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return !draft.pointMapTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
         if isBoundaryMapSelected {
-            return !boundaryMapTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return !draft.boundaryMapTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
-        let hasFieldValue = fieldValues.values.contains {
+        let hasFieldValue = draft.fieldValues.values.contains {
             !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
         if isNodeTypeSelected {
@@ -211,13 +142,13 @@ struct InstanceEditorWindowView: View {
             editorPanels
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-            if !isPointMapSelected && !isBoundaryMapSelected && selectedTypeID != nil {
+            if !isPointMapSelected && !isBoundaryMapSelected && draft.selectedTypeID != nil {
                 advancedSection
                     .padding(.top, 12)
             }
 
             HStack {
-                if mode == .edit, loadedInstanceID != nil {
+                if mode == .edit, draft.loadedInstanceID != nil {
                     Button("Delete", role: .destructive) {
                         isInstanceDeletionConfirmationPresented = true
                     }
@@ -253,7 +184,7 @@ struct InstanceEditorWindowView: View {
         .task {
             await loadInitialData()
         }
-        .onChange(of: selectedTypeID) { _, newValue in
+        .onChange(of: draft.selectedTypeID) { _, newValue in
             guard mode == .add else { return }
             if let newValue {
                 onTypeChanged?(newValue)
@@ -297,7 +228,7 @@ struct InstanceEditorWindowView: View {
     }
 
     private var selectedTypeName: String {
-        if let selectedTypeID, let type = types.first(where: { $0.id == selectedTypeID }) {
+        if let selectedTypeID = draft.selectedTypeID, let type = types.first(where: { $0.id == draft.selectedTypeID }) {
             return type.name
         }
         return "No Type Selected"
@@ -318,9 +249,9 @@ struct InstanceEditorWindowView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                if mode == .edit, let loadedInstanceID {
+                if mode == .edit, let loadedInstanceID = draft.loadedInstanceID {
                     HStack(spacing: 8) {
-                        Text("ID: \(loadedInstanceID)")
+                        Text("ID: \(draft.loadedInstanceID)")
                             .font(.system(.body, design: .monospaced))
                             .textSelection(.enabled)
 
@@ -394,7 +325,7 @@ struct InstanceEditorWindowView: View {
             HStack(spacing: 6) {
                 Text("Name:")
                     .font(.subheadline)
-                TextField("", text: $pointMapTitle)
+                TextField("", text: $draft.pointMapTitle)
                     .textFieldStyle(.roundedBorder)
             }
 
@@ -402,9 +333,9 @@ struct InstanceEditorWindowView: View {
                 Text("Boundaries:")
                     .font(.subheadline)
                 SelectedBoundariesStrip(
-                    boundaries: boundaryPickerState.selectedBoundaries,
+                    boundaries: draft.boundaryPickerState.selectedBoundaries,
                     onRemove: { id in
-                        boundaryPickerState.selectedIDs.remove(id)
+                        draft.boundaryPickerState.selectedIDs.remove(id)
                         refreshBoundaryGeometries()
                     },
                     onAddTapped: { isBoundaryPickerPresented = true },
@@ -412,7 +343,7 @@ struct InstanceEditorWindowView: View {
                 )
                 .popover(isPresented: $isBoundaryPickerPresented, arrowEdge: .bottom) {
                     BoundaryPickerPopoverView(
-                        state: boundaryPickerState,
+                        state: draft.boundaryPickerState,
                         appDatabase: appDatabase,
                         onManage: {
                             isBoundaryPickerPresented = false
@@ -420,14 +351,14 @@ struct InstanceEditorWindowView: View {
                         }
                     )
                 }
-                .onChange(of: boundaryPickerState.selectedIDs) { _, _ in
+                .onChange(of: draft.boundaryPickerState.selectedIDs) { _, _ in
                     refreshBoundaryGeometries()
                 }
             }
 
             MapReader { proxy in
                 ZStack {
-                    Map(position: $pointMapCameraPosition, selection: $pointMapMapSelection) {
+                    Map(position: $draft.pointMapCameraPosition, selection: $pointMapMapSelection) {
                         ForEach(pointMapDisplayPoints, id: \.id) { entry in
                             Annotation("", coordinate: CLLocationCoordinate2D(latitude: entry.latitude, longitude: entry.longitude)) {
                                 MapPointMarker(
@@ -447,7 +378,7 @@ struct InstanceEditorWindowView: View {
                             }
                             .tag(entry.id)
                         }
-                        ForEach(pointMapBoundaryGeometries) { geo in
+                        ForEach(draft.pointMapBoundaryGeometries) { geo in
                             ForEach(Array(geo.geometry.rings.enumerated()), id: \.offset) { _, polygonRings in
                                 if let outer = polygonRings.first, outer.count >= 3 {
                                     MapPolygon(coordinates: outer.map(\.clLocation))
@@ -458,7 +389,7 @@ struct InstanceEditorWindowView: View {
                         }
                     }
                     .onMapCameraChange(frequency: .continuous) { context in
-                        pointMapCurrentRegion = context.region
+                        draft.pointMapCurrentRegion = context.region
                         pointMapSyncExplicitFieldsFromRegion()
                     }
 
@@ -478,34 +409,34 @@ struct InstanceEditorWindowView: View {
                     .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
             }
 
-            Toggle(isOn: $pointMapShowAllPointsInQuestion) {
+            Toggle(isOn: $draft.pointMapShowAllPointsInQuestion) {
                 Text("Show all points in the question side of each query")
                     .font(.subheadline)
             }
             .toggleStyle(.checkbox)
 
             if mode == .edit {
-                Toggle(isOn: $pointMapApplyCurrentViewport) {
+                Toggle(isOn: $draft.pointMapApplyCurrentViewport) {
                     Text("Set each query's default map location and zoom to current")
                         .font(.subheadline)
                 }
                 .toggleStyle(.checkbox)
             }
 
-            DisclosureGroup("Advanced", isExpanded: $pointMapShowAdvanced) {
+            DisclosureGroup("Advanced", isExpanded: $draft.pointMapShowAdvanced) {
                 HStack(spacing: 6) {
                     Text("Lat:")
-                    TextField("", text: $pointMapExplicitLat)
+                    TextField("", text: $draft.pointMapExplicitLat)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 90)
                         .onSubmit(applyExplicitPointMapViewport)
                     Text("Lng:")
-                    TextField("", text: $pointMapExplicitLng)
+                    TextField("", text: $draft.pointMapExplicitLng)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 90)
                         .onSubmit(applyExplicitPointMapViewport)
                     Text("Zoom:")
-                    TextField("", text: $pointMapExplicitZoom)
+                    TextField("", text: $draft.pointMapExplicitZoom)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 60)
                         .onSubmit(applyExplicitPointMapViewport)
@@ -605,7 +536,7 @@ struct InstanceEditorWindowView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Sort:")
                     .font(.subheadline)
-                Picker("", selection: $pointMapSortMode) {
+                Picker("", selection: $draft.pointMapSortMode) {
                     ForEach(PointMapSortMode.allCases, id: \.self) { mode in
                         Text(mode.displayName).tag(mode)
                     }
@@ -628,8 +559,8 @@ struct InstanceEditorWindowView: View {
 
     private var pointMapDisplayEntries: [PointMapDisplayEntry] {
         var entries: [PointMapDisplayEntry] = []
-        entries.reserveCapacity(pointMapExistingPoints.count + pointMapNewPoints.count)
-        for point in pointMapExistingPoints {
+        entries.reserveCapacity(draft.pointMapExistingPoints.count + draft.pointMapNewPoints.count)
+        for point in draft.pointMapExistingPoints {
             entries.append(PointMapDisplayEntry(
                 ref: .existing(point.id),
                 name: point.name,
@@ -639,7 +570,7 @@ struct InstanceEditorWindowView: View {
                 reverseEnabled: point.reverseEnabled
             ))
         }
-        for entry in pointMapNewPoints {
+        for entry in draft.pointMapNewPoints {
             entries.append(PointMapDisplayEntry(
                 ref: .new(entry.localID),
                 name: entry.name,
@@ -649,7 +580,7 @@ struct InstanceEditorWindowView: View {
                 reverseEnabled: entry.reverseEnabled
             ))
         }
-        switch pointMapSortMode {
+        switch draft.pointMapSortMode {
         case .creation:
             return entries
         case .alphabetical:
@@ -664,18 +595,18 @@ struct InstanceEditorWindowView: View {
     }
 
     private func pointMapSyncExplicitFieldsFromRegion() {
-        let region = pointMapCurrentRegion
-        pointMapExplicitLat = String(format: "%.6f", region.center.latitude)
-        pointMapExplicitLng = String(format: "%.6f", region.center.longitude)
+        let region = draft.pointMapCurrentRegion
+        draft.pointMapExplicitLat = String(format: "%.6f", region.center.latitude)
+        draft.pointMapExplicitLng = String(format: "%.6f", region.center.longitude)
         let latDelta = max(region.span.latitudeDelta, 0.0001)
         let zoom = log2(360.0 / latDelta)
-        pointMapExplicitZoom = String(format: "%.2f", zoom)
+        draft.pointMapExplicitZoom = String(format: "%.2f", zoom)
     }
 
     private func applyExplicitPointMapViewport() {
-        guard let lat = Double(pointMapExplicitLat.trimmingCharacters(in: .whitespacesAndNewlines)),
-              let lng = Double(pointMapExplicitLng.trimmingCharacters(in: .whitespacesAndNewlines)),
-              let zoom = Double(pointMapExplicitZoom.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+        guard let lat = Double(draft.pointMapExplicitLat.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let lng = Double(draft.pointMapExplicitLng.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let zoom = Double(draft.pointMapExplicitZoom.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             showToast(message: "Invalid viewport values.", style: .error)
             return
         }
@@ -685,59 +616,59 @@ struct InstanceEditorWindowView: View {
             center: CLLocationCoordinate2D(latitude: lat, longitude: lng),
             span: MKCoordinateSpan(latitudeDelta: delta, longitudeDelta: delta)
         )
-        pointMapCurrentRegion = region
-        pointMapCameraPosition = .region(region)
+        draft.pointMapCurrentRegion = region
+        draft.pointMapCameraPosition = .region(region)
     }
 
     private func resetPointMapState() {
-        pointMapTitle = ""
-        pointMapExistingPoints = []
-        pointMapNewPoints = []
-        pointMapSortMode = .creation
-        pointMapShowAdvanced = false
-        pointMapShowAllPointsInQuestion = true
-        pointMapApplyCurrentViewport = false
-        pointMapLoadedDefaultCenterLat = nil
-        pointMapLoadedDefaultCenterLng = nil
-        pointMapLoadedDefaultZoom = nil
+        draft.pointMapTitle = ""
+        draft.pointMapExistingPoints = []
+        draft.pointMapNewPoints = []
+        draft.pointMapSortMode = .creation
+        draft.pointMapShowAdvanced = false
+        draft.pointMapShowAllPointsInQuestion = true
+        draft.pointMapApplyCurrentViewport = false
+        draft.pointMapLoadedDefaultCenterLat = nil
+        draft.pointMapLoadedDefaultCenterLng = nil
+        draft.pointMapLoadedDefaultZoom = nil
         let defaultRegion = MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: 0, longitude: 0),
             span: MKCoordinateSpan(latitudeDelta: 90, longitudeDelta: 90)
         )
-        pointMapCurrentRegion = defaultRegion
-        pointMapCameraPosition = .region(defaultRegion)
+        draft.pointMapCurrentRegion = defaultRegion
+        draft.pointMapCameraPosition = .region(defaultRegion)
         pointMapSyncExplicitFieldsFromRegion()
-        boundaryPickerState.selectedIDs = []
-        boundaryPickerState.reload(appDatabase: appDatabase)
-        pointMapBoundaryGeometries = []
+        draft.boundaryPickerState.selectedIDs = []
+        draft.boundaryPickerState.reload(appDatabase: appDatabase)
+        draft.pointMapBoundaryGeometries = []
     }
 
     private func loadPointMapInto(instance: PointMapInstanceWithPoints) {
-        pointMapTitle = instance.instance.title
-        pointMapExistingPoints = instance.points
-        pointMapNewPoints = []
-        pointMapSortMode = .creation
-        pointMapShowAdvanced = false
-        pointMapShowAllPointsInQuestion = instance.instance.showAllPointsInQuestion
-        pointMapApplyCurrentViewport = false
-        pointMapLoadedDefaultCenterLat = instance.instance.defaultCenterLat
-        pointMapLoadedDefaultCenterLng = instance.instance.defaultCenterLng
-        pointMapLoadedDefaultZoom = instance.instance.defaultZoom
+        draft.pointMapTitle = instance.instance.title
+        draft.pointMapExistingPoints = instance.points
+        draft.pointMapNewPoints = []
+        draft.pointMapSortMode = .creation
+        draft.pointMapShowAdvanced = false
+        draft.pointMapShowAllPointsInQuestion = instance.instance.showAllPointsInQuestion
+        draft.pointMapApplyCurrentViewport = false
+        draft.pointMapLoadedDefaultCenterLat = instance.instance.defaultCenterLat
+        draft.pointMapLoadedDefaultCenterLng = instance.instance.defaultCenterLng
+        draft.pointMapLoadedDefaultZoom = instance.instance.defaultZoom
         let delta = max(0.0001, 360.0 / pow(2.0, max(0.0, min(20.0, instance.instance.defaultZoom))))
         let region = MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: instance.instance.defaultCenterLat, longitude: instance.instance.defaultCenterLng),
             span: MKCoordinateSpan(latitudeDelta: delta, longitudeDelta: delta)
         )
-        pointMapCurrentRegion = region
-        pointMapCameraPosition = .region(region)
+        draft.pointMapCurrentRegion = region
+        draft.pointMapCameraPosition = .region(region)
         pointMapSyncExplicitFieldsFromRegion()
-        boundaryPickerState.selectedIDs = Set(instance.boundaryIDs)
-        boundaryPickerState.reload(appDatabase: appDatabase)
+        draft.boundaryPickerState.selectedIDs = Set(instance.boundaryIDs)
+        draft.boundaryPickerState.reload(appDatabase: appDatabase)
         refreshBoundaryGeometries()
     }
 
     private func refreshBoundaryGeometries() {
-        guard let instanceID = loadedInstanceID else {
+        guard let instanceID = draft.loadedInstanceID else {
             // In Add mode we haven't persisted yet; load geometries ad-hoc.
             loadBoundaryGeometriesForSelected()
             return
@@ -749,16 +680,16 @@ struct InstanceEditorWindowView: View {
     }
 
     private func loadBoundaryGeometriesForSelected() {
-        let ids = boundaryPickerState.selectedIDs
+        let ids = draft.boundaryPickerState.selectedIDs
         guard !ids.isEmpty else {
-            pointMapBoundaryGeometries = []
+            draft.pointMapBoundaryGeometries = []
             return
         }
         // Reuse the parsing path: fetch each boundary individually. For small
         // selections this is cheap; for large selections we accept the cost.
         var geometries: [BoundaryGeometry] = []
         geometries.reserveCapacity(ids.count)
-        for option in boundaryPickerState.options where ids.contains(option.id) {
+        for option in draft.boundaryPickerState.options where ids.contains(option.id) {
             if let geo = try? appDatabase.fetchBoundaryGeometry(boundaryID: option.id) {
                 geometries.append(BoundaryGeometry(
                     id: option.id,
@@ -767,7 +698,7 @@ struct InstanceEditorWindowView: View {
                 ))
             }
         }
-        pointMapBoundaryGeometries = geometries
+        draft.pointMapBoundaryGeometries = geometries
     }
 
     private func mapContextMenuActions(at localPoint: CGPoint, proxy: MapProxy) -> [MapMenuAction] {
@@ -837,7 +768,7 @@ struct InstanceEditorWindowView: View {
                 forwardEnabled: forward,
                 reverseEnabled: reverse
             )
-            pointMapNewPoints.append(entry)
+            draft.pointMapNewPoints.append(entry)
         }
     }
 
@@ -845,7 +776,7 @@ struct InstanceEditorWindowView: View {
         let window = NSApp.keyWindow
         switch ref {
         case .existing(let id):
-            guard let point = pointMapExistingPoints.first(where: { $0.id == id }) else { return }
+            guard let point = draft.pointMapExistingPoints.first(where: { $0.id == id }) else { return }
             pointMapPointController.present(
                 from: window,
                 initialName: point.name,
@@ -858,20 +789,20 @@ struct InstanceEditorWindowView: View {
                 isEdit: true,
                 onResetForward: {
                     try? appDatabase.resetPointMapPointDueDate(pointID: id, isReverse: false)
-                    if let idx = pointMapExistingPoints.firstIndex(where: { $0.id == id }) {
-                        pointMapExistingPoints[idx].forwardInterval = 0
+                    if let idx = draft.pointMapExistingPoints.firstIndex(where: { $0.id == id }) {
+                        draft.pointMapExistingPoints[idx].forwardInterval = 0
                     }
                 },
                 onResetReverse: {
                     try? appDatabase.resetPointMapPointDueDate(pointID: id, isReverse: true)
-                    if let idx = pointMapExistingPoints.firstIndex(where: { $0.id == id }) {
-                        pointMapExistingPoints[idx].reverseInterval = 0
+                    if let idx = draft.pointMapExistingPoints.firstIndex(where: { $0.id == id }) {
+                        draft.pointMapExistingPoints[idx].reverseInterval = 0
                     }
                 }
             ) { name, lat, lng, forward, reverse in
-                guard let idx = pointMapExistingPoints.firstIndex(where: { $0.id == id }) else { return }
-                let existing = pointMapExistingPoints[idx]
-                pointMapExistingPoints[idx] = PointMapPoint(
+                guard let idx = draft.pointMapExistingPoints.firstIndex(where: { $0.id == id }) else { return }
+                let existing = draft.pointMapExistingPoints[idx]
+                draft.pointMapExistingPoints[idx] = PointMapPoint(
                     id: existing.id,
                     instanceID: existing.instanceID,
                     name: name,
@@ -884,7 +815,7 @@ struct InstanceEditorWindowView: View {
                 )
             }
         case .new(let localID):
-            guard let entry = pointMapNewPoints.first(where: { $0.localID == localID }) else { return }
+            guard let entry = draft.pointMapNewPoints.first(where: { $0.localID == localID }) else { return }
             pointMapPointController.present(
                 from: window,
                 initialName: entry.name,
@@ -894,8 +825,8 @@ struct InstanceEditorWindowView: View {
                 initialReverseEnabled: entry.reverseEnabled,
                 isEdit: true
             ) { name, lat, lng, forward, reverse in
-                guard let idx = pointMapNewPoints.firstIndex(where: { $0.localID == localID }) else { return }
-                pointMapNewPoints[idx] = PointMapPointDraftEntry(
+                guard let idx = draft.pointMapNewPoints.firstIndex(where: { $0.localID == localID }) else { return }
+                draft.pointMapNewPoints[idx] = PointMapPointDraftEntry(
                     localID: localID,
                     name: name,
                     latitude: lat,
@@ -910,9 +841,9 @@ struct InstanceEditorWindowView: View {
     private func removePointMapEntry(_ ref: PointMapEntryRef) {
         switch ref {
         case .existing(let id):
-            pointMapExistingPoints.removeAll { $0.id == id }
+            draft.pointMapExistingPoints.removeAll { $0.id == id }
         case .new(let localID):
-            pointMapNewPoints.removeAll { $0.localID == localID }
+            draft.pointMapNewPoints.removeAll { $0.localID == localID }
         }
     }
 
@@ -954,10 +885,10 @@ struct InstanceEditorWindowView: View {
     private func pointMapEntryFlags(for ref: PointMapEntryRef) -> (forward: Bool, reverse: Bool) {
         switch ref {
         case .existing(let id):
-            guard let point = pointMapExistingPoints.first(where: { $0.id == id }) else { return (true, false) }
+            guard let point = draft.pointMapExistingPoints.first(where: { $0.id == id }) else { return (true, false) }
             return (point.forwardEnabled, point.reverseEnabled)
         case .new(let localID):
-            guard let draft = pointMapNewPoints.first(where: { $0.localID == localID }) else { return (true, false) }
+            guard let draft = draft.pointMapNewPoints.first(where: { $0.localID == localID }) else { return (true, false) }
             return (draft.forwardEnabled, draft.reverseEnabled)
         }
     }
@@ -965,13 +896,13 @@ struct InstanceEditorWindowView: View {
     private func setPointMapEntryFlags(for ref: PointMapEntryRef, forward: Bool?, reverse: Bool?) {
         switch ref {
         case .existing(let id):
-            guard let index = pointMapExistingPoints.firstIndex(where: { $0.id == id }) else { return }
-            if let forward { pointMapExistingPoints[index].forwardEnabled = forward }
-            if let reverse { pointMapExistingPoints[index].reverseEnabled = reverse }
+            guard let index = draft.pointMapExistingPoints.firstIndex(where: { $0.id == id }) else { return }
+            if let forward { draft.pointMapExistingPoints[index].forwardEnabled = forward }
+            if let reverse { draft.pointMapExistingPoints[index].reverseEnabled = reverse }
         case .new(let localID):
-            guard let index = pointMapNewPoints.firstIndex(where: { $0.localID == localID }) else { return }
-            if let forward { pointMapNewPoints[index].forwardEnabled = forward }
-            if let reverse { pointMapNewPoints[index].reverseEnabled = reverse }
+            guard let index = draft.pointMapNewPoints.firstIndex(where: { $0.localID == localID }) else { return }
+            if let forward { draft.pointMapNewPoints[index].forwardEnabled = forward }
+            if let reverse { draft.pointMapNewPoints[index].reverseEnabled = reverse }
         }
     }
 
@@ -1007,13 +938,13 @@ struct InstanceEditorWindowView: View {
             HStack(spacing: 6) {
                 Text("Name:")
                     .font(.subheadline)
-                TextField("", text: $boundaryMapTitle)
+                TextField("", text: $draft.boundaryMapTitle)
                     .textFieldStyle(.roundedBorder)
             }
 
             MapReader { proxy in
                 ZStack {
-                    Map(position: $boundaryMapCameraPosition) {
+                    Map(position: $draft.boundaryMapCameraPosition) {
                         ForEach(boundaryMapDisplayEntries, id: \.id) { entry in
                             if let geo = boundaryMapGeometriesByBoundaryID[entry.boundaryID] {
                                 ForEach(Array(geo.rings.enumerated()), id: \.offset) { _, polygonRings in
@@ -1027,7 +958,7 @@ struct InstanceEditorWindowView: View {
                         }
                     }
                     .onMapCameraChange(frequency: .continuous) { context in
-                        boundaryMapCurrentRegion = context.region
+                        draft.boundaryMapCurrentRegion = context.region
                         boundaryMapSyncExplicitFieldsFromRegion()
                     }
 
@@ -1043,34 +974,34 @@ struct InstanceEditorWindowView: View {
                     .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
             }
 
-            Toggle(isOn: $boundaryMapShowAllBoundariesInQuestion) {
+            Toggle(isOn: $draft.boundaryMapShowAllBoundariesInQuestion) {
                 Text("Show all boundaries on the question side of each query")
                     .font(.subheadline)
             }
             .toggleStyle(.checkbox)
 
             if mode == .edit {
-                Toggle(isOn: $boundaryMapApplyCurrentViewport) {
+                Toggle(isOn: $draft.boundaryMapApplyCurrentViewport) {
                     Text("Set each query's default map location and zoom to current")
                         .font(.subheadline)
                 }
                 .toggleStyle(.checkbox)
             }
 
-            DisclosureGroup("Advanced", isExpanded: $boundaryMapShowAdvanced) {
+            DisclosureGroup("Advanced", isExpanded: $draft.boundaryMapShowAdvanced) {
                 HStack(spacing: 6) {
                     Text("Lat:")
-                    TextField("", text: $boundaryMapExplicitLat)
+                    TextField("", text: $draft.boundaryMapExplicitLat)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 90)
                         .onSubmit(applyExplicitBoundaryMapViewport)
                     Text("Lng:")
-                    TextField("", text: $boundaryMapExplicitLng)
+                    TextField("", text: $draft.boundaryMapExplicitLng)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 90)
                         .onSubmit(applyExplicitBoundaryMapViewport)
                     Text("Zoom:")
-                    TextField("", text: $boundaryMapExplicitZoom)
+                    TextField("", text: $draft.boundaryMapExplicitZoom)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 60)
                         .onSubmit(applyExplicitBoundaryMapViewport)
@@ -1097,7 +1028,7 @@ struct InstanceEditorWindowView: View {
             .buttonStyle(.borderedProminent)
             .popover(isPresented: $isBoundaryMapPickerPresented, arrowEdge: .bottom) {
                 BoundaryPickerPopoverView(
-                    state: boundaryMapPickerState,
+                    state: draft.boundaryMapPickerState,
                     appDatabase: appDatabase,
                     onManage: {
                         isBoundaryMapPickerPresented = false
@@ -1105,7 +1036,7 @@ struct InstanceEditorWindowView: View {
                     }
                 )
             }
-            .onChange(of: boundaryMapPickerState.selectedIDs) { oldValue, newValue in
+            .onChange(of: draft.boundaryMapPickerState.selectedIDs) { oldValue, newValue in
                 reconcileBoundaryMapPickerSelection(old: oldValue, new: newValue)
             }
 
@@ -1170,7 +1101,7 @@ struct InstanceEditorWindowView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Sort:")
                     .font(.subheadline)
-                Picker("", selection: $boundaryMapSortMode) {
+                Picker("", selection: $draft.boundaryMapSortMode) {
                     ForEach(BoundaryMapSortMode.allCases, id: \.self) { mode in
                         Text(mode.displayName).tag(mode)
                     }
@@ -1192,7 +1123,7 @@ struct InstanceEditorWindowView: View {
 
     private var boundaryMapDisplayEntries: [BoundaryMapDisplayEntry] {
         var entries: [BoundaryMapDisplayEntry] = []
-        for attached in boundaryMapExistingAttachments where !boundaryMapDeletedExistingIDs.contains(attached.id) {
+        for attached in draft.boundaryMapExistingAttachments where !draft.boundaryMapDeletedExistingIDs.contains(attached.id) {
             entries.append(BoundaryMapDisplayEntry(
                 ref: .existing(attached.id),
                 boundaryID: attached.boundaryID,
@@ -1201,7 +1132,7 @@ struct InstanceEditorWindowView: View {
                 reverseEnabled: attached.reverseEnabled
             ))
         }
-        for draft in boundaryMapNewAttachments {
+        for draft in draft.boundaryMapNewAttachments {
             entries.append(BoundaryMapDisplayEntry(
                 ref: .new(draft.localID),
                 boundaryID: draft.boundaryID,
@@ -1210,7 +1141,7 @@ struct InstanceEditorWindowView: View {
                 reverseEnabled: draft.reverseEnabled
             ))
         }
-        switch boundaryMapSortMode {
+        switch draft.boundaryMapSortMode {
         case .creation:
             return entries
         case .alphabetical:
@@ -1222,25 +1153,25 @@ struct InstanceEditorWindowView: View {
 
     private var boundaryMapGeometriesByBoundaryID: [Int64: ParsedMultiPolygon] {
         var map: [Int64: ParsedMultiPolygon] = [:]
-        for geo in boundaryMapGeometries {
+        for geo in draft.boundaryMapGeometries {
             map[geo.id] = geo.geometry
         }
         return map
     }
 
     private func boundaryMapSyncExplicitFieldsFromRegion() {
-        let region = boundaryMapCurrentRegion
-        boundaryMapExplicitLat = String(format: "%.6f", region.center.latitude)
-        boundaryMapExplicitLng = String(format: "%.6f", region.center.longitude)
+        let region = draft.boundaryMapCurrentRegion
+        draft.boundaryMapExplicitLat = String(format: "%.6f", region.center.latitude)
+        draft.boundaryMapExplicitLng = String(format: "%.6f", region.center.longitude)
         let latDelta = max(region.span.latitudeDelta, 0.0001)
         let zoom = log2(360.0 / latDelta)
-        boundaryMapExplicitZoom = String(format: "%.2f", zoom)
+        draft.boundaryMapExplicitZoom = String(format: "%.2f", zoom)
     }
 
     private func applyExplicitBoundaryMapViewport() {
-        guard let lat = Double(boundaryMapExplicitLat.trimmingCharacters(in: .whitespacesAndNewlines)),
-              let lng = Double(boundaryMapExplicitLng.trimmingCharacters(in: .whitespacesAndNewlines)),
-              let zoom = Double(boundaryMapExplicitZoom.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+        guard let lat = Double(draft.boundaryMapExplicitLat.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let lng = Double(draft.boundaryMapExplicitLng.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let zoom = Double(draft.boundaryMapExplicitZoom.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             showToast(message: "Invalid viewport values.", style: .error)
             return
         }
@@ -1250,56 +1181,56 @@ struct InstanceEditorWindowView: View {
             center: CLLocationCoordinate2D(latitude: lat, longitude: lng),
             span: MKCoordinateSpan(latitudeDelta: delta, longitudeDelta: delta)
         )
-        boundaryMapCurrentRegion = region
-        boundaryMapCameraPosition = .region(region)
+        draft.boundaryMapCurrentRegion = region
+        draft.boundaryMapCameraPosition = .region(region)
     }
 
     private func resetBoundaryMapState() {
-        boundaryMapTitle = ""
-        boundaryMapExistingAttachments = []
-        boundaryMapNewAttachments = []
-        boundaryMapDeletedExistingIDs = []
-        boundaryMapSortMode = .creation
-        boundaryMapShowAdvanced = false
-        boundaryMapShowAllBoundariesInQuestion = true
-        boundaryMapApplyCurrentViewport = false
-        boundaryMapLoadedDefaultCenterLat = nil
-        boundaryMapLoadedDefaultCenterLng = nil
-        boundaryMapLoadedDefaultZoom = nil
+        draft.boundaryMapTitle = ""
+        draft.boundaryMapExistingAttachments = []
+        draft.boundaryMapNewAttachments = []
+        draft.boundaryMapDeletedExistingIDs = []
+        draft.boundaryMapSortMode = .creation
+        draft.boundaryMapShowAdvanced = false
+        draft.boundaryMapShowAllBoundariesInQuestion = true
+        draft.boundaryMapApplyCurrentViewport = false
+        draft.boundaryMapLoadedDefaultCenterLat = nil
+        draft.boundaryMapLoadedDefaultCenterLng = nil
+        draft.boundaryMapLoadedDefaultZoom = nil
         let defaultRegion = MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: 0, longitude: 0),
             span: MKCoordinateSpan(latitudeDelta: 90, longitudeDelta: 90)
         )
-        boundaryMapCurrentRegion = defaultRegion
-        boundaryMapCameraPosition = .region(defaultRegion)
+        draft.boundaryMapCurrentRegion = defaultRegion
+        draft.boundaryMapCameraPosition = .region(defaultRegion)
         boundaryMapSyncExplicitFieldsFromRegion()
-        boundaryMapPickerState.selectedIDs = []
-        boundaryMapPickerState.reload(appDatabase: appDatabase)
-        boundaryMapGeometries = []
+        draft.boundaryMapPickerState.selectedIDs = []
+        draft.boundaryMapPickerState.reload(appDatabase: appDatabase)
+        draft.boundaryMapGeometries = []
     }
 
     private func loadBoundaryMapInto(instance: BoundaryMapInstanceWithBoundaries) {
-        boundaryMapTitle = instance.instance.title
-        boundaryMapExistingAttachments = instance.attachments
-        boundaryMapNewAttachments = []
-        boundaryMapDeletedExistingIDs = []
-        boundaryMapSortMode = .creation
-        boundaryMapShowAdvanced = false
-        boundaryMapShowAllBoundariesInQuestion = instance.instance.showAllBoundariesInQuestion
-        boundaryMapApplyCurrentViewport = false
-        boundaryMapLoadedDefaultCenterLat = instance.instance.defaultCenterLat
-        boundaryMapLoadedDefaultCenterLng = instance.instance.defaultCenterLng
-        boundaryMapLoadedDefaultZoom = instance.instance.defaultZoom
+        draft.boundaryMapTitle = instance.instance.title
+        draft.boundaryMapExistingAttachments = instance.attachments
+        draft.boundaryMapNewAttachments = []
+        draft.boundaryMapDeletedExistingIDs = []
+        draft.boundaryMapSortMode = .creation
+        draft.boundaryMapShowAdvanced = false
+        draft.boundaryMapShowAllBoundariesInQuestion = instance.instance.showAllBoundariesInQuestion
+        draft.boundaryMapApplyCurrentViewport = false
+        draft.boundaryMapLoadedDefaultCenterLat = instance.instance.defaultCenterLat
+        draft.boundaryMapLoadedDefaultCenterLng = instance.instance.defaultCenterLng
+        draft.boundaryMapLoadedDefaultZoom = instance.instance.defaultZoom
         let delta = max(0.0001, 360.0 / pow(2.0, max(0.0, min(20.0, instance.instance.defaultZoom))))
         let region = MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: instance.instance.defaultCenterLat, longitude: instance.instance.defaultCenterLng),
             span: MKCoordinateSpan(latitudeDelta: delta, longitudeDelta: delta)
         )
-        boundaryMapCurrentRegion = region
-        boundaryMapCameraPosition = .region(region)
+        draft.boundaryMapCurrentRegion = region
+        draft.boundaryMapCameraPosition = .region(region)
         boundaryMapSyncExplicitFieldsFromRegion()
-        boundaryMapPickerState.selectedIDs = Set(instance.attachments.map(\.boundaryID))
-        boundaryMapPickerState.reload(appDatabase: appDatabase)
+        draft.boundaryMapPickerState.selectedIDs = Set(instance.attachments.map(\.boundaryID))
+        draft.boundaryMapPickerState.reload(appDatabase: appDatabase)
         refreshBoundaryMapGeometries()
     }
 
@@ -1308,26 +1239,26 @@ struct InstanceEditorWindowView: View {
         let removed = old.subtracting(new)
 
         // Existing-attachment boundary IDs (excluding any already staged for deletion)
-        let existingIDs: [Int64: Int64] = boundaryMapExistingAttachments.reduce(into: [:]) { acc, attached in
+        let existingIDs: [Int64: Int64] = draft.boundaryMapExistingAttachments.reduce(into: [:]) { acc, attached in
             acc[attached.boundaryID] = attached.id
         }
 
         for boundaryID in removed {
             if let attachmentID = existingIDs[boundaryID] {
-                boundaryMapDeletedExistingIDs.insert(attachmentID)
+                draft.boundaryMapDeletedExistingIDs.insert(attachmentID)
             } else {
-                boundaryMapNewAttachments.removeAll { $0.boundaryID == boundaryID }
+                draft.boundaryMapNewAttachments.removeAll { $0.boundaryID == boundaryID }
             }
         }
 
         for boundaryID in added {
             if let attachmentID = existingIDs[boundaryID] {
                 // User re-toggled an existing attachment back on — un-stage its deletion.
-                boundaryMapDeletedExistingIDs.remove(attachmentID)
+                draft.boundaryMapDeletedExistingIDs.remove(attachmentID)
             } else {
-                guard !boundaryMapNewAttachments.contains(where: { $0.boundaryID == boundaryID }) else { continue }
-                let name = boundaryMapPickerState.options.first(where: { $0.id == boundaryID })?.boundary.name ?? ""
-                boundaryMapNewAttachments.append(BoundaryMapAttachmentDraft(
+                guard !draft.boundaryMapNewAttachments.contains(where: { $0.boundaryID == boundaryID }) else { continue }
+                let name = draft.boundaryMapPickerState.options.first(where: { $0.id == boundaryID })?.boundary.name ?? ""
+                draft.boundaryMapNewAttachments.append(BoundaryMapAttachmentDraft(
                     localID: UUID(),
                     boundaryID: boundaryID,
                     name: name
@@ -1341,12 +1272,12 @@ struct InstanceEditorWindowView: View {
     private func refreshBoundaryMapGeometries() {
         let displayedBoundaryIDs = Set(boundaryMapDisplayEntries.map(\.boundaryID))
         guard !displayedBoundaryIDs.isEmpty else {
-            boundaryMapGeometries = []
+            draft.boundaryMapGeometries = []
             return
         }
         var geometries: [BoundaryGeometry] = []
         geometries.reserveCapacity(displayedBoundaryIDs.count)
-        for option in boundaryMapPickerState.options where displayedBoundaryIDs.contains(option.id) {
+        for option in draft.boundaryMapPickerState.options where displayedBoundaryIDs.contains(option.id) {
             if let geo = try? appDatabase.fetchBoundaryGeometry(boundaryID: option.id) {
                 geometries.append(BoundaryGeometry(
                     id: option.id,
@@ -1355,7 +1286,7 @@ struct InstanceEditorWindowView: View {
                 ))
             }
         }
-        boundaryMapGeometries = geometries
+        draft.boundaryMapGeometries = geometries
     }
 
     private func boundaryMapContextMenuActions(at localPoint: CGPoint, proxy: MapProxy) -> [MapMenuAction] {
@@ -1373,13 +1304,13 @@ struct InstanceEditorWindowView: View {
     private func removeBoundaryMapEntry(_ ref: BoundaryMapEntryRef) {
         switch ref {
         case .existing(let id):
-            guard let attached = boundaryMapExistingAttachments.first(where: { $0.id == id }) else { return }
-            boundaryMapDeletedExistingIDs.insert(id)
-            boundaryMapPickerState.selectedIDs.remove(attached.boundaryID)
+            guard let attached = draft.boundaryMapExistingAttachments.first(where: { $0.id == id }) else { return }
+            draft.boundaryMapDeletedExistingIDs.insert(id)
+            draft.boundaryMapPickerState.selectedIDs.remove(attached.boundaryID)
         case .new(let localID):
-            guard let draft = boundaryMapNewAttachments.first(where: { $0.localID == localID }) else { return }
-            boundaryMapNewAttachments.removeAll { $0.localID == localID }
-            boundaryMapPickerState.selectedIDs.remove(draft.boundaryID)
+            guard let attachmentDraft = draft.boundaryMapNewAttachments.first(where: { $0.localID == localID }) else { return }
+            draft.boundaryMapNewAttachments.removeAll { $0.localID == localID }
+            draft.boundaryMapPickerState.selectedIDs.remove(attachmentDraft.boundaryID)
         }
         refreshBoundaryMapGeometries()
     }
@@ -1422,10 +1353,10 @@ struct InstanceEditorWindowView: View {
     private func boundaryMapEntryFlags(for ref: BoundaryMapEntryRef) -> (forward: Bool, reverse: Bool) {
         switch ref {
         case .existing(let id):
-            guard let attached = boundaryMapExistingAttachments.first(where: { $0.id == id }) else { return (true, false) }
+            guard let attached = draft.boundaryMapExistingAttachments.first(where: { $0.id == id }) else { return (true, false) }
             return (attached.forwardEnabled, attached.reverseEnabled)
         case .new(let localID):
-            guard let draft = boundaryMapNewAttachments.first(where: { $0.localID == localID }) else { return (true, false) }
+            guard let draft = draft.boundaryMapNewAttachments.first(where: { $0.localID == localID }) else { return (true, false) }
             return (draft.forwardEnabled, draft.reverseEnabled)
         }
     }
@@ -1433,13 +1364,13 @@ struct InstanceEditorWindowView: View {
     private func setBoundaryMapEntryFlags(for ref: BoundaryMapEntryRef, forward: Bool?, reverse: Bool?) {
         switch ref {
         case .existing(let id):
-            guard let index = boundaryMapExistingAttachments.firstIndex(where: { $0.id == id }) else { return }
-            if let forward { boundaryMapExistingAttachments[index].forwardEnabled = forward }
-            if let reverse { boundaryMapExistingAttachments[index].reverseEnabled = reverse }
+            guard let index = draft.boundaryMapExistingAttachments.firstIndex(where: { $0.id == id }) else { return }
+            if let forward { draft.boundaryMapExistingAttachments[index].forwardEnabled = forward }
+            if let reverse { draft.boundaryMapExistingAttachments[index].reverseEnabled = reverse }
         case .new(let localID):
-            guard let index = boundaryMapNewAttachments.firstIndex(where: { $0.localID == localID }) else { return }
-            if let forward { boundaryMapNewAttachments[index].forwardEnabled = forward }
-            if let reverse { boundaryMapNewAttachments[index].reverseEnabled = reverse }
+            guard let index = draft.boundaryMapNewAttachments.firstIndex(where: { $0.localID == localID }) else { return }
+            if let forward { draft.boundaryMapNewAttachments[index].forwardEnabled = forward }
+            if let reverse { draft.boundaryMapNewAttachments[index].reverseEnabled = reverse }
         }
     }
 
@@ -1451,11 +1382,11 @@ struct InstanceEditorWindowView: View {
                         .frame(height: 0)
                         .id("fieldsSectionTop")
 
-                    if selectedTypeID == nil {
+                    if draft.selectedTypeID == nil {
                         Text("No types are available.")
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                    } else if fields.isEmpty {
+                    } else if draft.fields.isEmpty {
                         Text("This type has no fields.")
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1466,15 +1397,15 @@ struct InstanceEditorWindowView: View {
                     if isNodeTypeSelected {
                         NodeLinkFieldEditor(
                             appDatabase: appDatabase,
-                            typeID: selectedTypeID ?? 0,
-                            excludingInstanceID: loadedInstanceID,
-                            linkFields: linkFields,
-                            linkTargetsByLinkFieldID: $linkTargetsByLinkFieldID,
-                            nodeSummariesByID: $nodeSummariesByID
+                            typeID: draft.selectedTypeID ?? 0,
+                            excludingInstanceID: draft.loadedInstanceID,
+                            linkFields: draft.linkFields,
+                            linkTargetsByLinkFieldID: $draft.linkTargetsByLinkFieldID,
+                            nodeSummariesByID: $draft.nodeSummariesByID
                         )
                     }
 
-                    if selectedTypeID != nil {
+                    if draft.selectedTypeID != nil {
                         collectionChecklistSection
                     }
                 }
@@ -1495,11 +1426,11 @@ struct InstanceEditorWindowView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    if selectedTypeID == nil {
+                    if draft.selectedTypeID == nil {
                         Text("No types are available.")
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                    } else if queryTypes.isEmpty {
+                    } else if draft.queryTypes.isEmpty {
                         Text("This type has no query types.")
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1521,16 +1452,16 @@ struct InstanceEditorWindowView: View {
 
     private var fieldEditors: some View {
         VStack(alignment: .leading, spacing: 12) {
-            SwiftUI.ForEach(fields) { field in
+            SwiftUI.ForEach(draft.fields) { field in
                 InstanceFieldEditor(
                     fieldName: field.name,
                     text: binding(for: field.id),
                     focusController: focusController,
                     fieldID: field.id,
-                    isSticky: stickyFieldIDs.contains(field.id),
+                    isSticky: draft.stickyFieldIDs.contains(field.id),
                     showStickyToggle: mode == .add,
                     onToggleSticky: {
-                        if let selectedTypeID {
+                        if let selectedTypeID = draft.selectedTypeID {
                             toggleSticky(typeID: selectedTypeID, fieldID: field.id)
                         }
                     },
@@ -1553,7 +1484,7 @@ struct InstanceEditorWindowView: View {
     }
 
     private var queryTypeCheckboxList: some View {
-        let displayedQueryTypes = queryTypes.sorted { lhs, rhs in
+        let displayedQueryTypes = draft.queryTypes.sorted { lhs, rhs in
             lhs.id < rhs.id
         }
 
@@ -1563,18 +1494,18 @@ struct InstanceEditorWindowView: View {
                     Toggle(
                         queryType.name,
                         isOn: Binding(
-                            get: { selectedQueryTypeIDs.contains(queryType.id) },
+                            get: { draft.selectedQueryTypeIDs.contains(queryType.id) },
                             set: { isSelected in
                                 if isSelected {
-                                    selectedQueryTypeIDs.insert(queryType.id)
+                                    draft.selectedQueryTypeIDs.insert(queryType.id)
                                     if mode == .edit {
-                                        queryIntervalsByQueryTypeID[queryType.id] = 0
+                                        draft.queryIntervalsByQueryTypeID[queryType.id] = 0
                                     }
                                 } else {
-                                    selectedQueryTypeIDs.remove(queryType.id)
-                                    queryIntervalsByQueryTypeID.removeValue(forKey: queryType.id)
+                                    draft.selectedQueryTypeIDs.remove(queryType.id)
+                                    draft.queryIntervalsByQueryTypeID.removeValue(forKey: queryType.id)
                                 }
-                                if mode == .add, let typeID = selectedTypeID {
+                                if mode == .add, let typeID = draft.selectedTypeID {
                                     try? appDatabase.setTypeQueryDefault(
                                         typeID: typeID,
                                         queryTypeID: queryType.id,
@@ -1595,8 +1526,8 @@ struct InstanceEditorWindowView: View {
                     .buttonStyle(.plain)
                     .help("Preview")
 
-                    if mode == .edit, let loadedInstanceID {
-                        if let interval = queryIntervalsByQueryTypeID[queryType.id] {
+                    if mode == .edit, let loadedInstanceID = draft.loadedInstanceID {
+                        if let interval = draft.queryIntervalsByQueryTypeID[queryType.id] {
                             if interval == 0 {
                                 Text("New")
                                     .font(.subheadline)
@@ -1643,8 +1574,8 @@ struct InstanceEditorWindowView: View {
                 Text("Collections")
                     .font(.headline)
 
-                if !selectedCollectionIDs.isEmpty {
-                    Text("(\(selectedCollectionIDs.count) selected)")
+                if !draft.selectedCollectionIDs.isEmpty {
+                    Text("(\(draft.selectedCollectionIDs.count) selected)")
                         .font(.headline)
                         .foregroundStyle(.blue)
                 }
@@ -1672,12 +1603,12 @@ struct InstanceEditorWindowView: View {
                         ForEach(filteredCollectionItems) { item in
                             CollectionChecklistRow(
                                 item: item,
-                                isChecked: selectedCollectionIDs.contains(item.id),
+                                isChecked: draft.selectedCollectionIDs.contains(item.id),
                                 onToggleCheck: { isChecked in
                                     if isChecked {
-                                        selectedCollectionIDs.insert(item.id)
+                                        draft.selectedCollectionIDs.insert(item.id)
                                     } else {
-                                        selectedCollectionIDs.remove(item.id)
+                                        draft.selectedCollectionIDs.remove(item.id)
                                     }
                                 },
                                 onTogglePin: {
@@ -1701,18 +1632,18 @@ struct InstanceEditorWindowView: View {
     }
 
     private var advancedSection: some View {
-        DisclosureGroup("Advanced", isExpanded: $showAdvanced) {
+        DisclosureGroup("Advanced", isExpanded: $draft.showAdvanced) {
             HStack(spacing: 8) {
                 Text("Max Interval:")
                     .font(.subheadline)
 
-                TextField("", text: $maxIntervalText)
+                TextField("", text: $draft.maxIntervalText)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: 120)
-                    .onChange(of: maxIntervalText) { _, newValue in
+                    .onChange(of: draft.maxIntervalText) { _, newValue in
                         let digitsOnly = newValue.filter(\.isNumber)
                         if digitsOnly != newValue {
-                            maxIntervalText = digitsOnly
+                            draft.maxIntervalText = digitsOnly
                         }
                     }
 
@@ -1728,7 +1659,7 @@ struct InstanceEditorWindowView: View {
     }
 
     private func togglePin(for item: CollectionChecklistItem) {
-        guard let selectedTypeID else { return }
+        guard let selectedTypeID = draft.selectedTypeID else { return }
         let newPinned = !item.isPinned
         do {
             try appDatabase.setPinnedCollection(typeID: selectedTypeID, collectionID: item.id, isPinned: newPinned)
@@ -1746,7 +1677,7 @@ struct InstanceEditorWindowView: View {
 
     @MainActor
     private func loadCollectionItems() {
-        guard let selectedTypeID else {
+        guard let selectedTypeID = draft.selectedTypeID else {
             allCollectionItems = []
             return
         }
@@ -1771,13 +1702,13 @@ struct InstanceEditorWindowView: View {
         } catch {
             showToast(message: "Failed to load types.", style: .error)
             types = []
-            selectedTypeID = nil
-            loadedTypeID = nil
-            loadedInstanceID = nil
-            fields = []
-            queryTypes = []
-            selectedQueryTypeIDs = []
-            fieldValues = [:]
+            draft.selectedTypeID = nil
+            draft.loadedTypeID = nil
+            draft.loadedInstanceID = nil
+            draft.fields = []
+            draft.queryTypes = []
+            draft.selectedQueryTypeIDs = []
+            draft.fieldValues = [:]
         }
     }
 
@@ -1785,25 +1716,25 @@ struct InstanceEditorWindowView: View {
     private func loadInstanceForDuplication(sourceInstanceID: Int64) async {
         do {
             let editorData = try appDatabase.fetchInstanceEditorData(instanceID: sourceInstanceID)
-            fields = try appDatabase.fetchFieldsForDisplay(forTypeID: editorData.typeID)
-            queryTypes = try appDatabase.fetchQueryTypes(forTypeID: editorData.typeID)
-            stickyFieldIDs = try appDatabase.fetchStickyFieldIDs(forTypeID: editorData.typeID)
-            selectedQueryTypeIDs = editorData.enabledQueryTypeIDs
-            fieldValues = Dictionary(
-                uniqueKeysWithValues: fields.map { field in
+            draft.fields = try appDatabase.fetchFieldsForDisplay(forTypeID: editorData.typeID)
+            draft.queryTypes = try appDatabase.fetchQueryTypes(forTypeID: editorData.typeID)
+            draft.stickyFieldIDs = try appDatabase.fetchStickyFieldIDs(forTypeID: editorData.typeID)
+            draft.selectedQueryTypeIDs = editorData.enabledQueryTypeIDs
+            draft.fieldValues = Dictionary(
+                uniqueKeysWithValues: draft.fields.map { field in
                     (field.id, editorData.fieldValuesByFieldID[field.id] ?? "")
                 }
             )
-            selectedCollectionIDs = try appDatabase.fetchCollectionIDs(forInstanceID: sourceInstanceID)
-            queryIntervalsByQueryTypeID = [:]
+            draft.selectedCollectionIDs = try appDatabase.fetchCollectionIDs(forInstanceID: sourceInstanceID)
+            draft.queryIntervalsByQueryTypeID = [:]
             collectionSearchQuery = ""
-            maxIntervalText = ""
-            loadedTypeID = editorData.typeID
-            loadedInstanceID = nil
-            selectedTypeID = editorData.typeID
+            draft.maxIntervalText = ""
+            draft.loadedTypeID = editorData.typeID
+            draft.loadedInstanceID = nil
+            draft.selectedTypeID = editorData.typeID
             loadCollectionItems()
-            focusController.reset(with: fields.map(\.id))
-            focusController.focusField(fields.first?.id)
+            focusController.reset(with: draft.fields.map(\.id))
+            focusController.focusField(draft.fields.first?.id)
         } catch {
             print("Failed to load instance for duplication: \(error)")
             await applyRequestedTypeSelection()
@@ -1814,13 +1745,13 @@ struct InstanceEditorWindowView: View {
     @MainActor
     private func applyRequestedTypeSelection() async {
         guard !types.isEmpty else {
-            selectedTypeID = nil
-            loadedTypeID = nil
-            loadedInstanceID = nil
-            fields = []
-            queryTypes = []
-            selectedQueryTypeIDs = []
-            fieldValues = [:]
+            draft.selectedTypeID = nil
+            draft.loadedTypeID = nil
+            draft.loadedInstanceID = nil
+            draft.fields = []
+            draft.queryTypes = []
+            draft.selectedQueryTypeIDs = []
+            draft.fieldValues = [:]
             return
         }
 
@@ -1831,8 +1762,8 @@ struct InstanceEditorWindowView: View {
             types[0].id
         }
 
-        if selectedTypeID != resolvedTypeID {
-            selectedTypeID = resolvedTypeID
+        if draft.selectedTypeID != resolvedTypeID {
+            draft.selectedTypeID = resolvedTypeID
         } else {
             await loadFields(for: resolvedTypeID)
         }
@@ -1841,41 +1772,41 @@ struct InstanceEditorWindowView: View {
     @MainActor
     private func loadFields(for typeID: Int64?) async {
         guard let typeID else {
-            fields = []
-            loadedTypeID = nil
-            loadedInstanceID = nil
-            queryTypes = []
-            selectedQueryTypeIDs = []
-            fieldValues = [:]
+            draft.fields = []
+            draft.loadedTypeID = nil
+            draft.loadedInstanceID = nil
+            draft.queryTypes = []
+            draft.selectedQueryTypeIDs = []
+            draft.fieldValues = [:]
             allCollectionItems = []
-            selectedCollectionIDs = []
+            draft.selectedCollectionIDs = []
             collectionSearchQuery = ""
-            stickyFieldIDs = []
-            maxIntervalText = ""
+            draft.stickyFieldIDs = []
+            draft.maxIntervalText = ""
             return
         }
 
         do {
-            let didChangeType = loadedTypeID != typeID
-            fields = try appDatabase.fetchFieldsForDisplay(forTypeID: typeID)
-            queryTypes = try appDatabase.fetchQueryTypes(forTypeID: typeID)
-            stickyFieldIDs = try appDatabase.fetchStickyFieldIDs(forTypeID: typeID)
+            let didChangeType = draft.loadedTypeID != typeID
+            draft.fields = try appDatabase.fetchFieldsForDisplay(forTypeID: typeID)
+            draft.queryTypes = try appDatabase.fetchQueryTypes(forTypeID: typeID)
+            draft.stickyFieldIDs = try appDatabase.fetchStickyFieldIDs(forTypeID: typeID)
             if let selectedType = types.first(where: { $0.id == typeID }), selectedType.isNode {
-                linkFields = try appDatabase.fetchLinkFields(forTypeID: typeID)
+                draft.linkFields = try appDatabase.fetchLinkFields(forTypeID: typeID)
             } else {
-                linkFields = []
+                draft.linkFields = []
             }
             if didChangeType {
-                linkTargetsByLinkFieldID = [:]
-                nodeSummariesByID = [:]
-                let availableQueryTypeIDs = queryTypes.map(\.id)
-                selectedQueryTypeIDs = (try? appDatabase.resolveTypeQueryDefaultSelection(
+                draft.linkTargetsByLinkFieldID = [:]
+                draft.nodeSummariesByID = [:]
+                let availableQueryTypeIDs = draft.queryTypes.map(\.id)
+                draft.selectedQueryTypeIDs = (try? appDatabase.resolveTypeQueryDefaultSelection(
                     forTypeID: typeID,
                     availableQueryTypeIDs: availableQueryTypeIDs
                 )) ?? Set(availableQueryTypeIDs)
-                selectedCollectionIDs = []
+                draft.selectedCollectionIDs = []
                 collectionSearchQuery = ""
-                maxIntervalText = ""
+                draft.maxIntervalText = ""
                 if let selectedType = types.first(where: { $0.id == typeID }),
                    selectedType.isBuiltin, selectedType.name == POINTMAP_TYPE_NAME {
                     resetPointMapState()
@@ -1885,28 +1816,28 @@ struct InstanceEditorWindowView: View {
                     resetBoundaryMapState()
                 }
             } else {
-                selectedQueryTypeIDs = selectedQueryTypeIDs.intersection(Set(queryTypes.map(\.id)))
+                draft.selectedQueryTypeIDs = draft.selectedQueryTypeIDs.intersection(Set(draft.queryTypes.map(\.id)))
             }
-            fieldValues = Dictionary(
-                uniqueKeysWithValues: fields.map { field in
-                    (field.id, fieldValues[field.id] ?? "")
+            draft.fieldValues = Dictionary(
+                uniqueKeysWithValues: draft.fields.map { field in
+                    (field.id, draft.fieldValues[field.id] ?? "")
                 }
             )
-            loadedTypeID = typeID
-            loadedInstanceID = nil
-            focusController.reset(with: fields.map(\.id))
-            focusController.focusField(fields.first?.id)
+            draft.loadedTypeID = typeID
+            draft.loadedInstanceID = nil
+            focusController.reset(with: draft.fields.map(\.id))
+            focusController.focusField(draft.fields.first?.id)
             loadCollectionItems()
         } catch {
-            fields = []
-            loadedTypeID = nil
-            loadedInstanceID = nil
-            queryTypes = []
-            selectedQueryTypeIDs = []
-            fieldValues = [:]
+            draft.fields = []
+            draft.loadedTypeID = nil
+            draft.loadedInstanceID = nil
+            draft.queryTypes = []
+            draft.selectedQueryTypeIDs = []
+            draft.fieldValues = [:]
             allCollectionItems = []
-            selectedCollectionIDs = []
-            stickyFieldIDs = []
+            draft.selectedCollectionIDs = []
+            draft.stickyFieldIDs = []
             focusController.reset(with: [])
             focusController.focusField(nil)
             showToast(message: "Failed to load fields.", style: .error)
@@ -1918,20 +1849,20 @@ struct InstanceEditorWindowView: View {
         do {
             if let pointMap = try appDatabase.fetchPointMapInstance(instanceID: instanceID),
                let pointMapTypeID = types.first(where: { $0.isBuiltin && $0.name == POINTMAP_TYPE_NAME })?.id {
-                fields = []
-                queryTypes = []
-                selectedTypeID = pointMapTypeID
-                loadedTypeID = pointMapTypeID
-                loadedInstanceID = instanceID
-                selectedQueryTypeIDs = []
-                fieldValues = [:]
-                linkFields = []
-                linkTargetsByLinkFieldID = [:]
-                nodeSummariesByID = [:]
-                selectedCollectionIDs = try appDatabase.fetchCollectionIDs(forInstanceID: instanceID)
-                stickyFieldIDs = []
+                draft.fields = []
+                draft.queryTypes = []
+                draft.selectedTypeID = pointMapTypeID
+                draft.loadedTypeID = pointMapTypeID
+                draft.loadedInstanceID = instanceID
+                draft.selectedQueryTypeIDs = []
+                draft.fieldValues = [:]
+                draft.linkFields = []
+                draft.linkTargetsByLinkFieldID = [:]
+                draft.nodeSummariesByID = [:]
+                draft.selectedCollectionIDs = try appDatabase.fetchCollectionIDs(forInstanceID: instanceID)
+                draft.stickyFieldIDs = []
                 collectionSearchQuery = ""
-                maxIntervalText = ""
+                draft.maxIntervalText = ""
                 loadCollectionItems()
                 focusController.reset(with: [])
                 focusController.focusField(nil)
@@ -1947,20 +1878,20 @@ struct InstanceEditorWindowView: View {
 
             if let boundaryMap = try appDatabase.fetchBoundaryMapInstance(instanceID: instanceID),
                let boundaryMapTypeID = types.first(where: { $0.isBuiltin && $0.name == BOUNDARYMAP_TYPE_NAME })?.id {
-                fields = []
-                queryTypes = []
-                selectedTypeID = boundaryMapTypeID
-                loadedTypeID = boundaryMapTypeID
-                loadedInstanceID = instanceID
-                selectedQueryTypeIDs = []
-                fieldValues = [:]
-                linkFields = []
-                linkTargetsByLinkFieldID = [:]
-                nodeSummariesByID = [:]
-                selectedCollectionIDs = try appDatabase.fetchCollectionIDs(forInstanceID: instanceID)
-                stickyFieldIDs = []
+                draft.fields = []
+                draft.queryTypes = []
+                draft.selectedTypeID = boundaryMapTypeID
+                draft.loadedTypeID = boundaryMapTypeID
+                draft.loadedInstanceID = instanceID
+                draft.selectedQueryTypeIDs = []
+                draft.fieldValues = [:]
+                draft.linkFields = []
+                draft.linkTargetsByLinkFieldID = [:]
+                draft.nodeSummariesByID = [:]
+                draft.selectedCollectionIDs = try appDatabase.fetchCollectionIDs(forInstanceID: instanceID)
+                draft.stickyFieldIDs = []
                 collectionSearchQuery = ""
-                maxIntervalText = ""
+                draft.maxIntervalText = ""
                 loadCollectionItems()
                 focusController.reset(with: [])
                 focusController.focusField(nil)
@@ -1969,46 +1900,46 @@ struct InstanceEditorWindowView: View {
             }
 
             let editorData = try appDatabase.fetchInstanceEditorData(instanceID: instanceID)
-            fields = try appDatabase.fetchFieldsForDisplay(forTypeID: editorData.typeID)
-            queryTypes = try appDatabase.fetchQueryTypes(forTypeID: editorData.typeID)
+            draft.fields = try appDatabase.fetchFieldsForDisplay(forTypeID: editorData.typeID)
+            draft.queryTypes = try appDatabase.fetchQueryTypes(forTypeID: editorData.typeID)
             if types.first(where: { $0.id == editorData.typeID })?.isNode == true {
-                linkFields = try appDatabase.fetchLinkFields(forTypeID: editorData.typeID)
-                linkTargetsByLinkFieldID = editorData.linkTargetsByLinkFieldID
-                nodeSummariesByID = editorData.linkedNodeSummaries
+                draft.linkFields = try appDatabase.fetchLinkFields(forTypeID: editorData.typeID)
+                draft.linkTargetsByLinkFieldID = editorData.linkTargetsByLinkFieldID
+                draft.nodeSummariesByID = editorData.linkedNodeSummaries
             } else {
-                linkFields = []
-                linkTargetsByLinkFieldID = [:]
-                nodeSummariesByID = [:]
+                draft.linkFields = []
+                draft.linkTargetsByLinkFieldID = [:]
+                draft.nodeSummariesByID = [:]
             }
-            selectedTypeID = editorData.typeID
-            loadedTypeID = editorData.typeID
-            loadedInstanceID = instanceID
-            selectedQueryTypeIDs = editorData.enabledQueryTypeIDs
-            fieldValues = Dictionary(
-                uniqueKeysWithValues: fields.map { field in
+            draft.selectedTypeID = editorData.typeID
+            draft.loadedTypeID = editorData.typeID
+            draft.loadedInstanceID = instanceID
+            draft.selectedQueryTypeIDs = editorData.enabledQueryTypeIDs
+            draft.fieldValues = Dictionary(
+                uniqueKeysWithValues: draft.fields.map { field in
                     (field.id, editorData.fieldValuesByFieldID[field.id] ?? "")
                 }
             )
-            selectedCollectionIDs = try appDatabase.fetchCollectionIDs(forInstanceID: instanceID)
-            stickyFieldIDs = try appDatabase.fetchStickyFieldIDs(forTypeID: editorData.typeID)
-            queryIntervalsByQueryTypeID = try appDatabase.fetchQueryIntervals(forInstanceID: instanceID)
+            draft.selectedCollectionIDs = try appDatabase.fetchCollectionIDs(forInstanceID: instanceID)
+            draft.stickyFieldIDs = try appDatabase.fetchStickyFieldIDs(forTypeID: editorData.typeID)
+            draft.queryIntervalsByQueryTypeID = try appDatabase.fetchQueryIntervals(forInstanceID: instanceID)
             collectionSearchQuery = ""
-            maxIntervalText = editorData.maxInterval.map(String.init) ?? ""
+            draft.maxIntervalText = editorData.maxInterval.map(String.init) ?? ""
             loadCollectionItems()
-            focusController.reset(with: fields.map(\.id))
-            focusController.focusField(fields.first?.id)
+            focusController.reset(with: draft.fields.map(\.id))
+            focusController.focusField(draft.fields.first?.id)
         } catch {
             print("Failed to load instance editor data: \(error)")
-            fields = []
-            loadedTypeID = nil
-            loadedInstanceID = nil
-            queryTypes = []
-            selectedQueryTypeIDs = []
-            fieldValues = [:]
+            draft.fields = []
+            draft.loadedTypeID = nil
+            draft.loadedInstanceID = nil
+            draft.queryTypes = []
+            draft.selectedQueryTypeIDs = []
+            draft.fieldValues = [:]
             allCollectionItems = []
-            selectedCollectionIDs = []
-            stickyFieldIDs = []
-            queryIntervalsByQueryTypeID = [:]
+            draft.selectedCollectionIDs = []
+            draft.stickyFieldIDs = []
+            draft.queryIntervalsByQueryTypeID = [:]
             focusController.reset(with: [])
             focusController.focusField(nil)
             showToast(message: "Failed to load instance.", style: .error)
@@ -2017,7 +1948,7 @@ struct InstanceEditorWindowView: View {
 
     @MainActor
     private func submitCurrentInstance() async {
-        guard let selectedTypeID else { return }
+        guard let selectedTypeID = draft.selectedTypeID else { return }
 
         if isPointMapSelected {
             await submitPointMapInstance(typeID: selectedTypeID)
@@ -2029,21 +1960,21 @@ struct InstanceEditorWindowView: View {
             return
         }
 
-        let parsedMaxInterval: Int64? = Int64(maxIntervalText)
+        let parsedMaxInterval: Int64? = Int64(draft.maxIntervalText)
 
         do {
             switch mode {
             case .add:
                 let instanceID = try appDatabase.makeInstance(
                     forTypeID: selectedTypeID,
-                    fieldValuesByFieldID: fieldValues,
-                    queryTypeIDs: selectedQueryTypeIDs,
-                    linksByLinkFieldID: isNodeTypeSelected ? linkTargetsByLinkFieldID : [:]
+                    fieldValuesByFieldID: draft.fieldValues,
+                    queryTypeIDs: draft.selectedQueryTypeIDs,
+                    linksByLinkFieldID: isNodeTypeSelected ? draft.linkTargetsByLinkFieldID : [:]
                 )
-                if !selectedCollectionIDs.isEmpty {
+                if !draft.selectedCollectionIDs.isEmpty {
                     try appDatabase.setInstanceCollections(
                         instanceID: instanceID,
-                        collectionIDs: selectedCollectionIDs
+                        collectionIDs: draft.selectedCollectionIDs
                     )
                 }
                 if parsedMaxInterval != nil {
@@ -2053,27 +1984,27 @@ struct InstanceEditorWindowView: View {
                     )
                 }
                 onAddSaved?(selectedTypeID)
-                fieldValues = Dictionary(
-                    uniqueKeysWithValues: fields.map { field in
-                        let preserved = stickyFieldIDs.contains(field.id) ? fieldValues[field.id] ?? "" : ""
+                draft.fieldValues = Dictionary(
+                    uniqueKeysWithValues: draft.fields.map { field in
+                        let preserved = draft.stickyFieldIDs.contains(field.id) ? draft.fieldValues[field.id] ?? "" : ""
                         return (field.id, preserved)
                     }
                 )
                 // Links are not sticky; clear them for the next add.
-                linkTargetsByLinkFieldID = [:]
-                focusController.focusField(fields.first?.id)
+                draft.linkTargetsByLinkFieldID = [:]
+                focusController.focusField(draft.fields.first?.id)
                 showToast(message: "Instance added successfully.", style: .success)
             case .edit:
-                guard let loadedInstanceID else { return }
+                guard let loadedInstanceID = draft.loadedInstanceID else { return }
                 try appDatabase.updateInstance(
                     instanceID: loadedInstanceID,
-                    fieldValuesByFieldID: fieldValues,
-                    queryTypeIDs: selectedQueryTypeIDs,
-                    linksByLinkFieldID: isNodeTypeSelected ? linkTargetsByLinkFieldID : [:]
+                    fieldValuesByFieldID: draft.fieldValues,
+                    queryTypeIDs: draft.selectedQueryTypeIDs,
+                    linksByLinkFieldID: isNodeTypeSelected ? draft.linkTargetsByLinkFieldID : [:]
                 )
                 try appDatabase.setInstanceCollections(
                     instanceID: loadedInstanceID,
-                    collectionIDs: selectedCollectionIDs
+                    collectionIDs: draft.selectedCollectionIDs
                 )
                 try appDatabase.setMaxInterval(
                     forInstanceID: loadedInstanceID,
@@ -2094,11 +2025,11 @@ struct InstanceEditorWindowView: View {
 
     @MainActor
     private func submitPointMapInstance(typeID: Int64) async {
-        let title = pointMapTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let region = pointMapCurrentRegion
+        let title = draft.pointMapTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let region = draft.pointMapCurrentRegion
         let latDelta = max(region.span.latitudeDelta, 0.0001)
         let zoom = log2(360.0 / latDelta)
-        let drafts = pointMapNewPoints.map { entry in
+        let drafts = draft.pointMapNewPoints.map { entry in
             AppDatabase.PointMapPointDraft(
                 name: entry.name,
                 latitude: entry.latitude,
@@ -2108,7 +2039,7 @@ struct InstanceEditorWindowView: View {
             )
         }
 
-        let boundaryIDs = Array(boundaryPickerState.selectedIDs)
+        let boundaryIDs = Array(draft.boundaryPickerState.selectedIDs)
         do {
             switch mode {
             case .add:
@@ -2117,32 +2048,32 @@ struct InstanceEditorWindowView: View {
                     defaultCenterLat: region.center.latitude,
                     defaultCenterLng: region.center.longitude,
                     defaultZoom: zoom,
-                    showAllPointsInQuestion: pointMapShowAllPointsInQuestion,
+                    showAllPointsInQuestion: draft.pointMapShowAllPointsInQuestion,
                     points: drafts,
                     boundaryIDs: boundaryIDs
                 )
-                if !selectedCollectionIDs.isEmpty {
+                if !draft.selectedCollectionIDs.isEmpty {
                     try appDatabase.setInstanceCollections(
                         instanceID: instanceID,
-                        collectionIDs: selectedCollectionIDs
+                        collectionIDs: draft.selectedCollectionIDs
                     )
                 }
                 onAddSaved?(typeID)
                 resetPointMapState()
                 showToast(message: "PointMap added successfully.", style: .success)
             case .edit:
-                guard let loadedInstanceID else { return }
+                guard let loadedInstanceID = draft.loadedInstanceID else { return }
                 let saveLat: Double
                 let saveLng: Double
                 let saveZoom: Double
-                if pointMapApplyCurrentViewport {
+                if draft.pointMapApplyCurrentViewport {
                     saveLat = region.center.latitude
                     saveLng = region.center.longitude
                     saveZoom = zoom
                 } else {
-                    saveLat = pointMapLoadedDefaultCenterLat ?? region.center.latitude
-                    saveLng = pointMapLoadedDefaultCenterLng ?? region.center.longitude
-                    saveZoom = pointMapLoadedDefaultZoom ?? zoom
+                    saveLat = draft.pointMapLoadedDefaultCenterLat ?? region.center.latitude
+                    saveLng = draft.pointMapLoadedDefaultCenterLng ?? region.center.longitude
+                    saveZoom = draft.pointMapLoadedDefaultZoom ?? zoom
                 }
                 try appDatabase.updatePointMapInstance(
                     instanceID: loadedInstanceID,
@@ -2150,14 +2081,14 @@ struct InstanceEditorWindowView: View {
                     defaultCenterLat: saveLat,
                     defaultCenterLng: saveLng,
                     defaultZoom: saveZoom,
-                    showAllPointsInQuestion: pointMapShowAllPointsInQuestion,
-                    existingPoints: pointMapExistingPoints,
+                    showAllPointsInQuestion: draft.pointMapShowAllPointsInQuestion,
+                    existingPoints: draft.pointMapExistingPoints,
                     newPoints: drafts,
                     boundaryIDs: boundaryIDs
                 )
                 try appDatabase.setInstanceCollections(
                     instanceID: loadedInstanceID,
-                    collectionIDs: selectedCollectionIDs
+                    collectionIDs: draft.selectedCollectionIDs
                 )
                 onEditSaved?(loadedInstanceID)
                 dismiss()
@@ -2174,11 +2105,11 @@ struct InstanceEditorWindowView: View {
 
     @MainActor
     private func submitBoundaryMapInstance(typeID: Int64) async {
-        let title = boundaryMapTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let region = boundaryMapCurrentRegion
+        let title = draft.boundaryMapTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let region = draft.boundaryMapCurrentRegion
         let latDelta = max(region.span.latitudeDelta, 0.0001)
         let zoom = log2(360.0 / latDelta)
-        let newBoundaries = boundaryMapNewAttachments.map { draft in
+        let newBoundaries = draft.boundaryMapNewAttachments.map { draft in
             AppDatabase.BoundaryMapBoundaryDraft(
                 boundaryID: draft.boundaryID,
                 forwardEnabled: draft.forwardEnabled,
@@ -2194,47 +2125,47 @@ struct InstanceEditorWindowView: View {
                     defaultCenterLat: region.center.latitude,
                     defaultCenterLng: region.center.longitude,
                     defaultZoom: zoom,
-                    showAllBoundariesInQuestion: boundaryMapShowAllBoundariesInQuestion,
+                    showAllBoundariesInQuestion: draft.boundaryMapShowAllBoundariesInQuestion,
                     boundaries: newBoundaries
                 )
-                if !selectedCollectionIDs.isEmpty {
+                if !draft.selectedCollectionIDs.isEmpty {
                     try appDatabase.setInstanceCollections(
                         instanceID: instanceID,
-                        collectionIDs: selectedCollectionIDs
+                        collectionIDs: draft.selectedCollectionIDs
                     )
                 }
                 onAddSaved?(typeID)
                 resetBoundaryMapState()
                 showToast(message: "BoundaryMap added successfully.", style: .success)
             case .edit:
-                guard let loadedInstanceID else { return }
+                guard let loadedInstanceID = draft.loadedInstanceID else { return }
                 let saveLat: Double
                 let saveLng: Double
                 let saveZoom: Double
-                if boundaryMapApplyCurrentViewport {
+                if draft.boundaryMapApplyCurrentViewport {
                     saveLat = region.center.latitude
                     saveLng = region.center.longitude
                     saveZoom = zoom
                 } else {
-                    saveLat = boundaryMapLoadedDefaultCenterLat ?? region.center.latitude
-                    saveLng = boundaryMapLoadedDefaultCenterLng ?? region.center.longitude
-                    saveZoom = boundaryMapLoadedDefaultZoom ?? zoom
+                    saveLat = draft.boundaryMapLoadedDefaultCenterLat ?? region.center.latitude
+                    saveLng = draft.boundaryMapLoadedDefaultCenterLng ?? region.center.longitude
+                    saveZoom = draft.boundaryMapLoadedDefaultZoom ?? zoom
                 }
-                let keptExistingAttachments = boundaryMapExistingAttachments
-                    .filter { !boundaryMapDeletedExistingIDs.contains($0.id) }
+                let keptExistingAttachments = draft.boundaryMapExistingAttachments
+                    .filter { !draft.boundaryMapDeletedExistingIDs.contains($0.id) }
                 try appDatabase.updateBoundaryMapInstance(
                     instanceID: loadedInstanceID,
                     title: title,
                     defaultCenterLat: saveLat,
                     defaultCenterLng: saveLng,
                     defaultZoom: saveZoom,
-                    showAllBoundariesInQuestion: boundaryMapShowAllBoundariesInQuestion,
+                    showAllBoundariesInQuestion: draft.boundaryMapShowAllBoundariesInQuestion,
                     existingAttachments: keptExistingAttachments,
                     newBoundaries: newBoundaries
                 )
                 try appDatabase.setInstanceCollections(
                     instanceID: loadedInstanceID,
-                    collectionIDs: selectedCollectionIDs
+                    collectionIDs: draft.selectedCollectionIDs
                 )
                 onEditSaved?(loadedInstanceID)
                 dismiss()
@@ -2251,8 +2182,8 @@ struct InstanceEditorWindowView: View {
 
     private func binding(for fieldID: Int64) -> Binding<String> {
         Binding(
-            get: { fieldValues[fieldID, default: ""] },
-            set: { fieldValues[fieldID] = $0 }
+            get: { draft.fieldValues[fieldID, default: ""] },
+            set: { draft.fieldValues[fieldID] = $0 }
         )
     }
 
@@ -2267,14 +2198,14 @@ struct InstanceEditorWindowView: View {
     private func shouldConfirmDiscard() -> Bool {
         guard mode == .add else { return false }
         if isPointMapSelected {
-            return !pointMapNewPoints.isEmpty
+            return !draft.pointMapNewPoints.isEmpty
         }
         if isBoundaryMapSelected {
-            return !boundaryMapNewAttachments.isEmpty
+            return !draft.boundaryMapNewAttachments.isEmpty
         }
-        return fields.contains { field in
-            guard !stickyFieldIDs.contains(field.id) else { return false }
-            let value = fieldValues[field.id] ?? ""
+        return draft.fields.contains { field in
+            guard !draft.stickyFieldIDs.contains(field.id) else { return false }
+            let value = draft.fieldValues[field.id] ?? ""
             return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }
@@ -2314,7 +2245,7 @@ struct InstanceEditorWindowView: View {
             submitInstance()
             return
         }
-        guard let selectedTypeID,
+        guard let selectedTypeID = draft.selectedTypeID,
               let fieldID = focusController.activeFieldID ?? focusController.lastFocusedFieldID else { return }
         toggleSticky(typeID: selectedTypeID, fieldID: fieldID)
     }
@@ -2326,8 +2257,8 @@ struct InstanceEditorWindowView: View {
     }
 
     private func copyInstanceLinkToClipboard() {
-        guard let loadedInstanceID else { return }
-        let link = #"<a href="id:\#(loadedInstanceID)"></a>"#
+        guard let loadedInstanceID = draft.loadedInstanceID else { return }
+        let link = #"<a href="id:\#(draft.loadedInstanceID)"></a>"#
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(link, forType: .string)
@@ -2335,8 +2266,8 @@ struct InstanceEditorWindowView: View {
     }
 
     private func liveFieldValuesByName() -> [String: String] {
-        Dictionary(uniqueKeysWithValues: fields.map { field in
-            (field.name, fieldValues[field.id] ?? "")
+        Dictionary(uniqueKeysWithValues: draft.fields.map { field in
+            (field.name, draft.fieldValues[field.id] ?? "")
         })
     }
 
@@ -2347,27 +2278,27 @@ struct InstanceEditorWindowView: View {
     private func openPreview(queryTypeID: Int64) {
         switch mode {
         case .edit:
-            guard let loadedInstanceID else { return }
+            guard let loadedInstanceID = draft.loadedInstanceID else { return }
             queryPreviewWindowState.requestOpen(
                 instanceID: loadedInstanceID,
                 queryTypeID: queryTypeID,
                 fieldValuesByName: liveFieldValuesByName()
             )
         case .add:
-            guard let selectedTypeID else { return }
+            guard let selectedTypeID = draft.selectedTypeID else { return }
             queryPreviewWindowState.requestOpenDraft(
                 typeID: selectedTypeID,
                 queryTypeID: queryTypeID,
                 fieldValuesByName: liveFieldValuesByName(),
-                linkTargetIDsByLinkFieldID: linkTargetsByLinkFieldID
+                linkTargetIDsByLinkFieldID: draft.linkTargetsByLinkFieldID
             )
         }
         openWindow(id: "query-preview")
     }
 
     private func previewTopmostCheckedQueryType() {
-        let displayedQueryTypes = queryTypes.sorted { $0.id < $1.id }
-        guard let topmost = displayedQueryTypes.first(where: { selectedQueryTypeIDs.contains($0.id) }) else {
+        let displayedQueryTypes = draft.queryTypes.sorted { $0.id < $1.id }
+        guard let topmost = displayedQueryTypes.first(where: { draft.selectedQueryTypeIDs.contains($0.id) }) else {
             return
         }
         openPreview(queryTypeID: topmost.id)
@@ -2382,16 +2313,16 @@ struct InstanceEditorWindowView: View {
         let currentWindow = NSApp.keyWindow
         typePickerController.present(
             types: types,
-            currentTypeID: selectedTypeID,
+            currentTypeID: draft.selectedTypeID,
             from: currentWindow
         ) { [self] typeID in
-            selectedTypeID = typeID
+            draft.selectedTypeID = typeID
         }
     }
 
     @MainActor
     private func insertImageIntoCurrentField() {
-        guard selectedTypeID != nil else {
+        guard draft.selectedTypeID != nil else {
             showToast(message: "Select a type before inserting an image.", style: .error)
             return
         }
@@ -2423,13 +2354,13 @@ struct InstanceEditorWindowView: View {
     }
 
     private func toggleSticky(typeID: Int64, fieldID: Int64) {
-        let newSticky = !stickyFieldIDs.contains(fieldID)
+        let newSticky = !draft.stickyFieldIDs.contains(fieldID)
         do {
             try appDatabase.setStickyField(typeID: typeID, fieldID: fieldID, isSticky: newSticky)
             if newSticky {
-                stickyFieldIDs.insert(fieldID)
+                draft.stickyFieldIDs.insert(fieldID)
             } else {
-                stickyFieldIDs.remove(fieldID)
+                draft.stickyFieldIDs.remove(fieldID)
             }
         } catch {
             showToast(message: "Failed to update sticky field.", style: .error)
@@ -2437,41 +2368,41 @@ struct InstanceEditorWindowView: View {
     }
 
     private func focusNextField(after fieldID: Int64?) {
-        guard !fields.isEmpty else { return }
+        guard !draft.fields.isEmpty else { return }
 
         if fieldID == nil {
-            focusController.focusField(fields.first?.id)
+            focusController.focusField(draft.fields.first?.id)
             return
         }
 
-        guard let currentIndex = fields.firstIndex(where: { $0.id == fieldID }) else {
-            focusController.focusField(fields.first?.id)
+        guard let currentIndex = draft.fields.firstIndex(where: { $0.id == fieldID }) else {
+            focusController.focusField(draft.fields.first?.id)
             return
         }
 
-        let nextIndex = fields.index(after: currentIndex)
-        if nextIndex < fields.endIndex {
-            focusController.focusField(fields[nextIndex].id)
+        let nextIndex = draft.fields.index(after: currentIndex)
+        if nextIndex < draft.fields.endIndex {
+            focusController.focusField(draft.fields[nextIndex].id)
         } else {
             focusController.focusCollectionSearch()
         }
     }
 
     private func focusPreviousField(before fieldID: Int64?) {
-        guard !fields.isEmpty else { return }
+        guard !draft.fields.isEmpty else { return }
 
         if fieldID == nil {
-            focusController.focusField(fields.last?.id)
+            focusController.focusField(draft.fields.last?.id)
             return
         }
 
-        guard let currentIndex = fields.firstIndex(where: { $0.id == fieldID }) else {
-            focusController.focusField(fields.last?.id)
+        guard let currentIndex = draft.fields.firstIndex(where: { $0.id == fieldID }) else {
+            focusController.focusField(draft.fields.last?.id)
             return
         }
 
-        if currentIndex > fields.startIndex {
-            focusController.focusField(fields[fields.index(before: currentIndex)].id)
+        if currentIndex > draft.fields.startIndex {
+            focusController.focusField(draft.fields[draft.fields.index(before: currentIndex)].id)
         } else {
             focusController.focusCollectionSearch()
         }
@@ -2483,7 +2414,7 @@ struct InstanceEditorWindowView: View {
             try appDatabase.resetQueryDueDates(
                 instanceIDAndQueryTypeIDPairs: [(instanceID: instanceID, queryTypeID: queryTypeID)]
             )
-            queryIntervalsByQueryTypeID[queryTypeID] = 0
+            draft.queryIntervalsByQueryTypeID[queryTypeID] = 0
         } catch {
             print("Failed to reset query due date: \(error)")
             showToast(message: "Failed to reset query due date.", style: .error)
@@ -2492,7 +2423,7 @@ struct InstanceEditorWindowView: View {
 
     @MainActor
     private func deleteCurrentInstance() {
-        guard let loadedInstanceID else { return }
+        guard let loadedInstanceID = draft.loadedInstanceID else { return }
         do {
             try appDatabase.deleteInstance(instanceID: loadedInstanceID)
             NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
