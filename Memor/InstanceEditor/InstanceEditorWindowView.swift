@@ -220,6 +220,13 @@ struct InstanceEditorWindowView: View {
             // AddInstanceWindowState and are restored when the window reopens.
             dismiss()
         }
+        .onDisappear {
+            // Floating panels outlive the editor subtree (tab switch or window
+            // close) unless closed explicitly.
+            pointMapPointController.close()
+            hyperlinkSearchController.close()
+            typePickerController.close()
+        }
         .background {
             EditorPreviewShortcutHandler(
                 shortcutSettings: shortcutSettings,
