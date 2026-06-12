@@ -26,9 +26,7 @@ struct InstanceEditorWindowView: View {
     let appDatabase: AppDatabase
     let mode: InstanceEditorMode
     @ObservedObject var draft: InstanceEditorDraft
-    let requestedTypeID: Int64?
     let requestedInstanceID: Int64?
-    var requestedDuplicateSourceInstanceID: Int64? = nil
     var requestedAutoEditPointID: Int64? = nil
     let requestNonce: UUID
     let dismiss: DismissAction
@@ -66,7 +64,7 @@ struct InstanceEditorWindowView: View {
     @State private var isBoundaryMapPickerPresented = false
 
     private var selectedType: FlashcardType? {
-        guard let selectedTypeID = draft.selectedTypeID else { return nil }
+        guard draft.selectedTypeID != nil else { return nil }
         return types.first(where: { $0.id == draft.selectedTypeID })
     }
 
@@ -82,6 +80,13 @@ struct InstanceEditorWindowView: View {
 
     private var isNodeTypeSelected: Bool {
         selectedType?.isNode ?? false
+    }
+
+    /// Mirrors the selected type's map-kind onto the draft so it can compute
+    /// isDirty/tabTitle without access to the window-level `types` list.
+    private func syncDraftTypeFlags() {
+        draft.selectedTypeIsPointMap = isPointMapSelected
+        draft.selectedTypeIsBoundaryMap = isBoundaryMapSelected
     }
 
     private var linkCountsAreValid: Bool {
@@ -189,11 +194,24 @@ struct InstanceEditorWindowView: View {
             if let newValue {
                 onTypeChanged?(newValue)
             }
+            syncDraftTypeFlags()
             Task {
                 await loadFields(for: newValue)
             }
         }
+        .onChange(of: draft.pendingDuplicateSourceInstanceID) { _, newValue in
+            // An external duplication request retargeted this already-mounted tab.
+            guard mode == .add, let newValue else { return }
+            draft.pendingDuplicateSourceInstanceID = nil
+            Task {
+                await loadInstanceForDuplication(sourceInstanceID: newValue)
+                syncDraftTypeFlags()
+            }
+        }
         .onChange(of: requestNonce) { _, _ in
+            // Edit mode only: a new instance was requested into this window. Add
+            // mode passes the stable draft ID, so this never fires there.
+            guard mode == .edit else { return }
             Task<Void, Never> {
                 await loadInitialData()
             }
@@ -228,7 +246,7 @@ struct InstanceEditorWindowView: View {
     }
 
     private var selectedTypeName: String {
-        if let selectedTypeID = draft.selectedTypeID, let type = types.first(where: { $0.id == draft.selectedTypeID }) {
+        if draft.selectedTypeID != nil, let type = types.first(where: { $0.id == draft.selectedTypeID }) {
             return type.name
         }
         return "No Type Selected"
@@ -251,7 +269,7 @@ struct InstanceEditorWindowView: View {
 
                 if mode == .edit, let loadedInstanceID = draft.loadedInstanceID {
                     HStack(spacing: 8) {
-                        Text("ID: \(draft.loadedInstanceID)")
+                        Text("ID: \(loadedInstanceID)")
                             .font(.system(.body, design: .monospaced))
                             .textSelection(.enabled)
 
@@ -1412,6 +1430,13 @@ struct InstanceEditorWindowView: View {
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
             .onChange(of: requestNonce) { _, _ in
+                guard mode == .edit else { return }
+                DispatchQueue.main.async {
+                    proxy.scrollTo("fieldsSectionTop", anchor: .top)
+                }
+            }
+            .onChange(of: draft.pendingDuplicateSourceInstanceID) { _, newValue in
+                guard mode == .add, newValue != nil else { return }
                 DispatchQueue.main.async {
                     proxy.scrollTo("fieldsSectionTop", anchor: .top)
                 }
@@ -1694,11 +1719,18 @@ struct InstanceEditorWindowView: View {
             types = try appDatabase.fetchTypesOrderedByID()
             if mode == .edit, let requestedInstanceID {
                 await loadInstance(instanceID: requestedInstanceID)
-            } else if mode == .add, let requestedDuplicateSourceInstanceID {
-                await loadInstanceForDuplication(sourceInstanceID: requestedDuplicateSourceInstanceID)
+            } else if mode == .add, let pendingDuplicateSourceInstanceID = draft.pendingDuplicateSourceInstanceID {
+                draft.pendingDuplicateSourceInstanceID = nil
+                await loadInstanceForDuplication(sourceInstanceID: pendingDuplicateSourceInstanceID)
+            } else if mode == .add, let typeID = draft.selectedTypeID,
+                      types.contains(where: { $0.id == typeID }) {
+                // Restored tab: value-preserving reload of the type's metadata
+                // (fields/queryTypes/sticky), keeping the draft's contents.
+                await loadFields(for: typeID)
             } else {
                 await applyRequestedTypeSelection()
             }
+            syncDraftTypeFlags()
         } catch {
             showToast(message: "Failed to load types.", style: .error)
             types = []
@@ -1755,9 +1787,9 @@ struct InstanceEditorWindowView: View {
             return
         }
 
-        let resolvedTypeID = if let requestedTypeID,
-                                types.contains(where: { $0.id == requestedTypeID }) {
-            requestedTypeID
+        let resolvedTypeID = if let initialTypeID = draft.initialTypeID,
+                                types.contains(where: { $0.id == initialTypeID }) {
+            initialTypeID
         } else {
             types[0].id
         }
@@ -2258,7 +2290,7 @@ struct InstanceEditorWindowView: View {
 
     private func copyInstanceLinkToClipboard() {
         guard let loadedInstanceID = draft.loadedInstanceID else { return }
-        let link = #"<a href="id:\#(draft.loadedInstanceID)"></a>"#
+        let link = #"<a href="id:\#(loadedInstanceID)"></a>"#
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(link, forType: .string)

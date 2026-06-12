@@ -14,23 +14,81 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class AddInstanceWindowState: ObservableObject {
-    @Published private(set) var requestedTypeID: Int64?
-    @Published private(set) var requestedDuplicateSourceInstanceID: Int64?
-    @Published private(set) var requestNonce = UUID()
+    /// In-progress (uncommitted) instances, one per tab. Lives at app level so tab
+    /// contents survive window close/reopen; never persisted across app launches.
+    @Published var drafts: [InstanceEditorDraft] = []
+    @Published var selectedDraftID: UUID?
     @Published private(set) var latestAddedTypeID: Int64?
     @Published private(set) var latestAddNonce = UUID()
     var lastUsedTypeID: Int64?
 
+    var selectedDraft: InstanceEditorDraft? {
+        drafts.first { $0.id == selectedDraftID }
+    }
+
+    func ensureAtLeastOneTab() {
+        if drafts.isEmpty {
+            let draft = InstanceEditorDraft(initialTypeID: lastUsedTypeID)
+            drafts.append(draft)
+            selectedDraftID = draft.id
+        } else if selectedDraft == nil {
+            selectedDraftID = drafts.first?.id
+        }
+    }
+
+    func newTab() {
+        let draft = InstanceEditorDraft(initialTypeID: lastUsedTypeID)
+        drafts.append(draft)
+        selectedDraftID = draft.id
+    }
+
+    /// A plain open (no preselection) just shows the window with its existing tabs.
+    /// A preselected-type open retargets the current tab if it is completely
+    /// untouched, otherwise opens a new tab for that type.
     func requestOpen(preselectedTypeID: Int64? = nil) {
-        requestedTypeID = preselectedTypeID ?? lastUsedTypeID
-        requestedDuplicateSourceInstanceID = nil
-        requestNonce = UUID()
+        ensureAtLeastOneTab()
+        guard let preselectedTypeID else { return }
+        if let current = selectedDraft, current.isPristine {
+            if current.selectedTypeID == nil {
+                current.initialTypeID = preselectedTypeID
+            } else if current.selectedTypeID != preselectedTypeID {
+                current.selectedTypeID = preselectedTypeID
+            }
+        } else {
+            let draft = InstanceEditorDraft(initialTypeID: preselectedTypeID)
+            drafts.append(draft)
+            selectedDraftID = draft.id
+        }
     }
 
     func requestOpenForDuplication(sourceInstanceID: Int64) {
-        requestedTypeID = nil
-        requestedDuplicateSourceInstanceID = sourceInstanceID
-        requestNonce = UUID()
+        ensureAtLeastOneTab()
+        if let current = selectedDraft, current.isPristine {
+            current.pendingDuplicateSourceInstanceID = sourceInstanceID
+        } else {
+            let draft = InstanceEditorDraft(pendingDuplicateSourceInstanceID: sourceInstanceID)
+            drafts.append(draft)
+            selectedDraftID = draft.id
+        }
+    }
+
+    /// Closes a tab, discarding its draft. The only tab is replaced with a blank
+    /// tab of the most-recently-used type instead of closing the window.
+    func closeTab(id: UUID) {
+        guard let index = drafts.firstIndex(where: { $0.id == id }) else { return }
+        if drafts.count == 1 {
+            let replacement = InstanceEditorDraft(initialTypeID: lastUsedTypeID)
+            drafts[index] = replacement
+            selectedDraftID = replacement.id
+            return
+        }
+        let wasSelected = selectedDraftID == id
+        drafts.remove(at: index)
+        if wasSelected {
+            // Left neighbor; when the leftmost tab is closed, the right neighbor
+            // has slid into its index.
+            selectedDraftID = drafts[max(0, min(index - 1, drafts.count - 1))].id
+        }
     }
 
     func notifyAdded(typeID: Int64) {
@@ -117,26 +175,32 @@ struct AddInstanceWindowView: View {
 
     let appDatabase: AppDatabase
 
-    @StateObject private var draft = InstanceEditorDraft()
-
     var body: some View {
-        InstanceEditorWindowView(
-            appDatabase: appDatabase,
-            mode: .add,
-            draft: draft,
-            requestedTypeID: windowState.requestedTypeID,
-            requestedInstanceID: nil,
-            requestedDuplicateSourceInstanceID: windowState.requestedDuplicateSourceInstanceID,
-            requestNonce: windowState.requestNonce,
-            dismiss: dismiss,
-            onEditSaved: nil,
-            onAddSaved: { typeID in
-                windowState.notifyAdded(typeID: typeID)
-            },
-            onTypeChanged: { typeID in
-                windowState.lastUsedTypeID = typeID
+        Group {
+            if let draft = windowState.selectedDraft {
+                InstanceEditorWindowView(
+                    appDatabase: appDatabase,
+                    mode: .add,
+                    draft: draft,
+                    requestedInstanceID: nil,
+                    requestNonce: draft.id,
+                    dismiss: dismiss,
+                    onEditSaved: nil,
+                    onAddSaved: { typeID in
+                        windowState.notifyAdded(typeID: typeID)
+                    },
+                    onTypeChanged: { typeID in
+                        windowState.lastUsedTypeID = typeID
+                    }
+                )
+                // Load-bearing: rebuilds the editor (incl. @StateObject controllers
+                // and text views) from the newly selected draft on tab switches.
+                .id(draft.id)
             }
-        )
+        }
+        .onAppear {
+            windowState.ensureAtLeastOneTab()
+        }
     }
 }
 
@@ -153,7 +217,6 @@ struct EditInstanceWindowView: View {
             appDatabase: appDatabase,
             mode: .edit,
             draft: draft,
-            requestedTypeID: nil,
             requestedInstanceID: windowState.requestedInstanceID,
             requestedAutoEditPointID: windowState.requestedAutoEditPointID,
             requestNonce: windowState.requestNonce,
