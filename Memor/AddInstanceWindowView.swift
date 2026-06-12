@@ -176,7 +176,16 @@ struct AddInstanceWindowView: View {
     let appDatabase: AppDatabase
 
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
+            AddInstanceTabBar(
+                windowState: windowState,
+                onSelect: selectTab,
+                onClose: requestCloseTab,
+                onNewTab: { windowState.newTab() }
+            )
+
+            Divider()
+
             if let draft = windowState.selectedDraft {
                 InstanceEditorWindowView(
                     appDatabase: appDatabase,
@@ -201,6 +210,46 @@ struct AddInstanceWindowView: View {
         .onAppear {
             windowState.ensureAtLeastOneTab()
         }
+    }
+
+    private func selectTab(_ id: UUID) {
+        guard windowState.selectedDraftID != id else { return }
+        windowState.selectedDraftID = id
+        // Most-recently-used type tracks tab activation, not just type changes.
+        if let typeID = windowState.selectedDraft?.selectedTypeID {
+            windowState.lastUsedTypeID = typeID
+        }
+    }
+
+    /// X button / ⌘W: switch to the tab first, then confirm the discard unless
+    /// the tab has nothing the user could lose.
+    private func requestCloseTab(_ id: UUID) {
+        guard let draft = windowState.drafts.first(where: { $0.id == id }) else { return }
+        selectTab(id)
+        guard draft.isDirty, let window = NSApp.keyWindow else {
+            windowState.closeTab(id: id)
+            return
+        }
+        presentDiscardInstanceConfirmation(on: window) {
+            windowState.closeTab(id: id)
+        }
+    }
+}
+
+/// The shared "Are you sure you want to discard this instance?" alert.
+/// "No, keep editing" leaves everything untouched.
+func presentDiscardInstanceConfirmation(on window: NSWindow, onDiscard: @escaping () -> Void) {
+    if window.attachedSheet != nil { return }
+    let alert = NSAlert()
+    alert.alertStyle = .informational
+    alert.messageText = "Are you sure you want to discard this instance?"
+    alert.informativeText = "The data associated with this instance may be lost."
+    alert.addButton(withTitle: "Yes, discard instance")
+    let keepButton = alert.addButton(withTitle: "No, keep editing")
+    keepButton.keyEquivalent = "\u{1b}"
+    alert.beginSheetModal(for: window) { response in
+        guard response == .alertFirstButtonReturn else { return }
+        onDiscard()
     }
 }
 
