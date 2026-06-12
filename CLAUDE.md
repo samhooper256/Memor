@@ -14,7 +14,7 @@ Memor/
   ContentView.swift                 Main window shell: AppTab, AppNavigationState, ContentView, TabPageView
   AppDatabase.swift                 Database class + init + CRUD + search parsing + SRS (large; incremental splits underway — see Database/)
   Utilities.swift                   Cross-cutting helpers (QueryRenderContent etc.) that don't yet belong elsewhere
-  AddInstanceWindowView.swift       Thin wrappers only: AddInstanceWindowState, EditInstanceWindowState, QueryPreviewWindowState, AddInstanceWindowView, EditInstanceWindowView
+  AddInstanceWindowView.swift       AddInstanceWindowState (tab drafts + selection), EditInstanceWindowState, QueryPreviewWindowState, AddInstanceWindowView (tab container + tab-close/discard flow), EditInstanceWindowView
   SearchWindowView.swift            Unified "Search" window: SearchWindowState + SearchMode (Instances/Queries/Points & Boundaries), Shift+Tab to switch modes
   QueryPreviewWindowView.swift      Query preview WKWebView window
   TypesPageView.swift               Types list view + TypeRowView
@@ -33,6 +33,8 @@ Memor/
     StudyModeView.swift             Study mode UI, header, rating buttons, undo stack, key commands
   InstanceEditor/
     InstanceEditorWindowView.swift  Core editor body shared by Add/Edit instance windows (InstanceEditorMode enum lives here)
+    InstanceEditorDraft.swift       Per-tab ObservableObject holding all in-progress instance state (isDirty/isPristine/tabTitle); Add-mode drafts live on AddInstanceWindowState so tabs survive window close (in-memory only, never persisted)
+    AddInstanceTabBar.swift         Add Instance tab strip (chips + X + "+") and the window-scoped ⌘1–⌘9/⌘W key monitor (non-customizable)
     InstanceFieldEditor.swift       Per-field editor cell, InstanceTextView (NSViewRepresentable), AddInstanceFieldFocusController
     NodeLinkFieldEditor.swift       Node-instance link-field editor: target chips + search popover (uses fetchNodeCandidates)
     HyperlinkSearch.swift           ⌘K hyperlink-search popup: controller, state, panel, text field, popup view
