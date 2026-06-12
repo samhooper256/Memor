@@ -246,6 +246,13 @@ private final class QueryWebNavigationDelegate: NSObject, WKNavigationDelegate {
             return
         }
 
+        // External web links open in the user's default browser, not in the web view.
+        if let scheme = url.scheme?.lowercased(), ["http", "https", "mailto"].contains(scheme) {
+            NSWorkspace.shared.open(url)
+            decisionHandler(.cancel)
+            return
+        }
+
         decisionHandler(.allow)
     }
 }
