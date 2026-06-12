@@ -58,7 +58,6 @@ struct InstanceEditorWindowView: View {
     @State private var pointMapListSelection: Set<PointMapEntryRef> = []
     @State private var boundaryMapListSelection: Set<BoundaryMapEntryRef> = []
     @StateObject private var pointMapPointController = AddPointPopupController()
-    @State private var closeInterceptor = InstanceEditorCloseInterceptor()
     @State private var isBoundaryPickerPresented = false
     @State private var isIDCopyButtonHovered = false
     @State private var isBoundaryMapPickerPresented = false
@@ -126,7 +125,7 @@ struct InstanceEditorWindowView: View {
 
     private var keyCommandHandler: some View {
         WindowKeyCommandHandler(
-            onEscape: { attemptDismiss() },
+            onEscape: { dismiss() },
             onCommandReturn: submitInstance,
             onCommandS: handleCommandS,
             onCommandB: { wrapFocusedSelection(openTag: "<b>", closeTag: "</b>") },
@@ -217,16 +216,9 @@ struct InstanceEditorWindowView: View {
             }
         }
         .onExitCommand {
-            attemptDismiss()
-        }
-        .background {
-            InstanceEditorCloseGuard(
-                interceptor: closeInterceptor,
-                shouldConfirm: { shouldConfirmDiscard() },
-                presentConfirmation: { window in
-                    presentDiscardConfirmation(on: window)
-                }
-            )
+            // Closes silently; in add mode all tab drafts live on
+            // AddInstanceWindowState and are restored when the window reopens.
+            dismiss()
         }
         .background {
             EditorPreviewShortcutHandler(
@@ -2224,51 +2216,6 @@ struct InstanceEditorWindowView: View {
 
         Task {
             await submitCurrentInstance()
-        }
-    }
-
-    private func shouldConfirmDiscard() -> Bool {
-        guard mode == .add else { return false }
-        if isPointMapSelected {
-            return !draft.pointMapNewPoints.isEmpty
-        }
-        if isBoundaryMapSelected {
-            return !draft.boundaryMapNewAttachments.isEmpty
-        }
-        return draft.fields.contains { field in
-            guard !draft.stickyFieldIDs.contains(field.id) else { return false }
-            let value = draft.fieldValues[field.id] ?? ""
-            return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
-    }
-
-    private func attemptDismiss() {
-        guard shouldConfirmDiscard() else {
-            closeInterceptor.bypassNextClose = true
-            dismiss()
-            return
-        }
-        if let window = NSApp.keyWindow {
-            presentDiscardConfirmation(on: window)
-        } else {
-            closeInterceptor.bypassNextClose = true
-            dismiss()
-        }
-    }
-
-    private func presentDiscardConfirmation(on window: NSWindow) {
-        if window.attachedSheet != nil { return }
-        let alert = NSAlert()
-        alert.alertStyle = .informational
-        alert.messageText = "Are you sure you want to discard this instance?"
-        alert.informativeText = "The data associated with this instance may be lost."
-        alert.addButton(withTitle: "Yes, discard instance")
-        let keepButton = alert.addButton(withTitle: "No, keep editing")
-        keepButton.keyEquivalent = "\u{1b}"
-        alert.beginSheetModal(for: window) { response in
-            guard response == .alertFirstButtonReturn else { return }
-            closeInterceptor.bypassNextClose = true
-            window.close()
         }
     }
 
