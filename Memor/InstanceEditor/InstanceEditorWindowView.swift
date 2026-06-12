@@ -35,6 +35,7 @@ struct InstanceEditorWindowView: View {
     let onTypeChanged: ((Int64) -> Void)?
 
     @State private var types: [FlashcardType] = []
+    @State private var isInitialLoadComplete = false
     @State private var toast: ToastMessage?
     @State private var toastTask: Task<Void, Never>?
     @State private var allCollectionItems: [CollectionChecklistItem] = []
@@ -1401,9 +1402,15 @@ struct InstanceEditorWindowView: View {
                         .id("fieldsSectionTop")
 
                     if draft.selectedTypeID == nil {
-                        Text("No types are available.")
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        // Render nothing while the initial load is still resolving a
+                        // type, so the empty-state text doesn't flash on new tabs.
+                        if isInitialLoadComplete {
+                            Text("No types are available.")
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    } else if draft.fields.isEmpty, draft.loadedTypeID != draft.selectedTypeID {
+                        // Fields for the newly selected type are still loading.
                     } else if draft.fields.isEmpty {
                         Text("This type has no fields.")
                             .foregroundStyle(.secondary)
@@ -1715,6 +1722,7 @@ struct InstanceEditorWindowView: View {
 
     @MainActor
     private func loadInitialData() async {
+        defer { isInitialLoadComplete = true }
         do {
             types = try appDatabase.fetchTypesOrderedByID()
             if mode == .edit, let requestedInstanceID {
