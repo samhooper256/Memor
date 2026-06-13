@@ -220,6 +220,7 @@ private struct CollectionDetailPageView: View {
     @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var searchWindowState: SearchWindowState
     @EnvironmentObject private var editInstanceWindowState: EditInstanceWindowState
+    @EnvironmentObject private var addInstanceWindowState: AddInstanceWindowState
 
     let collection: Collection
     let appDatabase: AppDatabase
@@ -380,6 +381,12 @@ private struct CollectionDetailPageView: View {
                     }
                 }
                 .contextMenu(forSelectionType: Int64.self) { items in
+                    if items.count == 1, let instanceID = items.first {
+                        Button("Duplicate") {
+                            addInstanceWindowState.requestOpenForDuplication(sourceInstanceID: instanceID)
+                            openWindow(id: "add-instance")
+                        }
+                    }
                     if !items.isEmpty {
                         Button("Remove from Collection", role: .destructive) {
                             promptToRemoveInstances(items)
