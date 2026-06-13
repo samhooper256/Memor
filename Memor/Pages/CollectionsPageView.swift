@@ -340,7 +340,11 @@ private struct CollectionDetailPageView: View {
                 }
                 .frame(maxWidth: .infinity)
 
-                DescriptionEditor(text: $description)
+                DescriptionEditor(text: $description, onBeginEditing: {
+                    // Deselect instance rows so the window's delete-key monitor
+                    // doesn't remove an instance while editing the description.
+                    selectedInstanceIDs.removeAll()
+                })
                 .onChange(of: description) { _, newValue in
                     descriptionSaveTask?.cancel()
                     descriptionSaveTask = Task {

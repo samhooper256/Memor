@@ -13,6 +13,8 @@ import SwiftUI
 /// placeholder shown while empty. Matches the styling shared by Collections and Stacks.
 struct DescriptionEditor: View {
     @Binding var text: String
+    /// Called when the editor gains keyboard focus (begins editing).
+    var onBeginEditing: (() -> Void)? = nil
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -24,7 +26,7 @@ struct DescriptionEditor: View {
                     .padding(.vertical, 6)
                     .allowsHitTesting(false)
             }
-            PlainTextEditor(text: $text)
+            PlainTextEditor(text: $text, onBeginEditing: onBeginEditing)
                 .frame(minHeight: 60)
         }
         .background(Color(nsColor: .controlBackgroundColor))

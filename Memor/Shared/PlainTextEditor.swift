@@ -10,9 +10,10 @@ import SwiftUI
 
 struct PlainTextEditor: NSViewRepresentable {
     @Binding var text: String
+    var onBeginEditing: (() -> Void)? = nil
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text)
+        Coordinator(text: $text, onBeginEditing: onBeginEditing)
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -51,6 +52,7 @@ struct PlainTextEditor: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
+        context.coordinator.onBeginEditing = onBeginEditing
         if textView.string != text {
             textView.string = text
         }
@@ -58,15 +60,21 @@ struct PlainTextEditor: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         @Binding var text: String
+        var onBeginEditing: (() -> Void)?
         weak var textView: NSTextView?
 
-        init(text: Binding<String>) {
+        init(text: Binding<String>, onBeginEditing: (() -> Void)?) {
             _text = text
+            self.onBeginEditing = onBeginEditing
         }
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             text = textView.string
+        }
+
+        func textDidBeginEditing(_ notification: Notification) {
+            onBeginEditing?()
         }
     }
 }
