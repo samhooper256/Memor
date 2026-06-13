@@ -540,7 +540,8 @@ private struct CollectionDetailKeyCommandHandler: NSViewRepresentable {
                 guard let self, event.window === self.window else { return event }
                 let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
 
-                if flags.isEmpty && (event.keyCode == 51 || event.keyCode == 117) && self.hasSelection {
+                if flags.isEmpty && (event.keyCode == 51 || event.keyCode == 117)
+                    && self.hasSelection && !self.isEditingText {
                     self.onDelete?()
                     return nil
                 }
@@ -559,6 +560,14 @@ private struct CollectionDetailKeyCommandHandler: NSViewRepresentable {
                 NSEvent.removeMonitor(monitor)
                 self.monitor = nil
             }
+        }
+
+        /// True when a text view (the description box, search field, or rename
+        /// popover) is editing, so Delete should reach it instead of removing an
+        /// instance. NSTextField editing routes through the window's field editor,
+        /// which is itself an NSTextView, so this one check covers all of them.
+        private var isEditingText: Bool {
+            window?.firstResponder is NSTextView
         }
     }
 }

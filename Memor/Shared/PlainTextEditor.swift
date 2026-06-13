@@ -24,7 +24,10 @@ struct PlainTextEditor: NSViewRepresentable {
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
 
-        let textView = NSTextView()
+        let textView = FocusReportingTextView()
+        textView.onBecomeFirstResponder = { [weak coordinator = context.coordinator] in
+            coordinator?.onBeginEditing?()
+        }
         textView.delegate = context.coordinator
         textView.drawsBackground = false
         textView.isRichText = false
@@ -72,9 +75,21 @@ struct PlainTextEditor: NSViewRepresentable {
             guard let textView = notification.object as? NSTextView else { return }
             text = textView.string
         }
+    }
+}
 
-        func textDidBeginEditing(_ notification: Notification) {
-            onBeginEditing?()
+/// NSTextView that reports when it becomes first responder. `textDidBeginEditing`
+/// is unreliable for focus detection: it fires only on the first content change,
+/// not when the view merely gains focus, so it can't be used to react to focus
+/// before the user's first keystroke.
+private final class FocusReportingTextView: NSTextView {
+    var onBecomeFirstResponder: (() -> Void)?
+
+    override func becomeFirstResponder() -> Bool {
+        let didBecome = super.becomeFirstResponder()
+        if didBecome {
+            onBecomeFirstResponder?()
         }
+        return didBecome
     }
 }
