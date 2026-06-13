@@ -440,6 +440,12 @@ private struct CollectionDetailPageView: View {
                 await loadInstances()
             }
         }
+        .onChange(of: addInstanceWindowState.latestAddNonce) { _, _ in
+            Task { await loadInstances() }
+        }
+        .onChange(of: editInstanceWindowState.latestSaveNonce) { _, _ in
+            Task { await loadInstances() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .memorDidChangeDatabase)) { _ in
             Task { await loadInstances() }
         }
