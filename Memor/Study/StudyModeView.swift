@@ -53,6 +53,11 @@ struct StudyModeView: View {
     @State private var allCollectionNames: [String] = []
     @State private var pendingUndo: StudyUndoAction?
 
+    // Object/Node queries get a slim bottom bar; map queries keep the taller one.
+    private var isStandardQuery: Bool {
+        currentQuery?.kind == .standard
+    }
+
     private var projectedIntervals: [(title: String, label: String, color: Color, isClamped: Bool, rating: StudyResponseRating)] {
         guard let currentQuery else { return [] }
 
@@ -235,8 +240,9 @@ struct StudyModeView: View {
 
                 Spacer()
             }
-            .padding(24)
-            .frame(maxWidth: .infinity, minHeight: 100)
+            .padding(.horizontal, 24)
+            .padding(.vertical, isStandardQuery ? 8 : 24)
+            .frame(maxWidth: .infinity, minHeight: isStandardQuery ? nil : 100)
             .background(.bar)
         }
         .task {
