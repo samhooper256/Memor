@@ -151,6 +151,7 @@ enum MemorMCPTools {
             let longitude = try arguments.requireDouble("longitude")
             let forwardEnabled = try arguments.optionalBool("forward_enabled") ?? true
             let reverseEnabled = try arguments.optionalBool("reverse_enabled") ?? false
+            let hint = try arguments.optionalString("hint") ?? ""
             return try jsonResult(addPointMapPoint(
                 instanceID: instanceID,
                 name: name,
@@ -158,6 +159,7 @@ enum MemorMCPTools {
                 longitude: longitude,
                 forwardEnabled: forwardEnabled,
                 reverseEnabled: reverseEnabled,
+                hint: hint,
                 appDatabase: appDatabase
             ))
         case "update_pointmap_point":
@@ -169,6 +171,7 @@ enum MemorMCPTools {
                 longitude: try arguments.optionalDouble("longitude"),
                 forwardEnabled: try arguments.optionalBool("forward_enabled"),
                 reverseEnabled: try arguments.optionalBool("reverse_enabled"),
+                hint: try arguments.optionalString("hint"),
                 appDatabase: appDatabase
             ))
         case "delete_pointmap_point":
@@ -721,7 +724,8 @@ enum MemorMCPTools {
             latitude: latitude,
             longitude: longitude,
             forwardEnabled: try item.optionalBool("forward_enabled") ?? true,
-            reverseEnabled: try item.optionalBool("reverse_enabled") ?? false
+            reverseEnabled: try item.optionalBool("reverse_enabled") ?? false,
+            hint: try item.optionalString("hint") ?? ""
         )
     }
 
@@ -809,6 +813,7 @@ enum MemorMCPTools {
         longitude: Double,
         forwardEnabled: Bool,
         reverseEnabled: Bool,
+        hint: String,
         appDatabase: AppDatabase
     ) throws -> CreatedPointDTO {
         guard (try? appDatabase.fetchPointMapInstance(instanceID: instanceID)) ?? nil != nil else {
@@ -821,7 +826,8 @@ enum MemorMCPTools {
             latitude: latitude,
             longitude: longitude,
             forwardEnabled: forwardEnabled,
-            reverseEnabled: reverseEnabled
+            reverseEnabled: reverseEnabled,
+            hint: hint
         )
         postDatabaseChange()
         return CreatedPointDTO(pointID: pointID, instanceID: instanceID)
@@ -835,6 +841,7 @@ enum MemorMCPTools {
         longitude: Double?,
         forwardEnabled: Bool?,
         reverseEnabled: Bool?,
+        hint: String?,
         appDatabase: AppDatabase
     ) throws -> OkDTO {
         guard let current = try appDatabase.fetchPointMapInstance(instanceID: instanceID) else {
@@ -857,7 +864,8 @@ enum MemorMCPTools {
             forwardEnabled: forwardEnabled ?? old.forwardEnabled,
             reverseEnabled: reverseEnabled ?? old.reverseEnabled,
             forwardInterval: old.forwardInterval,
-            reverseInterval: old.reverseInterval
+            reverseInterval: old.reverseInterval,
+            hint: hint ?? old.hint
         )
         try appDatabase.updatePointMapInstance(
             instanceID: instanceID,
@@ -1639,7 +1647,7 @@ enum MemorMCPTools {
 
             Tool(
                 name: "create_pointmap_instance",
-                description: "Create a new PointMap instance (a named map with studyable points). Optional points array seeds initial points, each {name, latitude, longitude, forward_enabled? (default true), reverse_enabled? (default false)}. default_center_lat/lng (default 0) and default_zoom (default 2) set the question map's initial viewport. boundary_ids optionally overlays boundary outlines on the map (discover via list_boundary_sets / list_boundaries).",
+                description: "Create a new PointMap instance (a named map with studyable points). Optional points array seeds initial points, each {name, latitude, longitude, forward_enabled? (default true), reverse_enabled? (default false), hint? (default empty)}. A point's hint is text shown in Study mode before the answer is revealed, on Forward queries only. default_center_lat/lng (default 0) and default_zoom (default 2) set the question map's initial viewport. boundary_ids optionally overlays boundary outlines on the map (discover via list_boundary_sets / list_boundaries).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -1657,7 +1665,8 @@ enum MemorMCPTools {
                                     "latitude": numberValue,
                                     "longitude": numberValue,
                                     "forward_enabled": boolValue,
-                                    "reverse_enabled": boolValue
+                                    "reverse_enabled": boolValue,
+                                    "hint": stringValue
                                 ]),
                                 "required": .array([.string("name"), .string("latitude"), .string("longitude")])
                             ])
@@ -1686,7 +1695,7 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "add_pointmap_point",
-                description: "Add a point (query) to an existing PointMap instance, identified by instance_id. Provide the point name and its latitude (-90..90) / longitude (-180..180). forward_enabled (default true) and reverse_enabled (default false) control which of the point's two queries are enabled; set both to false for a point with no active query.",
+                description: "Add a point (query) to an existing PointMap instance, identified by instance_id. Provide the point name and its latitude (-90..90) / longitude (-180..180). forward_enabled (default true) and reverse_enabled (default false) control which of the point's two queries are enabled; set both to false for a point with no active query. hint (default empty) is text shown in Study mode before the answer is revealed, on Forward queries only.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -1695,14 +1704,15 @@ enum MemorMCPTools {
                         "latitude": numberValue,
                         "longitude": numberValue,
                         "forward_enabled": boolValue,
-                        "reverse_enabled": boolValue
+                        "reverse_enabled": boolValue,
+                        "hint": stringValue
                     ]),
                     "required": .array([.string("instance_id"), .string("name"), .string("latitude"), .string("longitude")])
                 ])
             ),
             Tool(
                 name: "update_pointmap_point",
-                description: "Update a point on a PointMap instance: name, coordinates, and/or which query directions are enabled. Omitted arguments keep their current values. WARNING: disabling a direction (forward_enabled/reverse_enabled = false) permanently deletes that direction's SRS progress; re-enabling starts it as new.",
+                description: "Update a point on a PointMap instance: name, hint, coordinates, and/or which query directions are enabled. Omitted arguments keep their current values (pass hint as an empty string to clear it). The hint is shown in Study mode before the answer is revealed, on Forward queries only. WARNING: disabling a direction (forward_enabled/reverse_enabled = false) permanently deletes that direction's SRS progress; re-enabling starts it as new.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -1712,7 +1722,8 @@ enum MemorMCPTools {
                         "latitude": numberValue,
                         "longitude": numberValue,
                         "forward_enabled": boolValue,
-                        "reverse_enabled": boolValue
+                        "reverse_enabled": boolValue,
+                        "hint": stringValue
                     ]),
                     "required": .array([.string("instance_id"), .string("point_id")])
                 ])
@@ -2218,6 +2229,7 @@ private struct InstanceDetailDTO: Encodable {
 private struct PointMapPointDTO: Encodable {
     let id: Int64
     let name: String
+    let hint: String
     let latitude: Double
     let longitude: Double
     let forwardEnabled: Bool
@@ -2228,6 +2240,7 @@ private struct PointMapPointDTO: Encodable {
     init(_ point: PointMapPoint) {
         id = point.id
         name = point.name
+        hint = point.hint
         latitude = point.latitude
         longitude = point.longitude
         forwardEnabled = point.forwardEnabled
