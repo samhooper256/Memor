@@ -206,6 +206,7 @@ extension AppDatabase {
                     instance_id INTEGER NOT NULL
                         REFERENCES pointmap_instance(instance_id) ON DELETE CASCADE,
                     name TEXT NOT NULL DEFAULT '',
+                    hint TEXT NOT NULL DEFAULT '',
                     latitude REAL NOT NULL,
                     longitude REAL NOT NULL,
                     interval INTEGER NOT NULL DEFAULT 0,
@@ -221,6 +222,7 @@ extension AppDatabase {
 
             try migrateQueryStateColumn(db: db, table: "pointmap_point")
             try migrateReverseQueryColumns(db: db, table: "pointmap_point")
+            try migratePointMapPointHintColumn(db: db)
 
             try db.execute(sql: """
                 CREATE INDEX IF NOT EXISTS idx_pointmap_point_instance
@@ -520,6 +522,18 @@ extension AppDatabase {
     // stack pinning existed. Idempotent: the ALTER runs only when the column is
     // absent, so this is a no-op on fresh installs. Existing rows default to
     // is_pinned = 0 — i.e. unpinned.
+    // Adds the per-point hint column to databases created before point hints
+    // existed. Idempotent: the ALTER runs only when the column is absent, so it's
+    // a no-op on fresh installs. Existing rows default to '' (blank hint),
+    // preserving all points and their query state.
+    private static func migratePointMapPointHintColumn(db: Database) throws {
+        let info = try Row.fetchAll(db, sql: "PRAGMA table_info(\"pointmap_point\")")
+        let names = Set(info.compactMap { $0["name"] as String? })
+        if !names.contains("hint") {
+            try db.execute(sql: "ALTER TABLE \"pointmap_point\" ADD COLUMN hint TEXT NOT NULL DEFAULT ''")
+        }
+    }
+
     private static func migrateStackPinnedColumn(db: Database) throws {
         let info = try Row.fetchAll(db, sql: "PRAGMA table_info(\"stack\")")
         let names = Set(info.compactMap { $0["name"] as String? })

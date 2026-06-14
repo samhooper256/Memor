@@ -19,6 +19,7 @@ struct PointMapPointDraftEntry: Identifiable, Hashable {
     var longitude: Double
     var forwardEnabled: Bool = true
     var reverseEnabled: Bool = false
+    var hint: String = ""
 
     var id: UUID { localID }
 }

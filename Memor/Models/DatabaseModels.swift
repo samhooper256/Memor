@@ -55,6 +55,8 @@ struct PointMapPoint: Identifiable, Hashable {
     var reverseEnabled: Bool = false
     var forwardInterval: Int64 = 0
     var reverseInterval: Int64 = 0
+    // Pre-reveal hint shown for Forward point queries in Study mode (default blank).
+    var hint: String = ""
 }
 
 struct PointMapInstanceWithPoints: Hashable {
@@ -361,6 +363,8 @@ struct PointMapStudyPayload: Hashable {
     var showHighlight: Bool = true
     var boundaries: [BoundaryGeometry] = []
     var isReverse: Bool = false
+    // The answer point's hint, shown before reveal on Forward queries (default blank).
+    var hint: String = ""
 }
 
 struct BoundaryMapStudyPayload: Hashable {

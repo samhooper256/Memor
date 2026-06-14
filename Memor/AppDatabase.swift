@@ -2659,7 +2659,7 @@ struct AppDatabase {
         let pointRows = try GRDB.Row.fetchAll(
             db,
             sql: """
-                SELECT id, name, latitude, longitude
+                SELECT id, name, hint, latitude, longitude
                 FROM pointmap_point
                 WHERE instance_id = ?
                 ORDER BY id
@@ -2672,7 +2672,8 @@ struct AppDatabase {
                 instanceID: instanceID,
                 name: pr["name"] as String? ?? "",
                 latitude: pr["latitude"] as Double? ?? 0,
-                longitude: pr["longitude"] as Double? ?? 0
+                longitude: pr["longitude"] as Double? ?? 0,
+                hint: pr["hint"] as String? ?? ""
             )
         }
 
@@ -2696,7 +2697,8 @@ struct AppDatabase {
             defaultZoom: instanceRow.defaultZoom,
             showAllPointsInQuestion: instanceRow.showAllPointsInQuestion,
             showHighlight: highlightedPoint != nil,
-            boundaries: boundaries
+            boundaries: boundaries,
+            hint: highlightedPoint?.hint ?? ""
         )
         return StudyQuery(
             instanceID: instanceID,
@@ -3223,6 +3225,7 @@ struct AppDatabase {
         var longitude: Double
         var forwardEnabled: Bool = true
         var reverseEnabled: Bool = false
+        var hint: String = ""
     }
 
     struct BoundaryMapBoundaryDraft: Hashable {
@@ -3282,10 +3285,10 @@ struct AppDatabase {
             for point in points {
                 try db.execute(
                     sql: """
-                        INSERT INTO pointmap_point (instance_id, name, latitude, longitude)
-                        VALUES (?, ?, ?, ?)
+                        INSERT INTO pointmap_point (instance_id, name, hint, latitude, longitude)
+                        VALUES (?, ?, ?, ?, ?)
                         """,
-                    arguments: [instanceID, point.name, point.latitude, point.longitude]
+                    arguments: [instanceID, point.name, point.hint, point.latitude, point.longitude]
                 )
                 let pointID = db.lastInsertedRowID
                 try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: pointID, isReverse: false, enabled: point.forwardEnabled)
@@ -3306,7 +3309,8 @@ struct AppDatabase {
         latitude: Double,
         longitude: Double,
         forwardEnabled: Bool,
-        reverseEnabled: Bool
+        reverseEnabled: Bool,
+        hint: String = ""
     ) throws -> Int64 {
         try dbQueue.write { db in
             let isPointMapInstance = try Int.fetchOne(
@@ -3320,10 +3324,10 @@ struct AppDatabase {
 
             try db.execute(
                 sql: """
-                    INSERT INTO pointmap_point (instance_id, name, latitude, longitude)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO pointmap_point (instance_id, name, hint, latitude, longitude)
+                    VALUES (?, ?, ?, ?, ?)
                     """,
-                arguments: [instanceID, name, latitude, longitude]
+                arguments: [instanceID, name, hint, latitude, longitude]
             )
             let pointID = db.lastInsertedRowID
             try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: pointID, isReverse: false, enabled: forwardEnabled)
@@ -3381,10 +3385,10 @@ struct AppDatabase {
                 try db.execute(
                     sql: """
                         UPDATE pointmap_point
-                        SET name = ?, latitude = ?, longitude = ?
+                        SET name = ?, hint = ?, latitude = ?, longitude = ?
                         WHERE id = ?
                         """,
-                    arguments: [point.name, point.latitude, point.longitude, point.id]
+                    arguments: [point.name, point.hint, point.latitude, point.longitude, point.id]
                 )
                 try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: point.id, isReverse: false, enabled: point.forwardEnabled)
                 try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: point.id, isReverse: true, enabled: point.reverseEnabled)
@@ -3394,10 +3398,10 @@ struct AppDatabase {
             for point in newPoints {
                 try db.execute(
                     sql: """
-                        INSERT INTO pointmap_point (instance_id, name, latitude, longitude)
-                        VALUES (?, ?, ?, ?)
+                        INSERT INTO pointmap_point (instance_id, name, hint, latitude, longitude)
+                        VALUES (?, ?, ?, ?, ?)
                         """,
-                    arguments: [instanceID, point.name, point.latitude, point.longitude]
+                    arguments: [instanceID, point.name, point.hint, point.latitude, point.longitude]
                 )
                 let pointID = db.lastInsertedRowID
                 try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: pointID, isReverse: false, enabled: point.forwardEnabled)
@@ -3434,7 +3438,7 @@ struct AppDatabase {
             let pointRows = try Row.fetchAll(
                 db,
                 sql: """
-                    SELECT p.id AS id, p.name AS name, p.latitude AS latitude, p.longitude AS longitude,
+                    SELECT p.id AS id, p.name AS name, p.hint AS hint, p.latitude AS latitude, p.longitude AS longitude,
                            (qf.id IS NOT NULL) AS forward_enabled, (qr.id IS NOT NULL) AS reverse_enabled,
                            COALESCE(qf.interval, 0) AS interval, COALESCE(qr.interval, 0) AS reverse_interval
                     FROM pointmap_point AS p
@@ -3455,7 +3459,8 @@ struct AppDatabase {
                     forwardEnabled: ((row["forward_enabled"] as Int64?) ?? 1) != 0,
                     reverseEnabled: ((row["reverse_enabled"] as Int64?) ?? 0) != 0,
                     forwardInterval: (row["interval"] as Int64?) ?? 0,
-                    reverseInterval: (row["reverse_interval"] as Int64?) ?? 0
+                    reverseInterval: (row["reverse_interval"] as Int64?) ?? 0,
+                    hint: row["hint"] as String? ?? ""
                 )
             }
 
@@ -5101,7 +5106,7 @@ struct AppDatabase {
         let allPointRows = try Row.fetchAll(
             db,
             sql: """
-                SELECT id, instance_id, name, latitude, longitude
+                SELECT id, instance_id, name, hint, latitude, longitude
                 FROM pointmap_point
                 WHERE instance_id IN (
                     SELECT DISTINCT instance_id FROM pointmap_point
@@ -5116,7 +5121,8 @@ struct AppDatabase {
                 instanceID: instanceID,
                 name: row["name"] as String? ?? "",
                 latitude: row["latitude"] as Double? ?? 0,
-                longitude: row["longitude"] as Double? ?? 0
+                longitude: row["longitude"] as Double? ?? 0,
+                hint: row["hint"] as String? ?? ""
             )
             pointsByInstanceID[instanceID, default: []].append(point)
         }
@@ -5142,7 +5148,8 @@ struct AppDatabase {
                 defaultZoom: row.defaultZoom,
                 showAllPointsInQuestion: row.showAllPointsInQuestion,
                 boundaries: boundaries,
-                isReverse: row.isReverse
+                isReverse: row.isReverse,
+                hint: pointsByInstanceID[row.instanceID]?.first { $0.id == row.pointID }?.hint ?? ""
             )
             return StudyQuery(
                 instanceID: row.instanceID,
