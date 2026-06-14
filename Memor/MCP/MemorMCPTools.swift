@@ -324,6 +324,7 @@ enum MemorMCPTools {
         return TypeDetailDTO(
             id: type.id,
             name: type.name,
+            description: type.description,
             isBuiltin: type.isBuiltin,
             isPointMap: type.name == POINTMAP_TYPE_NAME,
             isBoundaryMap: type.name == BOUNDARYMAP_TYPE_NAME,
@@ -2049,6 +2050,7 @@ private struct OkDTO: Encodable {
 private struct TypeSummaryDTO: Encodable {
     let id: Int64
     let name: String
+    let description: String
     let isBuiltin: Bool
     let isPointMap: Bool
     let isBoundaryMap: Bool
@@ -2058,6 +2060,7 @@ private struct TypeSummaryDTO: Encodable {
     init(_ type: FlashcardType) {
         id = type.id
         name = type.name
+        description = type.description
         isBuiltin = type.isBuiltin
         isPointMap = type.name == POINTMAP_TYPE_NAME
         isBoundaryMap = type.name == BOUNDARYMAP_TYPE_NAME
@@ -2091,6 +2094,7 @@ private struct QueryTypeDTO: Encodable {
 private struct TypeDetailDTO: Encodable {
     let id: Int64
     let name: String
+    let description: String
     let isBuiltin: Bool
     let isPointMap: Bool
     let isBoundaryMap: Bool
