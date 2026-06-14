@@ -197,6 +197,18 @@ struct SearchWindowView: View {
         return result
     }
 
+    // Instances reachable from the Queries results that can be duplicated — i.e.
+    // not PointMap/BoundaryMap instances (whose editor doesn't support duplication).
+    private var duplicatableQueryInstanceIDs: Set<Int64> {
+        var result: Set<Int64> = []
+        for section in querySections where section.typeName != POINTMAP_TYPE_NAME && section.typeName != BOUNDARYMAP_TYPE_NAME {
+            for query in section.queries {
+                result.insert(query.instanceID)
+            }
+        }
+        return result
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -475,6 +487,12 @@ struct SearchWindowView: View {
                 Button("Edit Instance") {
                     editInstanceWindowState.requestOpen(instanceID: instanceID)
                     openWindow(id: "edit-instance")
+                }
+                if duplicatableQueryInstanceIDs.contains(instanceID) {
+                    Button("Duplicate instance") {
+                        addInstanceWindowState.requestOpenForDuplication(sourceInstanceID: instanceID)
+                        openWindow(id: "add-instance")
+                    }
                 }
                 Divider()
             }
