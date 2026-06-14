@@ -115,6 +115,9 @@ struct PointMapQueryView: View {
         return clickedPointID == payload.pointID ? .green : .red
     }
 
+    // Reddish tint for the pre-reveal hint text on Forward point queries.
+    private static let hintColor = Color(red: 0.85, green: 0.26, blue: 0.26)
+
     // In a reverse query the user is shown the name and must click the matching
     // point. Before they reveal, the answer must not be pre-highlighted and the
     // points become interactive (hover-red + pointer + click-to-reveal).
@@ -191,6 +194,14 @@ struct PointMapQueryView: View {
 
             ZStack {
                 Color.clear
+                // Forward query, before reveal: show the point's hint (reddish) in
+                // the answer's spot. Reverse queries never show a hint.
+                if !revealName, !payload.isReverse, payload.showHighlight, !payload.hint.isEmpty {
+                    Text(payload.hint)
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Self.hintColor)
+                }
                 // Forward: show the name only after reveal. Reverse: the name IS
                 // the prompt, so show it throughout.
                 if (revealName && payload.showHighlight) || payload.isReverse {

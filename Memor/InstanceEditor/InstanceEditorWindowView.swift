@@ -778,14 +778,15 @@ struct InstanceEditorWindowView: View {
             initialForwardEnabled: true,
             initialReverseEnabled: false,
             isEdit: false
-        ) { name, lat, lng, forward, reverse in
+        ) { name, lat, lng, forward, reverse, hint in
             let entry = PointMapPointDraftEntry(
                 localID: UUID(),
                 name: name,
                 latitude: lat,
                 longitude: lng,
                 forwardEnabled: forward,
-                reverseEnabled: reverse
+                reverseEnabled: reverse,
+                hint: hint
             )
             draft.pointMapNewPoints.append(entry)
         }
@@ -799,6 +800,7 @@ struct InstanceEditorWindowView: View {
             pointMapPointController.present(
                 from: window,
                 initialName: point.name,
+                initialHint: point.hint,
                 initialLatitude: String(point.latitude),
                 initialLongitude: String(point.longitude),
                 initialForwardEnabled: point.forwardEnabled,
@@ -818,7 +820,7 @@ struct InstanceEditorWindowView: View {
                         draft.pointMapExistingPoints[idx].reverseInterval = 0
                     }
                 }
-            ) { name, lat, lng, forward, reverse in
+            ) { name, lat, lng, forward, reverse, hint in
                 guard let idx = draft.pointMapExistingPoints.firstIndex(where: { $0.id == id }) else { return }
                 let existing = draft.pointMapExistingPoints[idx]
                 draft.pointMapExistingPoints[idx] = PointMapPoint(
@@ -830,7 +832,8 @@ struct InstanceEditorWindowView: View {
                     forwardEnabled: forward,
                     reverseEnabled: reverse,
                     forwardInterval: existing.forwardInterval,
-                    reverseInterval: existing.reverseInterval
+                    reverseInterval: existing.reverseInterval,
+                    hint: hint
                 )
             }
         case .new(let localID):
@@ -838,12 +841,13 @@ struct InstanceEditorWindowView: View {
             pointMapPointController.present(
                 from: window,
                 initialName: entry.name,
+                initialHint: entry.hint,
                 initialLatitude: String(entry.latitude),
                 initialLongitude: String(entry.longitude),
                 initialForwardEnabled: entry.forwardEnabled,
                 initialReverseEnabled: entry.reverseEnabled,
                 isEdit: true
-            ) { name, lat, lng, forward, reverse in
+            ) { name, lat, lng, forward, reverse, hint in
                 guard let idx = draft.pointMapNewPoints.firstIndex(where: { $0.localID == localID }) else { return }
                 draft.pointMapNewPoints[idx] = PointMapPointDraftEntry(
                     localID: localID,
@@ -851,7 +855,8 @@ struct InstanceEditorWindowView: View {
                     latitude: lat,
                     longitude: lng,
                     forwardEnabled: forward,
-                    reverseEnabled: reverse
+                    reverseEnabled: reverse,
+                    hint: hint
                 )
             }
         }
@@ -2075,7 +2080,8 @@ struct InstanceEditorWindowView: View {
                 latitude: entry.latitude,
                 longitude: entry.longitude,
                 forwardEnabled: entry.forwardEnabled,
-                reverseEnabled: entry.reverseEnabled
+                reverseEnabled: entry.reverseEnabled,
+                hint: entry.hint
             )
         }
 

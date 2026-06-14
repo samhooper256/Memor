@@ -56,6 +56,7 @@ final class AddPointPopupController: ObservableObject {
     func present(
         from window: NSWindow?,
         initialName: String = "",
+        initialHint: String = "",
         initialLatitude: String = "",
         initialLongitude: String = "",
         initialForwardEnabled: Bool = true,
@@ -65,13 +66,14 @@ final class AddPointPopupController: ObservableObject {
         isEdit: Bool = false,
         onResetForward: (() -> Void)? = nil,
         onResetReverse: (() -> Void)? = nil,
-        onSubmit: @escaping (String, Double, Double, Bool, Bool) -> Void
+        onSubmit: @escaping (String, Double, Double, Bool, Bool, String) -> Void
     ) {
         guard let window else { return }
         close()
 
         let popupState = AddPointPopupState(
             initialName: initialName,
+            initialHint: initialHint,
             initialLatitude: initialLatitude,
             initialLongitude: initialLongitude,
             initialForwardEnabled: initialForwardEnabled,
@@ -79,8 +81,8 @@ final class AddPointPopupController: ObservableObject {
             forwardInterval: forwardInterval,
             reverseInterval: reverseInterval,
             isEdit: isEdit,
-            onSubmit: { [weak self] name, lat, lng, forward, reverse in
-                onSubmit(name, lat, lng, forward, reverse)
+            onSubmit: { [weak self] name, lat, lng, forward, reverse, hint in
+                onSubmit(name, lat, lng, forward, reverse, hint)
                 self?.close()
             },
             onResetForward: onResetForward,
@@ -128,6 +130,7 @@ final class AddPointPopupController: ObservableObject {
 @MainActor
 final class AddPointPopupState: NSObject, ObservableObject, NSWindowDelegate {
     @Published var name: String
+    @Published var hint: String
     @Published var latitude: String
     @Published var longitude: String
     @Published var forwardEnabled: Bool
@@ -139,7 +142,7 @@ final class AddPointPopupState: NSObject, ObservableObject, NSWindowDelegate {
     @Published var errorMessage: String?
 
     let isEdit: Bool
-    let onSubmit: (String, Double, Double, Bool, Bool) -> Void
+    let onSubmit: (String, Double, Double, Bool, Bool, String) -> Void
     let onResetForward: (() -> Void)?
     let onResetReverse: (() -> Void)?
     let onClose: () -> Void
@@ -148,6 +151,7 @@ final class AddPointPopupState: NSObject, ObservableObject, NSWindowDelegate {
 
     init(
         initialName: String,
+        initialHint: String,
         initialLatitude: String,
         initialLongitude: String,
         initialForwardEnabled: Bool,
@@ -155,12 +159,13 @@ final class AddPointPopupState: NSObject, ObservableObject, NSWindowDelegate {
         forwardInterval: Int64?,
         reverseInterval: Int64?,
         isEdit: Bool,
-        onSubmit: @escaping (String, Double, Double, Bool, Bool) -> Void,
+        onSubmit: @escaping (String, Double, Double, Bool, Bool, String) -> Void,
         onResetForward: (() -> Void)?,
         onResetReverse: (() -> Void)?,
         onClose: @escaping () -> Void
     ) {
         self.name = initialName
+        self.hint = initialHint
         self.latitude = initialLatitude
         self.longitude = initialLongitude
         self.forwardEnabled = initialForwardEnabled
@@ -191,7 +196,7 @@ final class AddPointPopupState: NSObject, ObservableObject, NSWindowDelegate {
             errorMessage = "Invalid longitude."
             return
         }
-        onSubmit(trimmedName, lat, lng, forwardEnabled, reverseEnabled)
+        onSubmit(trimmedName, lat, lng, forwardEnabled, reverseEnabled, hint)
     }
 
     func resetForward() {
@@ -502,6 +507,18 @@ private struct AddPointPopupView: View {
                     onPasteCoordinatePair: nil,
                     onSubmit: state.submit,
                     focusOnAppear: true
+                )
+                .frame(height: 22)
+            }
+
+            HStack(spacing: 6) {
+                Text("Hint:")
+                    .frame(width: 48, alignment: .trailing)
+                AddPointTextField(
+                    text: $state.hint,
+                    placeholder: "",
+                    onPasteCoordinatePair: nil,
+                    onSubmit: state.submit
                 )
                 .frame(height: 22)
             }
