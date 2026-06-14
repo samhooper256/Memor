@@ -28,6 +28,7 @@ enum TypeKind: String, Codable, Hashable {
 struct FlashcardType: Identifiable, FetchableRecord, Decodable, Hashable {
     let id: Int64
     let name: String
+    let description: String
     let css: String
     let isBuiltin: Bool
     let kind: TypeKind

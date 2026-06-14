@@ -429,6 +429,7 @@ struct AppDatabase {
                     SELECT
                         "type".id,
                         "type".name,
+                        COALESCE("type".description, '') AS description,
                         "type".css,
                         CASE WHEN COALESCE("type".is_builtin, 0) = 0 THEN 0 ELSE 1 END AS isBuiltin,
                         COALESCE("type".kind, 'object') AS kind,
@@ -436,7 +437,7 @@ struct AppDatabase {
                     FROM "type"
                     LEFT JOIN instance_id_type_id
                         ON instance_id_type_id.type_id = "type".id
-                    GROUP BY "type".id, "type".name, "type".css, "type".is_builtin, "type".kind
+                    GROUP BY "type".id, "type".name, "type".description, "type".css, "type".is_builtin, "type".kind
                     ORDER BY name COLLATE NOCASE, id
                     """
             )
@@ -451,6 +452,7 @@ struct AppDatabase {
                     SELECT
                         "type".id,
                         "type".name,
+                        COALESCE("type".description, '') AS description,
                         "type".css,
                         CASE WHEN COALESCE("type".is_builtin, 0) = 0 THEN 0 ELSE 1 END AS isBuiltin,
                         COALESCE("type".kind, 'object') AS kind,
@@ -458,7 +460,7 @@ struct AppDatabase {
                     FROM "type"
                     LEFT JOIN instance_id_type_id
                         ON instance_id_type_id.type_id = "type".id
-                    GROUP BY "type".id, "type".name, "type".css, "type".is_builtin, "type".kind
+                    GROUP BY "type".id, "type".name, "type".description, "type".css, "type".is_builtin, "type".kind
                     ORDER BY id
                     """
             )
@@ -473,6 +475,7 @@ struct AppDatabase {
                     SELECT
                         "type".id,
                         "type".name,
+                        COALESCE("type".description, '') AS description,
                         "type".css,
                         CASE WHEN COALESCE("type".is_builtin, 0) = 0 THEN 0 ELSE 1 END AS isBuiltin,
                         COALESCE("type".kind, 'object') AS kind,
@@ -481,7 +484,7 @@ struct AppDatabase {
                     LEFT JOIN instance_id_type_id
                         ON instance_id_type_id.type_id = "type".id
                     WHERE "type".id = ?
-                    GROUP BY "type".id, "type".name, "type".css, "type".is_builtin, "type".kind
+                    GROUP BY "type".id, "type".name, "type".description, "type".css, "type".is_builtin, "type".kind
                     """,
                 arguments: [typeID]
             )
@@ -2904,7 +2907,7 @@ struct AppDatabase {
                 )
             }
 
-            return FlashcardType(id: typeID, name: trimmedName, css: "", isBuiltin: false, kind: kind, instanceCount: 0)
+            return FlashcardType(id: typeID, name: trimmedName, description: "", css: "", isBuiltin: false, kind: kind, instanceCount: 0)
         }
     }
 
@@ -4378,6 +4381,19 @@ struct AppDatabase {
                     WHERE id = ?
                     """,
                 arguments: [css, typeID]
+            )
+        }
+    }
+
+    func updateTypeDescription(typeID: Int64, description: String) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE "type"
+                    SET description = ?
+                    WHERE id = ?
+                    """,
+                arguments: [description, typeID]
             )
         }
     }

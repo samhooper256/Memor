@@ -15,6 +15,7 @@ extension AppDatabase {
                 CREATE TABLE IF NOT EXISTS "type" (
                     id INTEGER PRIMARY KEY,
                     name TEXT,
+                    description TEXT,
                     css TEXT,
                     is_builtin INTEGER NOT NULL DEFAULT 0,
                     kind TEXT NOT NULL DEFAULT 'object'
@@ -58,6 +59,7 @@ extension AppDatabase {
                 """)
 
             try migrateNodeTypeColumns(db: db)
+            try migrateTypeDescriptionColumn(db: db)
 
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS globals (
@@ -551,6 +553,18 @@ extension AppDatabase {
         let names = Set(info.compactMap { $0["name"] as String? })
         if !names.contains("description") {
             try db.execute(sql: "ALTER TABLE \"stack\" ADD COLUMN description TEXT")
+        }
+    }
+
+    // Adds the description column to the type table for databases created before
+    // type descriptions existed. Idempotent: the ALTER runs only when the column is
+    // absent, so this is a no-op on fresh installs. Existing rows default to NULL,
+    // which the type fetch SELECTs coalesce to an empty string.
+    private static func migrateTypeDescriptionColumn(db: Database) throws {
+        let info = try Row.fetchAll(db, sql: "PRAGMA table_info(\"type\")")
+        let names = Set(info.compactMap { $0["name"] as String? })
+        if !names.contains("description") {
+            try db.execute(sql: "ALTER TABLE \"type\" ADD COLUMN description TEXT")
         }
     }
 
