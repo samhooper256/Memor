@@ -297,20 +297,26 @@ private struct TypeRowView: View {
                 .foregroundStyle(type.kindIcon.color)
                 .font(.title3)
 
-            Text(type.name)
-                .font(.title3)
-                .fontWeight(.medium)
-                .foregroundStyle(.primary)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(type.name)
+                        .font(.title3)
+                        .fontWeight(.medium)
+                        .foregroundStyle(.primary)
 
-            if type.isBuiltin {
-                Text("(built-in)")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    if type.isBuiltin {
+                        Text("(built-in)")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Text(instanceCountText)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                DescriptionDisplay(type.description)
             }
-
-            Text(instanceCountText)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
