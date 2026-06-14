@@ -128,6 +128,17 @@ struct TypesPageView: View {
                         .frame(maxWidth: .infinity)
                 }
 
+                Button("Add Type") {
+                    newTypeName = ""
+                    newTypeKind = .object
+                    addTypeError = nil
+                    isAddTypePopoverPresented = true
+                }
+                .buttonStyle(.borderedProminent)
+                .popover(isPresented: $isAddTypePopoverPresented, arrowEdge: .bottom) {
+                    addTypePopover
+                }
+
                 if let errorMessage {
                     Text(errorMessage)
                         .foregroundStyle(.red)
@@ -148,17 +159,6 @@ struct TypesPageView: View {
                             )
                         }
                     }
-                }
-
-                Button("Add Type") {
-                    newTypeName = ""
-                    newTypeKind = .object
-                    addTypeError = nil
-                    isAddTypePopoverPresented = true
-                }
-                .buttonStyle(.borderedProminent)
-                .popover(isPresented: $isAddTypePopoverPresented, arrowEdge: .bottom) {
-                    addTypePopover
                 }
             }
             .padding(24)
