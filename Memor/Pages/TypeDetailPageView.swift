@@ -45,6 +45,8 @@ struct TypeDetailPageView: View {
     @State private var isRenameFieldPopoverPresented = false
     @State private var renamedFieldName = ""
     @State private var displayedTypeName = ""
+    @State private var description: String = ""
+    @State private var descriptionSaveTask: Task<Void, Never>?
     @State private var isRenameTypePopoverPresented = false
     @State private var renamedTypeName = ""
     @State private var isRenameQueryTypePopoverPresented = false
@@ -171,6 +173,16 @@ struct TypeDetailPageView: View {
                         }
                     }
                 }
+
+                DescriptionEditor(text: $description)
+                    .onChange(of: description) { _, newValue in
+                        descriptionSaveTask?.cancel()
+                        descriptionSaveTask = Task {
+                            try? await Task.sleep(nanoseconds: 500_000_000)
+                            guard !Task.isCancelled else { return }
+                            try? appDatabase.updateTypeDescription(typeID: type.id, description: newValue)
+                        }
+                    }
 
                 if let errorMessage {
                     Text(errorMessage)
@@ -504,6 +516,7 @@ struct TypeDetailPageView: View {
         do {
             let currentType = try appDatabase.fetchType(typeID: type.id) ?? type
             displayedTypeName = currentType.name
+            description = currentType.description
             isSyncingEditorState = true
             selectedTypeCSS = currentType.css
             isSyncingEditorState = false
