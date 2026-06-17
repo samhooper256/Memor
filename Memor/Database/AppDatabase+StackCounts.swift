@@ -10,6 +10,13 @@
 import Foundation
 import GRDB
 
+// One day's bucket in a stack's due-date forecast (see fetchStackDueDayCounts).
+struct DueDayCount: Identifiable, Hashable {
+    let date: Date
+    let count: Int
+    var id: Date { date }
+}
+
 extension AppDatabase {
     /// ASCII-only case-insensitive equality, matching SQLite's built-in NOCASE
     /// collation (which folds only A–Z, unlike Swift's Unicode-aware
@@ -170,6 +177,117 @@ extension AppDatabase {
                 startOfTomorrowTimestamp: startOfTomorrowTimestamp
             )[0]
         }
+    }
+
+    // Returns, for a stack's search, how many of its queries fall due on each of
+    // the next `days` calendar days (day 0 = today, in the user's timezone). Only
+    // queries with a real schedule are counted — a query lands in the bucket for the
+    // day its due moment (last_answered_timestamp + interval) falls on. New queries
+    // (interval = 0) and already-overdue queries are excluded, as are queries due
+    // beyond the window. Unlike the color-bucket counts / study-queue path, this
+    // includes not-yet-due ("magenta") queries, which are most of the forecast.
+    //
+    // Reuses the same search-condition builders, directional FROM clauses, and
+    // type-pruning (`staticTruthValue`) as `computeQueryCountGroups`, but selects
+    // raw due timestamps and buckets them in Swift so day boundaries honor the
+    // user's timezone exactly like the rest of the app.
+    func fetchStackDueDayCounts(stackSearch: String, days: Int = 10) throws -> [DueDayCount] {
+        let cal = TimeZoneSettings.shared.calendar
+        let startOfToday = cal.startOfDay(for: Date())
+        let dayStarts: [Date] = (0...days).compactMap { cal.date(byAdding: .day, value: $0, to: startOfToday) }
+        guard dayStarts.count == days + 1 else { return [] }
+        // `days + 1` epoch-second boundaries b0…b_days; bucket i = [b_i, b_{i+1}).
+        let boundaries = dayStarts.map { Int64($0.timeIntervalSince1970) }
+
+        let counts: [Int] = try dbQueue.read { db in
+            let parsedQuery = try parseQuerySearchQuery(stackSearch)
+            try validateCollectionSearchComponents(Self.collectionNames(in: parsedQuery.expression), db: db)
+            let expression = parsedQuery.expression
+
+            var counts = [Int](repeating: 0, count: days)
+
+            func bucket(_ dueTs: Int64) {
+                guard dueTs >= boundaries[0], dueTs < boundaries[days] else { return }
+                for i in 0..<days where dueTs >= boundaries[i] && dueTs < boundaries[i + 1] {
+                    counts[i] += 1
+                    return
+                }
+            }
+
+            func collect(fromClause: String, srsAlias: String, matchSQL: String, matchArguments: StatementArguments) throws {
+                let sql = """
+                    SELECT (\(srsAlias).last_answered_timestamp + \(srsAlias).interval) AS dueTs
+                    \(fromClause)
+                    WHERE (\(matchSQL))
+                        AND \(srsAlias).interval > 0
+                        AND \(srsAlias).last_answered_timestamp IS NOT NULL
+                    """
+                for dueTs in try Int64.fetchAll(db, sql: sql, arguments: matchArguments) {
+                    bucket(dueTs)
+                }
+            }
+
+            // Standard object/node types.
+            for typeInfo in try fetchInstanceSearchTypeInfos(db: db) {
+                let fromClause = """
+                    FROM "type\(typeInfo.typeID)" AS instance_table
+                    JOIN query
+                        ON query.instance_id = instance_table.id
+                    """
+                switch Self.staticTruthValue(of: expression, typeName: typeInfo.typeName, newIsAlwaysFalse: false) {
+                case .some(false):
+                    continue
+                case .some(true):
+                    try collect(fromClause: fromClause, srsAlias: "query", matchSQL: "1", matchArguments: StatementArguments())
+                case .none:
+                    let condition = makeQuerySearchConditions(
+                        tableAlias: "instance_table",
+                        typeName: typeInfo.typeName,
+                        fieldIndices: typeInfo.allFieldIndices,
+                        expression: expression
+                    )
+                    try collect(fromClause: fromClause, srsAlias: "query", matchSQL: condition.sql, matchArguments: condition.arguments)
+                }
+            }
+
+            // PointMap directional queries (forward/reverse expanded).
+            let pointMapFrom = """
+                FROM \(Self.pointMapDirectionalFrom) AS pp
+                JOIN pointmap_instance AS pi
+                    ON pi.instance_id = pp.instance_id
+                """
+            switch Self.staticTruthValue(of: expression, typeName: POINTMAP_TYPE_NAME, newIsAlwaysFalse: true) {
+            case .some(false):
+                break
+            case .some(true):
+                try collect(fromClause: pointMapFrom, srsAlias: "pp", matchSQL: "1", matchArguments: StatementArguments())
+            case .none:
+                let condition = makePointMapSearchConditions(expression: expression, pointAlias: "pp", instanceAlias: "pi", includePointName: true)
+                try collect(fromClause: pointMapFrom, srsAlias: "pp", matchSQL: condition.sql, matchArguments: condition.arguments)
+            }
+
+            // BoundaryMap directional queries (forward/reverse expanded).
+            let boundaryMapFrom = """
+                FROM \(Self.boundaryMapDirectionalFrom) AS bq
+                JOIN boundarymap_instance AS bi
+                    ON bi.instance_id = bq.instance_id
+                JOIN boundary AS b
+                    ON b.id = bq.boundary_id
+                """
+            switch Self.staticTruthValue(of: expression, typeName: BOUNDARYMAP_TYPE_NAME, newIsAlwaysFalse: true) {
+            case .some(false):
+                break
+            case .some(true):
+                try collect(fromClause: boundaryMapFrom, srsAlias: "bq", matchSQL: "1", matchArguments: StatementArguments())
+            case .none:
+                let condition = makeBoundaryMapSearchConditions(expression: expression, attachmentAlias: "bq", instanceAlias: "bi", boundaryAlias: "b", includeBoundaryName: true)
+                try collect(fromClause: boundaryMapFrom, srsAlias: "bq", matchSQL: condition.sql, matchArguments: condition.arguments)
+            }
+
+            return counts
+        }
+
+        return (0..<days).map { DueDayCount(date: dayStarts[$0], count: counts[$0]) }
     }
 
     nonisolated private func computeAllStackQueryCounts(

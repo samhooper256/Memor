@@ -26,6 +26,7 @@ struct MemorApp: App {
     @StateObject private var searchWindowState = SearchWindowState()
     @StateObject private var stacksPageState = StacksPageState()
     @StateObject private var manageBoundariesWindowState = ManageBoundariesWindowState()
+    @StateObject private var stackStatsWindowState = StackStatsWindowState()
     @StateObject private var quickStudyState = QuickStudyState()
     @StateObject private var shortcutSettings = ShortcutSettings.shared
     @StateObject private var timeZoneSettings = TimeZoneSettings.shared
@@ -53,6 +54,7 @@ struct MemorApp: App {
                 .environmentObject(queryPreviewWindowState)
                 .environmentObject(searchWindowState)
                 .environmentObject(stacksPageState)
+                .environmentObject(stackStatsWindowState)
                 .environmentObject(quickStudyState)
                 .environmentObject(shortcutSettings)
                 .environmentObject(timeZoneSettings)
@@ -134,6 +136,11 @@ struct MemorApp: App {
             ManageBoundariesWindowView(appDatabase: appDatabase)
                 .environmentObject(manageBoundariesWindowState)
                 .environmentObject(shortcutSettings)
+        }
+
+        Window("Stats", id: "stack-stats") {
+            StackStatsWindowView(appDatabase: appDatabase)
+                .environmentObject(stackStatsWindowState)
         }
 
         Window("Settings", id: "settings") {

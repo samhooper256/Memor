@@ -11,6 +11,7 @@ import SwiftUI
 struct StacksPageView: View {
     @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var searchWindowState: SearchWindowState
+    @EnvironmentObject private var stackStatsWindowState: StackStatsWindowState
     @EnvironmentObject private var stacksPageState: StacksPageState
     @EnvironmentObject private var navigationState: AppNavigationState
     @EnvironmentObject private var timeZoneSettings: TimeZoneSettings
@@ -154,6 +155,10 @@ struct StacksPageView: View {
                                 onEdit: {
                                     selectedStack = stack
                                 },
+                                onStats: {
+                                    stackStatsWindowState.requestOpen(stackName: stack.name, stackSearch: stack.search)
+                                    openWindow(id: "stack-stats")
+                                },
                                 onSearch: {
                                     searchWindowState.requestOpen(searchText: stack.search)
                                     openWindow(id: "search")
@@ -235,6 +240,7 @@ private struct StackRowView: View {
     let isRefreshing: Bool
     let onOpen: () -> Void
     let onEdit: () -> Void
+    let onStats: () -> Void
     let onSearch: () -> Void
     let onDelete: () -> Void
     let onTogglePin: () -> Void
@@ -242,6 +248,7 @@ private struct StackRowView: View {
     @State private var isHovered = false
     @State private var isPinButtonHovered = false
     @State private var isEditButtonHovered = false
+    @State private var isStatsButtonHovered = false
     @State private var isSearchButtonHovered = false
     @State private var isDeleteButtonHovered = false
 
@@ -289,6 +296,20 @@ private struct StackRowView: View {
                 .buttonStyle(.plain)
                 .onHover { hovering in
                     isEditButtonHovered = hovering
+                }
+
+                Button(action: onStats) {
+                    Image(systemName: "chart.bar")
+                        .foregroundStyle(.blue)
+                        .padding(8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(isStatsButtonHovered ? Color.blue.opacity(0.14) : Color.clear)
+                        )
+                }
+                .buttonStyle(.plain)
+                .onHover { hovering in
+                    isStatsButtonHovered = hovering
                 }
 
                 Button(action: onSearch) {
