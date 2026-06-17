@@ -128,17 +128,16 @@ private struct AdvancedSettingsPopupView: View {
             }
         }
         .padding(16)
-        .frame(minWidth: 408, alignment: .leading)
     }
 
     private var maxIntervalControls: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text("Max Interval:")
                 .font(.subheadline)
 
             TextField("", text: $draft.maxIntervalText)
                 .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 120)
+                .frame(width: 120)
                 .onChange(of: draft.maxIntervalText) { _, newValue in
                     let digitsOnly = newValue.filter(\.isNumber)
                     if digitsOnly != newValue {
@@ -146,11 +145,12 @@ private struct AdvancedSettingsPopupView: View {
                     }
                 }
 
+            // Fixed width so the hint wraps to multiple lines instead of being
+            // truncated.
             Text("Leave blank for no max interval.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-
-            Spacer(minLength: 0)
+                .frame(width: 150, alignment: .leading)
         }
     }
 
