@@ -27,9 +27,12 @@ final class StackStatsWindowState: ObservableObject {
 struct StackStatsWindowView: View {
     let appDatabase: AppDatabase
     @EnvironmentObject private var windowState: StackStatsWindowState
+    @Environment(\.dismiss) private var dismiss
 
     @State private var counts: [DueDayCount] = []
     @State private var errorMessage: String?
+    // The bar the pointer is currently hovering, if any (drives the count label).
+    @State private var hoveredDate: Date?
 
     private static let forecastDays = 10
 
@@ -58,6 +61,13 @@ struct StackStatsWindowView: View {
         .frame(minWidth: 560, minHeight: 420)
         .onAppear { reload() }
         .onChange(of: windowState.requestNonce) { _, _ in reload() }
+        .onExitCommand { dismiss() }
+        .background(
+            // Reliable Escape-to-close even when no control holds focus.
+            Button("", action: { dismiss() })
+                .keyboardShortcut(.cancelAction)
+                .hidden()
+        )
     }
 
     private var forecastChart: some View {
@@ -72,6 +82,23 @@ struct StackStatsWindowView: View {
                     y: .value("Queries due", day.count)
                 )
                 .foregroundStyle(.green)
+                .annotation(position: .top, alignment: .center) {
+                    if hoveredDate == day.date {
+                        Text("\(day.count)")
+                            .font(.caption)
+                            .bold()
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(Color(nsColor: .windowBackgroundColor))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .stroke(.secondary.opacity(0.4))
+                            )
+                    }
+                }
             }
             .chartXAxisLabel("Day")
             .chartYAxisLabel("Queries due")
@@ -88,7 +115,35 @@ struct StackStatsWindowView: View {
                     AxisValueLabel()
                 }
             }
+            .chartOverlay { proxy in
+                GeometryReader { geo in
+                    Rectangle()
+                        .fill(.clear)
+                        .contentShape(Rectangle())
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case .active(let location):
+                                hoveredDate = barDate(at: location, proxy: proxy, geo: geo)
+                            case .ended:
+                                hoveredDate = nil
+                            }
+                        }
+                }
+            }
         }
+    }
+
+    // Maps a pointer location over the plot to the date of the bar it's nearest
+    // to, so hovering anywhere on/around a bar surfaces that bar's count.
+    private func barDate(at location: CGPoint, proxy: ChartProxy, geo: GeometryProxy) -> Date? {
+        guard let plotFrame = proxy.plotFrame else { return nil }
+        let plotRect = geo[plotFrame]
+        guard plotRect.contains(location) else { return nil }
+        guard let date: Date = proxy.value(atX: location.x - plotRect.minX) else { return nil }
+        // Snap to the nearest day bucket by absolute time distance.
+        return counts.min(by: {
+            abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date))
+        })?.date
     }
 
     private func reload() {
