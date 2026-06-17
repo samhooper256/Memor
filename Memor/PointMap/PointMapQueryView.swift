@@ -246,46 +246,140 @@ struct PointMapQueryView: View {
 // point on the instance renders yellow (regardless of the main map's
 // show-all-points filtering), giving the user precise local context. Centering
 // is on the query point and the camera is fixed — no pan/zoom/clicks.
+//
+// The inset wraps a reused `MKMapView` (NSViewRepresentable) rather than a
+// SwiftUI `Map`. A SwiftUI `Map` with `.id(payload.pointID)` is torn down and
+// rebuilt on every query advance, and its underlying VectorKit map engine leaks
+// Metal resources on teardown — over a long study session that climbs past
+// VectorKit's 50,000-resource prune threshold and crashes. Reusing one MKMapView
+// (re-centered in updateNSView, mirroring `PointMapMKMapView`) keeps the engine
+// alive across queries, so nothing accumulates.
 private struct PointMapMiniMap: View {
     let payload: PointMapStudyPayload
 
     // Tunable look-and-feel constants.
     private static let side: CGFloat = 160         // square edge length, points
-    private static let zoomBoost: Double = 4       // levels more zoomed than the main map (~16x)
     private static let cornerRadius: CGFloat = 6
     private static let borderWidth: CGFloat = 4
 
     var body: some View {
         // No query point to center on → render nothing (the gate in the parent
         // already guards this, but stay defensive).
-        if let queryPoint = payload.points.first(where: { $0.id == payload.pointID }) {
-            let center = CLLocationCoordinate2D(latitude: queryPoint.latitude, longitude: queryPoint.longitude)
-            let miniZoom = min(20.0, payload.defaultZoom + Self.zoomBoost)
-            let region = MKCoordinateRegion(center: center, span: PointMapQueryView.span(forZoom: miniZoom))
+        if payload.points.contains(where: { $0.id == payload.pointID }) {
+            PointMapMiniMKMapView(payload: payload)
+                .frame(width: Self.side, height: Self.side)
+                .clipShape(RoundedRectangle(cornerRadius: Self.cornerRadius))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Self.cornerRadius)
+                        .stroke(Color.red, lineWidth: Self.borderWidth)
+                )
+                .allowsHitTesting(false)
+        }
+    }
+}
 
-            Map(position: .constant(.region(region)), interactionModes: []) {
-                ForEach(payload.points) { point in
-                    Annotation("", coordinate: CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)) {
-                        let isQuery = point.id == payload.pointID
-                        MapPointMarker(
-                            name: "",
-                            size: isQuery ? payload.pointSize.highlightedDiameter : payload.pointSize.normalDiameter,
-                            isHighlighted: isQuery,
-                            showTooltipOnHover: false
-                        )
+// Reused-MKMapView backing for the locator inset. Strictly non-interactive: the
+// camera is fixed on the query point and the parent disables hit-testing. Reuses
+// the file-private `PointMapAnnotation` / `PointMapAnnotationView` machinery (and
+// `PointMapMKMapView.Coordinator`, with its interaction callbacks left nil) so
+// marker sizing/coloring matches the main map.
+private struct PointMapMiniMKMapView: NSViewRepresentable {
+    let payload: PointMapStudyPayload
+
+    // Levels more zoomed than the main map (~16x).
+    private static let zoomBoost: Double = 4
+
+    private func region(centeredOn queryPoint: PointMapPoint) -> MKCoordinateRegion {
+        let center = CLLocationCoordinate2D(latitude: queryPoint.latitude, longitude: queryPoint.longitude)
+        let miniZoom = min(20.0, payload.defaultZoom + Self.zoomBoost)
+        return MKCoordinateRegion(center: center, span: PointMapQueryView.span(forZoom: miniZoom))
+    }
+
+    func makeNSView(context: Context) -> MKMapView {
+        let mapView = MKMapView()
+        mapView.preferredConfiguration = MKImageryMapConfiguration(elevationStyle: .flat)
+        mapView.delegate = context.coordinator
+        mapView.showsCompass = false
+        mapView.showsZoomControls = false
+        mapView.showsScale = false
+        mapView.showsPitchControl = false
+        mapView.isZoomEnabled = false
+        mapView.isScrollEnabled = false
+        mapView.isPitchEnabled = false
+        mapView.isRotateEnabled = false
+        mapView.showsUserLocation = false
+
+        context.coordinator.mapView = mapView
+        context.coordinator.normalDiameter = payload.pointSize.normalDiameter
+        context.coordinator.highlightedDiameter = payload.pointSize.highlightedDiameter
+
+        if let queryPoint = payload.points.first(where: { $0.id == payload.pointID }) {
+            mapView.setRegion(region(centeredOn: queryPoint), animated: false)
+            context.coordinator.lastPointID = payload.pointID
+        }
+        applyAnnotations(to: mapView)
+        return mapView
+    }
+
+    func updateNSView(_ mapView: MKMapView, context: Context) {
+        let coordinator = context.coordinator
+        coordinator.mapView = mapView
+        coordinator.normalDiameter = payload.pointSize.normalDiameter
+        coordinator.highlightedDiameter = payload.pointSize.highlightedDiameter
+
+        if coordinator.lastPointID != payload.pointID {
+            coordinator.lastPointID = payload.pointID
+            if let queryPoint = payload.points.first(where: { $0.id == payload.pointID }) {
+                mapView.setRegion(region(centeredOn: queryPoint), animated: false)
+            }
+        }
+        applyAnnotations(to: mapView)
+    }
+
+    func makeCoordinator() -> PointMapMKMapView.Coordinator {
+        PointMapMKMapView.Coordinator()
+    }
+
+    // The inset always shows every point; the query point is highlighted
+    // (red/large), the rest are normal (yellow). No reverse/hover/tooltip state.
+    private func applyAnnotations(to mapView: MKMapView) {
+        let visibleIDs = Set(payload.points.map { $0.id })
+        let existing = mapView.annotations.compactMap { $0 as? PointMapAnnotation }
+        var existingByID: [Int64: PointMapAnnotation] = [:]
+        for annotation in existing {
+            existingByID[annotation.pointID] = annotation
+        }
+
+        let toRemove = existing.filter { !visibleIDs.contains($0.pointID) }
+        if !toRemove.isEmpty {
+            mapView.removeAnnotations(toRemove)
+        }
+
+        for point in payload.points {
+            let isHighlighted = point.id == payload.pointID
+            let coord = CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)
+            if let annotation = existingByID[point.id] {
+                if annotation.isHighlighted != isHighlighted {
+                    annotation.isHighlighted = isHighlighted
+                    if let view = mapView.view(for: annotation) as? PointMapAnnotationView {
+                        view.configure(with: annotation)
                     }
                 }
+                if annotation.coordinate.latitude != coord.latitude
+                    || annotation.coordinate.longitude != coord.longitude {
+                    annotation.coordinate = coord
+                }
+            } else {
+                let annotation = PointMapAnnotation(
+                    pointID: point.id,
+                    coordinate: coord,
+                    name: point.name,
+                    isHighlighted: isHighlighted,
+                    showTooltip: false,
+                    reverseInteractive: false
+                )
+                mapView.addAnnotation(annotation)
             }
-            .mapStyle(.imagery(elevation: .flat))
-            .frame(width: Self.side, height: Self.side)
-            .clipShape(RoundedRectangle(cornerRadius: Self.cornerRadius))
-            .overlay(
-                RoundedRectangle(cornerRadius: Self.cornerRadius)
-                    .stroke(Color.red, lineWidth: Self.borderWidth)
-            )
-            .allowsHitTesting(false)
-            // Force a clean re-center (no animated drift) when the query changes.
-            .id(payload.pointID)
         }
     }
 }
