@@ -132,8 +132,10 @@ private struct AdvancedSettingsPopupView: View {
 
     private var maxIntervalControls: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
+            // fixedSize keeps the label on one line so it is never truncated.
             Text("Max Interval:")
                 .font(.subheadline)
+                .fixedSize()
 
             TextField("", text: $draft.maxIntervalText)
                 .textFieldStyle(.roundedBorder)
