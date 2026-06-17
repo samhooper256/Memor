@@ -3601,6 +3601,31 @@ struct AppDatabase {
         }
     }
 
+    // Resets one direction's SRS state across many points at once and returns the
+    // number of query rows actually reset. A pointmap_query row exists only for an
+    // enabled direction, so the count reflects how many of the selected points have
+    // that direction enabled. Used by the points list's "Reset Queries" submenu.
+    @discardableResult
+    func resetPointMapPointDueDates(pointIDs: [Int64], isReverse: Bool) throws -> Int {
+        guard !pointIDs.isEmpty else { return 0 }
+        return try dbQueue.write { db in
+            let placeholders = pointIDs.map { _ in "?" }.joined(separator: ", ")
+            var arguments: [DatabaseValueConvertible] = [isReverse ? 1 : 0]
+            arguments.append(contentsOf: pointIDs)
+            try db.execute(
+                sql: """
+                    UPDATE pointmap_query
+                    SET query_state = 0,
+                        last_answered_timestamp = NULL,
+                        interval = 0
+                    WHERE is_reverse = ? AND point_id IN (\(placeholders))
+                    """,
+                arguments: StatementArguments(arguments)
+            )
+            return try Int.fetchOne(db, sql: "SELECT changes()") ?? 0
+        }
+    }
+
     // Resets just one direction's SRS state for a single point (used by the point
     // edit popup's per-query reset buttons).
     func resetPointMapPointDueDate(pointID: Int64, isReverse: Bool) throws {

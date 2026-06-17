@@ -490,6 +490,14 @@ struct InstanceEditorWindowView: View {
                                 Button("Forward") { setPointMapEntriesEnabled(refs, forward: false, reverse: nil) }
                                 Button("Reverse") { setPointMapEntriesEnabled(refs, forward: nil, reverse: false) }
                             }
+                            // Resetting writes SRS state directly to the saved points,
+                            // so it's only meaningful once the instance exists (Edit mode).
+                            if mode == .edit {
+                                Menu("Reset Queries") {
+                                    Button("Forward") { resetPointMapEntriesDueDates(refs, isReverse: false) }
+                                    Button("Reverse") { resetPointMapEntriesDueDates(refs, isReverse: true) }
+                                }
+                            }
                             Divider()
                             Button("Delete", role: .destructive) {
                                 requestDeletePointMapEntries(refs)
@@ -912,6 +920,25 @@ struct InstanceEditorWindowView: View {
     private func setPointMapEntriesEnabled(_ refs: Set<PointMapEntryRef>, forward: Bool?, reverse: Bool?) {
         for ref in refs {
             setPointMapEntryFlags(for: ref, forward: forward, reverse: reverse)
+        }
+    }
+
+    // Reset the due dates for one query direction across all selected saved points
+    // (Edit mode only — new points have no persisted queries yet). Writes straight to
+    // the DB and reports how many queries were actually reset via a green toast.
+    @MainActor
+    private func resetPointMapEntriesDueDates(_ refs: Set<PointMapEntryRef>, isReverse: Bool) {
+        let pointIDs = refs.compactMap { ref -> Int64? in
+            if case .existing(let id) = ref { return id }
+            return nil
+        }
+        guard !pointIDs.isEmpty else { return }
+        do {
+            let count = try appDatabase.resetPointMapPointDueDates(pointIDs: pointIDs, isReverse: isReverse)
+            NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
+            showToast(message: "Reset due dates for \(count) queries", style: .success)
+        } catch {
+            showToast(message: "Failed to reset due dates.", style: .error)
         }
     }
 
