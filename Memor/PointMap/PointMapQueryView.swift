@@ -123,6 +123,16 @@ struct PointMapQueryView: View {
     // points become interactive (hover-red + pointer + click-to-reveal).
     private var reverseInteractive: Bool { payload.isReverse && !revealName }
 
+    // The bottom-left zoomed-in mini-map is shown only on forward queries that
+    // have a highlighted (red) query point to center on. On reverse queries the
+    // answer point isn't revealed until the user clicks, so centering the inset
+    // on it would give it away.
+    private var showsMiniMap: Bool {
+        !payload.isReverse
+            && payload.showHighlight
+            && payload.points.contains { $0.id == payload.pointID }
+    }
+
     init(payload: PointMapStudyPayload, revealName: Bool = false, onAnswerSelected: @escaping () -> Void = {}) {
         self.payload = payload
         self.revealName = revealName
@@ -177,6 +187,14 @@ struct PointMapQueryView: View {
                             y: hover.position.y + hover.markerSize / 2 + 22
                         )
                 }
+
+                // Zoomed-in locator inset, pinned to the bottom-left corner.
+                if showsMiniMap {
+                    PointMapMiniMap(payload: payload)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                        .padding(12)
+                        .allowsHitTesting(false)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onChange(of: payload.pointID) { _, _ in
@@ -220,6 +238,55 @@ struct PointMapQueryView: View {
         let clamped = max(0.0, min(20.0, zoom))
         let latDelta = max(0.0001, 360.0 / pow(2.0, clamped))
         return MKCoordinateSpan(latitudeDelta: latDelta, longitudeDelta: latDelta)
+    }
+}
+
+// A small, square, non-interactive map inset zoomed in tight on the forward
+// query's answer point. The query point renders larger and red; every other
+// point on the instance renders yellow (regardless of the main map's
+// show-all-points filtering), giving the user precise local context. Centering
+// is on the query point and the camera is fixed — no pan/zoom/clicks.
+private struct PointMapMiniMap: View {
+    let payload: PointMapStudyPayload
+
+    // Tunable look-and-feel constants.
+    private static let side: CGFloat = 160         // square edge length, points
+    private static let zoomBoost: Double = 4       // levels more zoomed than the main map (~16x)
+    private static let cornerRadius: CGFloat = 6
+    private static let borderWidth: CGFloat = 4
+
+    var body: some View {
+        // No query point to center on → render nothing (the gate in the parent
+        // already guards this, but stay defensive).
+        if let queryPoint = payload.points.first(where: { $0.id == payload.pointID }) {
+            let center = CLLocationCoordinate2D(latitude: queryPoint.latitude, longitude: queryPoint.longitude)
+            let miniZoom = min(20.0, payload.defaultZoom + Self.zoomBoost)
+            let region = MKCoordinateRegion(center: center, span: PointMapQueryView.span(forZoom: miniZoom))
+
+            Map(position: .constant(.region(region)), interactionModes: []) {
+                ForEach(payload.points) { point in
+                    Annotation("", coordinate: CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)) {
+                        let isQuery = point.id == payload.pointID
+                        MapPointMarker(
+                            name: "",
+                            size: isQuery ? payload.pointSize.highlightedDiameter : payload.pointSize.normalDiameter,
+                            isHighlighted: isQuery,
+                            showTooltipOnHover: false
+                        )
+                    }
+                }
+            }
+            .mapStyle(.imagery(elevation: .flat))
+            .frame(width: Self.side, height: Self.side)
+            .clipShape(RoundedRectangle(cornerRadius: Self.cornerRadius))
+            .overlay(
+                RoundedRectangle(cornerRadius: Self.cornerRadius)
+                    .stroke(Color.red, lineWidth: Self.borderWidth)
+            )
+            .allowsHitTesting(false)
+            // Force a clean re-center (no animated drift) when the query changes.
+            .id(payload.pointID)
+        }
     }
 }
 
