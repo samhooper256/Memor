@@ -12,6 +12,7 @@
       "Bash(cat:*)",
       "Bash(find:*)",
       "Bash(curl:*)",
+      "Bash(perl:*)",
       "Bash(sqlite3:*)",
       "Bash(xcodebuild:*)",
       "Read(//tmp/**)",
