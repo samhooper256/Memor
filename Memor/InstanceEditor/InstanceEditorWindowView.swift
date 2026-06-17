@@ -622,6 +622,9 @@ struct InstanceEditorWindowView: View {
         )
         draft.pointMapCurrentRegion = region
         draft.pointMapCameraPosition = .region(region)
+        // Explicit entry is a deliberate intent to set the default viewport, so commit it
+        // on save (the editor checkbox ticks on to reflect this).
+        draft.pointMapApplyCurrentViewport = true
     }
 
     private func resetPointMapState() {
@@ -1185,6 +1188,9 @@ struct InstanceEditorWindowView: View {
         )
         draft.boundaryMapCurrentRegion = region
         draft.boundaryMapCameraPosition = .region(region)
+        // Explicit entry is a deliberate intent to set the default viewport, so commit it
+        // on save (the editor checkbox ticks on to reflect this).
+        draft.boundaryMapApplyCurrentViewport = true
     }
 
     private func resetBoundaryMapState() {
