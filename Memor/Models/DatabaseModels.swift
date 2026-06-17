@@ -37,6 +37,38 @@ struct FlashcardType: Identifiable, FetchableRecord, Decodable, Hashable {
     var isNode: Bool { kind == .node }
 }
 
+// Per-instance marker size for a PointMap. Medium == the historical fixed size.
+// highlightedDiameter (answer/hover) is 1.5x normal, matching the original 12/18.
+enum PointMapPointSize: String, Codable, CaseIterable, Hashable {
+    case small
+    case medium
+    case large
+
+    var normalDiameter: CGFloat {
+        switch self {
+        case .small: return 8
+        case .medium: return 12
+        case .large: return 18
+        }
+    }
+
+    var highlightedDiameter: CGFloat {
+        switch self {
+        case .small: return 12
+        case .medium: return 18
+        case .large: return 27
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .small: return "Small"
+        case .medium: return "Medium"
+        case .large: return "Large"
+        }
+    }
+}
+
 struct PointMapInstance: Hashable {
     let instanceID: Int64
     let title: String
@@ -44,6 +76,7 @@ struct PointMapInstance: Hashable {
     let defaultCenterLng: Double
     let defaultZoom: Double
     let showAllPointsInQuestion: Bool
+    var pointSize: PointMapPointSize = .medium
 }
 
 struct PointMapPoint: Identifiable, Hashable {
@@ -366,6 +399,8 @@ struct PointMapStudyPayload: Hashable {
     var isReverse: Bool = false
     // The answer point's hint, shown before reveal on Forward queries (default blank).
     var hint: String = ""
+    // Per-instance marker size for rendering the points on the map.
+    var pointSize: PointMapPointSize = .medium
 }
 
 struct BoundaryMapStudyPayload: Hashable {

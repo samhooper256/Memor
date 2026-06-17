@@ -198,7 +198,8 @@ extension AppDatabase {
                     default_center_lat REAL NOT NULL DEFAULT 0,
                     default_center_lng REAL NOT NULL DEFAULT 0,
                     default_zoom REAL NOT NULL DEFAULT 2,
-                    show_all_points_in_question INTEGER NOT NULL DEFAULT 1
+                    show_all_points_in_question INTEGER NOT NULL DEFAULT 1,
+                    point_size TEXT NOT NULL DEFAULT 'medium'
                 ) STRICT
                 """)
 
@@ -225,6 +226,7 @@ extension AppDatabase {
             try migrateQueryStateColumn(db: db, table: "pointmap_point")
             try migrateReverseQueryColumns(db: db, table: "pointmap_point")
             try migratePointMapPointHintColumn(db: db)
+            try migratePointMapInstancePointSizeColumn(db: db)
 
             try db.execute(sql: """
                 CREATE INDEX IF NOT EXISTS idx_pointmap_point_instance
@@ -533,6 +535,18 @@ extension AppDatabase {
         let names = Set(info.compactMap { $0["name"] as String? })
         if !names.contains("hint") {
             try db.execute(sql: "ALTER TABLE \"pointmap_point\" ADD COLUMN hint TEXT NOT NULL DEFAULT ''")
+        }
+    }
+
+    // Adds the per-instance point_size column to pointmap_instance for databases
+    // created before the Point Size setting existed. Idempotent: the ALTER runs only
+    // when the column is absent. Existing rows default to 'medium' (= the historical
+    // fixed marker size), so they look identical to before.
+    private static func migratePointMapInstancePointSizeColumn(db: Database) throws {
+        let info = try Row.fetchAll(db, sql: "PRAGMA table_info(\"pointmap_instance\")")
+        let names = Set(info.compactMap { $0["name"] as String? })
+        if !names.contains("point_size") {
+            try db.execute(sql: "ALTER TABLE \"pointmap_instance\" ADD COLUMN point_size TEXT NOT NULL DEFAULT 'medium'")
         }
     }
 
