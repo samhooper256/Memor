@@ -385,7 +385,7 @@ struct InstanceEditorWindowView: View {
                             Annotation("", coordinate: CLLocationCoordinate2D(latitude: entry.latitude, longitude: entry.longitude)) {
                                 MapPointMarker(
                                     name: entry.name,
-                                    size: 12,
+                                    size: draft.pointMapPointSize.normalDiameter,
                                     isHighlighted: false,
                                     showTooltipOnHover: true
                                 ) { hovering in
@@ -622,6 +622,7 @@ struct InstanceEditorWindowView: View {
         draft.pointMapNewPoints = []
         draft.pointMapSortMode = .creation
         draft.pointMapShowAllPointsInQuestion = true
+        draft.pointMapPointSize = .medium
         draft.pointMapApplyCurrentViewport = false
         draft.pointMapLoadedDefaultCenterLat = nil
         draft.pointMapLoadedDefaultCenterLng = nil
@@ -644,6 +645,7 @@ struct InstanceEditorWindowView: View {
         draft.pointMapNewPoints = []
         draft.pointMapSortMode = .creation
         draft.pointMapShowAllPointsInQuestion = instance.instance.showAllPointsInQuestion
+        draft.pointMapPointSize = instance.instance.pointSize
         draft.pointMapApplyCurrentViewport = false
         draft.pointMapLoadedDefaultCenterLat = instance.instance.defaultCenterLat
         draft.pointMapLoadedDefaultCenterLng = instance.instance.defaultCenterLng
@@ -2028,6 +2030,7 @@ struct InstanceEditorWindowView: View {
                     defaultCenterLng: region.center.longitude,
                     defaultZoom: zoom,
                     showAllPointsInQuestion: draft.pointMapShowAllPointsInQuestion,
+                    pointSize: draft.pointMapPointSize,
                     points: drafts,
                     boundaryIDs: boundaryIDs
                 )
@@ -2061,6 +2064,7 @@ struct InstanceEditorWindowView: View {
                     defaultCenterLng: saveLng,
                     defaultZoom: saveZoom,
                     showAllPointsInQuestion: draft.pointMapShowAllPointsInQuestion,
+                    pointSize: draft.pointMapPointSize,
                     existingPoints: draft.pointMapExistingPoints,
                     newPoints: drafts,
                     boundaryIDs: boundaryIDs

@@ -264,6 +264,8 @@ private struct PointMapMKMapView: NSViewRepresentable {
         context.coordinator.answerPointID = payload.pointID
         context.coordinator.answerName = payload.pointName
         context.coordinator.showAnswerTooltip = showAnswerTooltip
+        context.coordinator.normalDiameter = payload.pointSize.normalDiameter
+        context.coordinator.highlightedDiameter = payload.pointSize.highlightedDiameter
 
         applyAnnotations(to: mapView, coordinator: context.coordinator)
         applyOverlays(to: mapView, coordinator: context.coordinator)
@@ -281,6 +283,8 @@ private struct PointMapMKMapView: NSViewRepresentable {
         coordinator.answerPointID = payload.pointID
         coordinator.answerName = payload.pointName
         coordinator.showAnswerTooltip = showAnswerTooltip
+        coordinator.normalDiameter = payload.pointSize.normalDiameter
+        coordinator.highlightedDiameter = payload.pointSize.highlightedDiameter
 
         if coordinator.lastPointID != payload.pointID {
             coordinator.lastPointID = payload.pointID
@@ -387,6 +391,9 @@ private struct PointMapMKMapView: NSViewRepresentable {
         var showAnswerTooltip = false
         var answerPointID: Int64 = .min
         var answerName: String = ""
+        // Per-instance marker diameters, set from payload.pointSize in make/updateNSView.
+        var normalDiameter: CGFloat = PointMapPointSize.medium.normalDiameter
+        var highlightedDiameter: CGFloat = PointMapPointSize.medium.highlightedDiameter
 
         // Reports the answer point's current screen position so the SwiftUI overlay
         // can pin a persistent tooltip above it (forward queries, after reveal).
@@ -407,7 +414,7 @@ private struct PointMapMKMapView: NSViewRepresentable {
                     pointID: annotation.pointID,
                     name: answerName,
                     position: CGPoint(x: mapPoint.x, y: positionY),
-                    markerSize: 18
+                    markerSize: highlightedDiameter
                 )
             } else {
                 info = nil
@@ -426,7 +433,7 @@ private struct PointMapMKMapView: NSViewRepresentable {
             if isHovering {
                 let mapPoint = mapView.convert(annotation.coordinate, toPointTo: mapView)
                 let positionY = mapView.isFlipped ? mapPoint.y : (mapView.bounds.height - mapPoint.y)
-                let size: CGFloat = annotation.isHighlighted ? 18 : 12
+                let size: CGFloat = annotation.isHighlighted ? highlightedDiameter : normalDiameter
                 onHoverChange?(PointMapQueryView.HoverInfo(
                     pointID: annotation.pointID,
                     name: annotation.name,
@@ -507,7 +514,9 @@ private final class PointMapAnnotationView: MKAnnotationView {
         // During a reverse question, a hovered point should look like the chosen
         // answer in a forward query (red).
         let showRed = annotation.isHighlighted || (annotation.reverseInteractive && isHovered)
-        let size: CGFloat = showRed ? 18 : 12
+        let highlightedDiameter = coordinator?.highlightedDiameter ?? PointMapPointSize.medium.highlightedDiameter
+        let normalDiameter = coordinator?.normalDiameter ?? PointMapPointSize.medium.normalDiameter
+        let size: CGFloat = showRed ? highlightedDiameter : normalDiameter
         frame = NSRect(x: 0, y: 0, width: size, height: size)
         layer?.frame = NSRect(x: 0, y: 0, width: size, height: size)
         circleLayer.frame = NSRect(x: 0, y: 0, width: size, height: size)

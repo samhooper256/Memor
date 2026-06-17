@@ -73,6 +73,7 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
     @Published var pointMapExplicitLng: String = ""
     @Published var pointMapExplicitZoom: String = ""
     @Published var pointMapShowAllPointsInQuestion: Bool = true
+    @Published var pointMapPointSize: PointMapPointSize = .medium
     @Published var pointMapApplyCurrentViewport: Bool = false
     @Published var pointMapLoadedDefaultCenterLat: Double?
     @Published var pointMapLoadedDefaultCenterLng: Double?

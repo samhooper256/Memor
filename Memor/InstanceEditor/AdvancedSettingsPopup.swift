@@ -112,12 +112,19 @@ private struct AdvancedSettingsPopupView: View {
             case .standard:
                 maxIntervalControls
             case .pointMap:
-                viewportControls(
-                    lat: $draft.pointMapExplicitLat,
-                    lng: $draft.pointMapExplicitLng,
-                    zoom: $draft.pointMapExplicitZoom,
-                    onApply: onApplyPointMapViewport
-                )
+                VStack(alignment: .leading, spacing: 12) {
+                    Picker("Point Size", selection: $draft.pointMapPointSize) {
+                        ForEach(PointMapPointSize.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.radioGroup)
+
+                    viewportControls(
+                        lat: $draft.pointMapExplicitLat,
+                        lng: $draft.pointMapExplicitLng,
+                        zoom: $draft.pointMapExplicitZoom,
+                        onApply: onApplyPointMapViewport
+                    )
+                }
             case .boundaryMap:
                 viewportControls(
                     lat: $draft.boundaryMapExplicitLat,

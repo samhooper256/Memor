@@ -585,7 +585,8 @@ struct StudyModeView: View {
             showAllPointsInQuestion: refreshed.instance.showAllPointsInQuestion,
             showHighlight: previousPayload.showHighlight,
             boundaries: refreshedBoundaries,
-            isReverse: previousPayload.isReverse
+            isReverse: previousPayload.isReverse,
+            pointSize: refreshed.instance.pointSize
         )
         let updated = StudyQuery(
             instanceID: currentQuery.instanceID,

@@ -129,6 +129,7 @@ enum MemorMCPTools {
                 defaultCenterLng: try arguments.optionalDouble("default_center_lng") ?? 0,
                 defaultZoom: try arguments.optionalDouble("default_zoom") ?? 2,
                 showAllPointsInQuestion: try arguments.optionalBool("show_all_points_in_question") ?? true,
+                pointSize: try parsePointSize(arguments.optionalString("point_size")) ?? .medium,
                 pointItems: try arguments.optionalObjectArray("points") ?? [],
                 boundaryIDs: try arguments.optionalInt64Array("boundary_ids") ?? [],
                 appDatabase: appDatabase
@@ -141,6 +142,7 @@ enum MemorMCPTools {
                 defaultCenterLng: try arguments.optionalDouble("default_center_lng"),
                 defaultZoom: try arguments.optionalDouble("default_zoom"),
                 showAllPointsInQuestion: try arguments.optionalBool("show_all_points_in_question"),
+                pointSize: try parsePointSize(arguments.optionalString("point_size")),
                 boundaryIDs: try arguments.optionalInt64Array("boundary_ids"),
                 appDatabase: appDatabase
             ))
@@ -730,6 +732,17 @@ enum MemorMCPTools {
         )
     }
 
+    // Parses an optional point_size argument ("small"/"medium"/"large") into the enum.
+    // Returns nil when the argument is absent (so update can preserve the current value);
+    // throws on an unrecognized value.
+    private static func parsePointSize(_ raw: String?) throws -> PointMapPointSize? {
+        guard let raw else { return nil }
+        guard let size = PointMapPointSize(rawValue: raw) else {
+            throw MemorMCPToolError(message: "`point_size` must be one of: small, medium, large.")
+        }
+        return size
+    }
+
     private static func validateBoundaryIDs(_ boundaryIDs: [Int64], appDatabase: AppDatabase) throws {
         guard !boundaryIDs.isEmpty else { return }
         let knownIDs = Set(try appDatabase.fetchAllBoundaryOptions().map(\.id))
@@ -745,6 +758,7 @@ enum MemorMCPTools {
         defaultCenterLng: Double,
         defaultZoom: Double,
         showAllPointsInQuestion: Bool,
+        pointSize: PointMapPointSize,
         pointItems: [[String: Value]],
         boundaryIDs: [Int64],
         appDatabase: AppDatabase
@@ -766,6 +780,7 @@ enum MemorMCPTools {
             defaultCenterLng: defaultCenterLng,
             defaultZoom: defaultZoom,
             showAllPointsInQuestion: showAllPointsInQuestion,
+            pointSize: pointSize,
             points: drafts,
             boundaryIDs: boundaryIDs
         )
@@ -780,6 +795,7 @@ enum MemorMCPTools {
         defaultCenterLng: Double?,
         defaultZoom: Double?,
         showAllPointsInQuestion: Bool?,
+        pointSize: PointMapPointSize?,
         boundaryIDs: [Int64]?,
         appDatabase: AppDatabase
     ) throws -> OkDTO {
@@ -799,6 +815,7 @@ enum MemorMCPTools {
             defaultCenterLng: defaultCenterLng ?? current.instance.defaultCenterLng,
             defaultZoom: defaultZoom ?? current.instance.defaultZoom,
             showAllPointsInQuestion: showAllPointsInQuestion ?? current.instance.showAllPointsInQuestion,
+            pointSize: pointSize ?? current.instance.pointSize,
             existingPoints: current.points,
             newPoints: [],
             boundaryIDs: boundaryIDs ?? current.boundaryIDs
@@ -875,6 +892,7 @@ enum MemorMCPTools {
             defaultCenterLng: current.instance.defaultCenterLng,
             defaultZoom: current.instance.defaultZoom,
             showAllPointsInQuestion: current.instance.showAllPointsInQuestion,
+            pointSize: current.instance.pointSize,
             existingPoints: points,
             newPoints: [],
             boundaryIDs: current.boundaryIDs
@@ -901,6 +919,7 @@ enum MemorMCPTools {
             defaultCenterLng: current.instance.defaultCenterLng,
             defaultZoom: current.instance.defaultZoom,
             showAllPointsInQuestion: current.instance.showAllPointsInQuestion,
+            pointSize: current.instance.pointSize,
             existingPoints: current.points.filter { $0.id != pointID },
             newPoints: [],
             boundaryIDs: current.boundaryIDs
@@ -1648,7 +1667,7 @@ enum MemorMCPTools {
 
             Tool(
                 name: "create_pointmap_instance",
-                description: "Create a new PointMap instance (a named map with studyable points). Optional points array seeds initial points, each {name, latitude, longitude, forward_enabled? (default true), reverse_enabled? (default false), hint? (default empty)}. A point's hint is text shown in Study mode before the answer is revealed, on Forward queries only. default_center_lat/lng (default 0) and default_zoom (default 2) set the question map's initial viewport. boundary_ids optionally overlays boundary outlines on the map (discover via list_boundary_sets / list_boundaries).",
+                description: "Create a new PointMap instance (a named map with studyable points). Optional points array seeds initial points, each {name, latitude, longitude, forward_enabled? (default true), reverse_enabled? (default false), hint? (default empty)}. A point's hint is text shown in Study mode before the answer is revealed, on Forward queries only. default_center_lat/lng (default 0) and default_zoom (default 2) set the question map's initial viewport. point_size (\"small\"/\"medium\"/\"large\", default \"medium\") scales how large the markers render. boundary_ids optionally overlays boundary outlines on the map (discover via list_boundary_sets / list_boundaries).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -1657,6 +1676,7 @@ enum MemorMCPTools {
                         "default_center_lng": numberValue,
                         "default_zoom": numberValue,
                         "show_all_points_in_question": boolValue,
+                        "point_size": stringValue,
                         "points": .object([
                             "type": .string("array"),
                             "items": .object([
@@ -1679,7 +1699,7 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "update_pointmap_instance",
-                description: "Update a PointMap instance's title, default viewport (center/zoom), show_all_points_in_question, and/or attached boundary outlines (boundary_ids replaces the full set). Omitted arguments keep their current values; points are untouched (use add/update/delete_pointmap_point).",
+                description: "Update a PointMap instance's title, default viewport (center/zoom), show_all_points_in_question, point_size (\"small\"/\"medium\"/\"large\"), and/or attached boundary outlines (boundary_ids replaces the full set). Omitted arguments keep their current values; points are untouched (use add/update/delete_pointmap_point).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -1689,6 +1709,7 @@ enum MemorMCPTools {
                         "default_center_lng": numberValue,
                         "default_zoom": numberValue,
                         "show_all_points_in_question": boolValue,
+                        "point_size": stringValue,
                         "boundary_ids": int64Array
                     ]),
                     "required": .array([.string("instance_id")])
@@ -2262,6 +2283,7 @@ private struct PointMapInstanceDTO: Encodable {
     let defaultCenterLng: Double
     let defaultZoom: Double
     let showAllPointsInQuestion: Bool
+    let pointSize: String
     // Named `Ids` (not `IDs`) so snake-case encoding yields boundary_ids.
     let boundaryIds: [Int64]
     let points: [PointMapPointDTO]
@@ -2273,6 +2295,7 @@ private struct PointMapInstanceDTO: Encodable {
         defaultCenterLng = instance.instance.defaultCenterLng
         defaultZoom = instance.instance.defaultZoom
         showAllPointsInQuestion = instance.instance.showAllPointsInQuestion
+        pointSize = instance.instance.pointSize.rawValue
         boundaryIds = instance.boundaryIDs
         points = instance.points.map(PointMapPointDTO.init)
     }

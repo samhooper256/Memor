@@ -2641,6 +2641,7 @@ struct AppDatabase {
             let defaultCenterLng: Double
             let defaultZoom: Double
             let showAllPointsInQuestion: Bool
+            let pointSize: PointMapPointSize
         }
         guard let instanceRow = try PointMapInstanceRow.fetchOne(
             db,
@@ -2650,7 +2651,8 @@ struct AppDatabase {
                     default_center_lat AS defaultCenterLat,
                     default_center_lng AS defaultCenterLng,
                     default_zoom AS defaultZoom,
-                    show_all_points_in_question AS showAllPointsInQuestion
+                    show_all_points_in_question AS showAllPointsInQuestion,
+                    COALESCE(point_size, 'medium') AS pointSize
                 FROM pointmap_instance
                 WHERE instance_id = ?
                 """,
@@ -2701,7 +2703,8 @@ struct AppDatabase {
             showAllPointsInQuestion: instanceRow.showAllPointsInQuestion,
             showHighlight: highlightedPoint != nil,
             boundaries: boundaries,
-            hint: highlightedPoint?.hint ?? ""
+            hint: highlightedPoint?.hint ?? "",
+            pointSize: instanceRow.pointSize
         )
         return StudyQuery(
             instanceID: instanceID,
@@ -3262,6 +3265,7 @@ struct AppDatabase {
         defaultCenterLng: Double,
         defaultZoom: Double,
         showAllPointsInQuestion: Bool,
+        pointSize: PointMapPointSize,
         points: [PointMapPointDraft],
         boundaryIDs: [Int64]
     ) throws -> Int64 {
@@ -3279,10 +3283,10 @@ struct AppDatabase {
 
             try db.execute(
                 sql: """
-                    INSERT INTO pointmap_instance (instance_id, title, default_center_lat, default_center_lng, default_zoom, show_all_points_in_question)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO pointmap_instance (instance_id, title, default_center_lat, default_center_lng, default_zoom, show_all_points_in_question, point_size)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                arguments: [instanceID, title, defaultCenterLat, defaultCenterLng, defaultZoom, showAllPointsInQuestion ? 1 : 0]
+                arguments: [instanceID, title, defaultCenterLat, defaultCenterLng, defaultZoom, showAllPointsInQuestion ? 1 : 0, pointSize.rawValue]
             )
 
             for point in points {
@@ -3346,6 +3350,7 @@ struct AppDatabase {
         defaultCenterLng: Double,
         defaultZoom: Double,
         showAllPointsInQuestion: Bool,
+        pointSize: PointMapPointSize,
         existingPoints: [PointMapPoint],
         newPoints: [PointMapPointDraft],
         boundaryIDs: [Int64]
@@ -3358,10 +3363,11 @@ struct AppDatabase {
                         default_center_lat = ?,
                         default_center_lng = ?,
                         default_zoom = ?,
-                        show_all_points_in_question = ?
+                        show_all_points_in_question = ?,
+                        point_size = ?
                     WHERE instance_id = ?
                     """,
-                arguments: [title, defaultCenterLat, defaultCenterLng, defaultZoom, showAllPointsInQuestion ? 1 : 0, instanceID]
+                arguments: [title, defaultCenterLat, defaultCenterLng, defaultZoom, showAllPointsInQuestion ? 1 : 0, pointSize.rawValue, instanceID]
             )
 
             let existingIDs = Set(existingPoints.map(\.id))
@@ -3420,7 +3426,7 @@ struct AppDatabase {
             guard let row = try Row.fetchOne(
                 db,
                 sql: """
-                    SELECT title, default_center_lat, default_center_lng, default_zoom, show_all_points_in_question
+                    SELECT title, default_center_lat, default_center_lng, default_zoom, show_all_points_in_question, point_size
                     FROM pointmap_instance
                     WHERE instance_id = ?
                     """,
@@ -3435,7 +3441,8 @@ struct AppDatabase {
                 defaultCenterLat: row["default_center_lat"] as Double? ?? 0,
                 defaultCenterLng: row["default_center_lng"] as Double? ?? 0,
                 defaultZoom: row["default_zoom"] as Double? ?? 2,
-                showAllPointsInQuestion: ((row["show_all_points_in_question"] as Int64?) ?? 1) != 0
+                showAllPointsInQuestion: ((row["show_all_points_in_question"] as Int64?) ?? 1) != 0,
+                pointSize: PointMapPointSize(rawValue: row["point_size"] as String? ?? "medium") ?? .medium
             )
 
             let pointRows = try Row.fetchAll(
@@ -4921,6 +4928,7 @@ struct AppDatabase {
         let defaultCenterLng: Double
         let defaultZoom: Double
         let showAllPointsInQuestion: Bool
+        let pointSize: PointMapPointSize
     }
 
     // A derived table that expands each pointmap_point into up to two rows — one
@@ -5093,7 +5101,8 @@ struct AppDatabase {
                     pi.default_center_lat AS defaultCenterLat,
                     pi.default_center_lng AS defaultCenterLng,
                     pi.default_zoom AS defaultZoom,
-                    pi.show_all_points_in_question AS showAllPointsInQuestion
+                    pi.show_all_points_in_question AS showAllPointsInQuestion,
+                    COALESCE(pi.point_size, 'medium') AS pointSize
                 FROM \(Self.pointMapDirectionalFrom) AS pp
                 JOIN pointmap_instance AS pi
                     ON pi.instance_id = pp.instance_id
@@ -5165,7 +5174,8 @@ struct AppDatabase {
                 showAllPointsInQuestion: row.showAllPointsInQuestion,
                 boundaries: boundaries,
                 isReverse: row.isReverse,
-                hint: pointsByInstanceID[row.instanceID]?.first { $0.id == row.pointID }?.hint ?? ""
+                hint: pointsByInstanceID[row.instanceID]?.first { $0.id == row.pointID }?.hint ?? "",
+                pointSize: row.pointSize
             )
             return StudyQuery(
                 instanceID: row.instanceID,
@@ -5307,7 +5317,8 @@ struct AppDatabase {
                     pi.default_center_lat AS defaultCenterLat,
                     pi.default_center_lng AS defaultCenterLng,
                     pi.default_zoom AS defaultZoom,
-                    pi.show_all_points_in_question AS showAllPointsInQuestion
+                    pi.show_all_points_in_question AS showAllPointsInQuestion,
+                    COALESCE(pi.point_size, 'medium') AS pointSize
                 FROM \(Self.pointMapDirectionalFrom) AS pp
                 JOIN pointmap_instance AS pi
                     ON pi.instance_id = pp.instance_id
@@ -5352,7 +5363,8 @@ struct AppDatabase {
             defaultZoom: row.defaultZoom,
             showAllPointsInQuestion: row.showAllPointsInQuestion,
             boundaries: boundaries,
-            isReverse: row.isReverse
+            isReverse: row.isReverse,
+            pointSize: row.pointSize
         )
         return StudyQuery(
             instanceID: row.instanceID,
