@@ -46,7 +46,6 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
     @Published var selectedCollectionIDs: Set<Int64> = []
     @Published var stickyFieldIDs: Set<Int64> = []
     @Published var maxIntervalText: String = ""
-    @Published var showAdvanced: Bool = false
 
     // MARK: Node-type link state
 
@@ -70,7 +69,6 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
     @Published var pointMapExistingPoints: [PointMapPoint] = []
     @Published var pointMapNewPoints: [PointMapPointDraftEntry] = []
     @Published var pointMapSortMode: PointMapSortMode = .creation
-    @Published var pointMapShowAdvanced: Bool = false
     @Published var pointMapExplicitLat: String = ""
     @Published var pointMapExplicitLng: String = ""
     @Published var pointMapExplicitZoom: String = ""
@@ -99,7 +97,6 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
     @Published var boundaryMapNewAttachments: [BoundaryMapAttachmentDraft] = []
     @Published var boundaryMapDeletedExistingIDs: Set<Int64> = []
     @Published var boundaryMapSortMode: BoundaryMapSortMode = .creation
-    @Published var boundaryMapShowAdvanced: Bool = false
     @Published var boundaryMapExplicitLat: String = ""
     @Published var boundaryMapExplicitLng: String = ""
     @Published var boundaryMapExplicitZoom: String = ""

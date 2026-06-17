@@ -43,6 +43,7 @@ struct InstanceEditorWindowView: View {
     @StateObject private var focusController = AddInstanceFieldFocusController()
     @StateObject private var hyperlinkSearchController = HyperlinkSearchController()
     @StateObject private var typePickerController = TypePickerController()
+    @StateObject private var advancedSettingsController = AdvancedSettingsController()
 
     // Deletion confirmations for the map query lists
     @State private var pendingPointMapDeletion: Set<PointMapEntryRef> = []
@@ -148,17 +149,18 @@ struct InstanceEditorWindowView: View {
             editorPanels
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-            if !isPointMapSelected && !isBoundaryMapSelected && draft.selectedTypeID != nil {
-                advancedSection
-                    .padding(.top, 12)
-            }
-
             HStack {
                 if mode == .edit, draft.loadedInstanceID != nil {
                     Button("Delete", role: .destructive) {
                         isInstanceDeletionConfirmationPresented = true
                     }
                     .tint(.red)
+                }
+
+                if draft.selectedTypeID != nil {
+                    Button("Advanced Settings") {
+                        presentAdvancedSettings()
+                    }
                 }
 
                 Spacer()
@@ -228,6 +230,7 @@ struct InstanceEditorWindowView: View {
             pointMapPointController.close()
             hyperlinkSearchController.close()
             typePickerController.close()
+            advancedSettingsController.close()
         }
         .background {
             EditorPreviewShortcutHandler(
@@ -441,32 +444,6 @@ struct InstanceEditorWindowView: View {
                 }
                 .toggleStyle(.checkbox)
             }
-
-            DisclosureGroup("Advanced", isExpanded: $draft.pointMapShowAdvanced) {
-                HStack(spacing: 6) {
-                    Text("Lat:")
-                    TextField("", text: $draft.pointMapExplicitLat)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 90)
-                        .onSubmit(applyExplicitPointMapViewport)
-                    Text("Lng:")
-                    TextField("", text: $draft.pointMapExplicitLng)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 90)
-                        .onSubmit(applyExplicitPointMapViewport)
-                    Text("Zoom:")
-                    TextField("", text: $draft.pointMapExplicitZoom)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 60)
-                        .onSubmit(applyExplicitPointMapViewport)
-                    Button("Apply") {
-                        applyExplicitPointMapViewport()
-                    }
-                    Spacer()
-                }
-                .padding(.top, 4)
-            }
-            .font(.subheadline)
         }
     }
 
@@ -644,7 +621,6 @@ struct InstanceEditorWindowView: View {
         draft.pointMapExistingPoints = []
         draft.pointMapNewPoints = []
         draft.pointMapSortMode = .creation
-        draft.pointMapShowAdvanced = false
         draft.pointMapShowAllPointsInQuestion = true
         draft.pointMapApplyCurrentViewport = false
         draft.pointMapLoadedDefaultCenterLat = nil
@@ -667,7 +643,6 @@ struct InstanceEditorWindowView: View {
         draft.pointMapExistingPoints = instance.points
         draft.pointMapNewPoints = []
         draft.pointMapSortMode = .creation
-        draft.pointMapShowAdvanced = false
         draft.pointMapShowAllPointsInQuestion = instance.instance.showAllPointsInQuestion
         draft.pointMapApplyCurrentViewport = false
         draft.pointMapLoadedDefaultCenterLat = instance.instance.defaultCenterLat
@@ -1011,32 +986,6 @@ struct InstanceEditorWindowView: View {
                 }
                 .toggleStyle(.checkbox)
             }
-
-            DisclosureGroup("Advanced", isExpanded: $draft.boundaryMapShowAdvanced) {
-                HStack(spacing: 6) {
-                    Text("Lat:")
-                    TextField("", text: $draft.boundaryMapExplicitLat)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 90)
-                        .onSubmit(applyExplicitBoundaryMapViewport)
-                    Text("Lng:")
-                    TextField("", text: $draft.boundaryMapExplicitLng)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 90)
-                        .onSubmit(applyExplicitBoundaryMapViewport)
-                    Text("Zoom:")
-                    TextField("", text: $draft.boundaryMapExplicitZoom)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 60)
-                        .onSubmit(applyExplicitBoundaryMapViewport)
-                    Button("Apply") {
-                        applyExplicitBoundaryMapViewport()
-                    }
-                    Spacer()
-                }
-                .padding(.top, 4)
-            }
-            .font(.subheadline)
         }
     }
 
@@ -1215,7 +1164,6 @@ struct InstanceEditorWindowView: View {
         draft.boundaryMapNewAttachments = []
         draft.boundaryMapDeletedExistingIDs = []
         draft.boundaryMapSortMode = .creation
-        draft.boundaryMapShowAdvanced = false
         draft.boundaryMapShowAllBoundariesInQuestion = true
         draft.boundaryMapApplyCurrentViewport = false
         draft.boundaryMapLoadedDefaultCenterLat = nil
@@ -1239,7 +1187,6 @@ struct InstanceEditorWindowView: View {
         draft.boundaryMapNewAttachments = []
         draft.boundaryMapDeletedExistingIDs = []
         draft.boundaryMapSortMode = .creation
-        draft.boundaryMapShowAdvanced = false
         draft.boundaryMapShowAllBoundariesInQuestion = instance.instance.showAllBoundariesInQuestion
         draft.boundaryMapApplyCurrentViewport = false
         draft.boundaryMapLoadedDefaultCenterLat = instance.instance.defaultCenterLat
@@ -1668,31 +1615,17 @@ struct InstanceEditorWindowView: View {
         }
     }
 
-    private var advancedSection: some View {
-        DisclosureGroup("Advanced", isExpanded: $draft.showAdvanced) {
-            HStack(spacing: 8) {
-                Text("Max Interval:")
-                    .font(.subheadline)
-
-                TextField("", text: $draft.maxIntervalText)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 120)
-                    .onChange(of: draft.maxIntervalText) { _, newValue in
-                        let digitsOnly = newValue.filter(\.isNumber)
-                        if digitsOnly != newValue {
-                            draft.maxIntervalText = digitsOnly
-                        }
-                    }
-
-                Text("Leave blank for no max interval.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-
-                Spacer()
-            }
-            .padding(.top, 4)
-        }
-        .font(.subheadline)
+    private func presentAdvancedSettings() {
+        let kind: AdvancedSettingsKind = isPointMapSelected
+            ? .pointMap
+            : (isBoundaryMapSelected ? .boundaryMap : .standard)
+        advancedSettingsController.present(
+            from: NSApp.keyWindow,
+            draft: draft,
+            kind: kind,
+            onApplyPointMapViewport: applyExplicitPointMapViewport,
+            onApplyBoundaryMapViewport: applyExplicitBoundaryMapViewport
+        )
     }
 
     private func togglePin(for item: CollectionChecklistItem) {
