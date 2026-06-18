@@ -78,10 +78,11 @@ struct MapPointMarker: View {
 // persistent forward-answer tooltip.
 struct MapTooltipLabel: View {
     let name: String
+    var font: Font = .caption
 
     var body: some View {
         Text(name)
-            .font(.caption)
+            .font(font)
             .foregroundStyle(.white)
             .padding(.horizontal, 6)
             .padding(.vertical, 3)
@@ -172,7 +173,7 @@ struct PointMapQueryView: View {
 
                 // Persistent answer tooltip above the answer point (forward queries).
                 if showsAnswerTooltip, let answer = answerInfo, !answer.name.isEmpty {
-                    MapTooltipLabel(name: answer.name)
+                    MapTooltipLabel(name: answer.name, font: .title3)
                         .position(
                             x: answer.position.x,
                             y: answer.position.y - answer.markerSize / 2 - 14
