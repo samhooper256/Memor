@@ -39,6 +39,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
     case openSearchQueries
     case openSettings
     case findInList
+    case toggleDeveloperMode
 
     // Study mode
     case studyRevealOrGood
@@ -82,6 +83,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         case .openSearchQueries: return "Open Search (Queries)"
         case .openSettings: return "Open Settings"
         case .findInList: return "Find in List"
+        case .toggleDeveloperMode: return "Toggle Developer Mode"
         case .studyRevealOrGood: return "Reveal / Rate Good"
         case .studyRatingAgain: return "Rate Again"
         case .studyRatingHard: return "Rate Hard"
@@ -108,7 +110,8 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
     var category: ShortcutCategory {
         switch self {
         case .goToStacksTab, .goToInstancesTab, .goToCollectionsTab, .goToTypesTab, .goToGraphTab,
-             .openAddInstance, .openSearchInstances, .openSearchQueries, .openSettings, .findInList:
+             .openAddInstance, .openSearchInstances, .openSearchQueries, .openSettings, .findInList,
+             .toggleDeveloperMode:
             return .global
         case .studyRevealOrGood, .studyRatingAgain, .studyRatingHard, .studyRatingGood,
              .studyRatingEasy, .studyUndo, .studyEditInstance:
@@ -136,6 +139,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         case .openSearchQueries: return KeyBinding(key: "S", modifiers: [.command, .option])
         case .openSettings: return KeyBinding(key: "Comma", modifiers: .command)
         case .findInList: return KeyBinding(key: "F", modifiers: .command)
+        case .toggleDeveloperMode: return KeyBinding(key: "D", modifiers: [.command, .shift])
         case .studyRevealOrGood: return KeyBinding(key: "Space")
         case .studyRatingAgain: return KeyBinding(key: "1")
         case .studyRatingHard: return KeyBinding(key: "2")

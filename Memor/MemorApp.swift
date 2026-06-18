@@ -30,6 +30,7 @@ struct MemorApp: App {
     @StateObject private var quickStudyState = QuickStudyState()
     @StateObject private var shortcutSettings = ShortcutSettings.shared
     @StateObject private var timeZoneSettings = TimeZoneSettings.shared
+    @StateObject private var developerState = DeveloperState.shared
     @State private var hasPerformedInitialStacksRefresh = false
     @Environment(\.openWindow) private var openWindow
     private let appDatabase: AppDatabase
@@ -201,6 +202,16 @@ struct MemorApp: App {
                     openWindow(id: "settings")
                 }
                 .shortcut(.openSettings, settings: shortcutSettings)
+            }
+
+            CommandMenu("Developer") {
+                Button(developerState.isDeveloperModeEnabled
+                       ? "Turn Off Developer Mode"
+                       : "Turn On Developer Mode") {
+                    developerState.toggleDeveloperMode()
+                }
+                .shortcut(.toggleDeveloperMode, settings: shortcutSettings)
+                .disabled(!developerState.allowDeveloperModeAccess)
             }
         }
     }
