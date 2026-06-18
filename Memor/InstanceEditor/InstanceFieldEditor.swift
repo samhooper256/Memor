@@ -134,6 +134,47 @@ final class AddInstanceFieldFocusController: ObservableObject {
         return true
     }
 
+    /// Inserts `text` at the end of the line containing the caret in the focused (or
+    /// last-focused) field. If `selectionSubstring` is given, selects its first occurrence
+    /// within the inserted text. Returns false if no field is targetable.
+    func insertAtEndOfFocusedLine(_ text: String, selecting selectionSubstring: String?) -> Bool {
+        guard let targetFieldID = activeFieldID ?? lastFocusedFieldID,
+              let textView = textViewsByFieldID[targetFieldID]?.value else {
+            return false
+        }
+
+        let nsString = textView.string as NSString
+        let caret = min(textView.selectedRange().location, nsString.length)
+        let searchRange = NSRange(location: caret, length: nsString.length - caret)
+        let newlineRange = nsString.range(of: "\n", options: [], range: searchRange)
+        let endOfLine = newlineRange.location == NSNotFound ? nsString.length : newlineRange.location
+        let insertionRange = NSRange(location: endOfLine, length: 0)
+
+        guard textView.shouldChangeText(in: insertionRange, replacementString: text) else {
+            return false
+        }
+
+        let attributedText = NSAttributedString(string: text, attributes: textView.typingAttributes)
+        textView.textStorage?.replaceCharacters(in: insertionRange, with: attributedText)
+        textView.didChangeText()
+
+        if let selectionSubstring {
+            let offset = (text as NSString).range(of: selectionSubstring).location
+            if offset != NSNotFound {
+                textView.setSelectedRange(NSRange(location: endOfLine + offset,
+                                                  length: (selectionSubstring as NSString).length))
+            } else {
+                textView.setSelectedRange(NSRange(location: endOfLine + (text as NSString).length, length: 0))
+            }
+        } else {
+            textView.setSelectedRange(NSRange(location: endOfLine + (text as NSString).length, length: 0))
+        }
+
+        textView.window?.makeFirstResponder(textView)
+        setActiveField(targetFieldID)
+        return true
+    }
+
 }
 
 struct InstanceFieldEditor: View {
