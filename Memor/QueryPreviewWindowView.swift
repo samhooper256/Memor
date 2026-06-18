@@ -14,6 +14,7 @@ struct QueryPreviewWindowView: View {
     @EnvironmentObject private var windowState: QueryPreviewWindowState
     @EnvironmentObject private var editInstanceWindowState: EditInstanceWindowState
     @EnvironmentObject private var shortcutSettings: ShortcutSettings
+    @ObservedObject private var developerState = DeveloperState.shared
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openWindow) private var openWindow
 
@@ -42,13 +43,24 @@ struct QueryPreviewWindowView: View {
                     BoundaryMapQueryView(payload: payload, revealName: true)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if !renderedAnswerHTML.isEmpty {
-                    QueryHTMLView(
-                        html: renderedAnswerHTML,
-                        disableUserInteraction: true,
-                        onInstanceLinkActivated: navigateToInstance,
-                        onQueryLinkActivated: navigateToQuery
-                    )
+                    if developerState.isDeveloperModeEnabled {
+                        ScrollView([.vertical, .horizontal]) {
+                            Text(renderedAnswerHTML)
+                                .font(.system(.body, design: .monospaced))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(12)
+                        }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        QueryHTMLView(
+                            html: renderedAnswerHTML,
+                            disableUserInteraction: true,
+                            onInstanceLinkActivated: navigateToInstance,
+                            onQueryLinkActivated: navigateToQuery
+                        )
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 } else {
                     ProgressView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
