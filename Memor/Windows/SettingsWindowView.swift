@@ -12,6 +12,7 @@ struct SettingsWindowView: View {
     @ObservedObject var shortcuts: ShortcutSettings
     @ObservedObject var editorSettings: EditorSettings = EditorSettings.shared
     @ObservedObject var timeZoneSettings: TimeZoneSettings = TimeZoneSettings.shared
+    @ObservedObject var developerState: DeveloperState = DeveloperState.shared
     let appDatabase: AppDatabase
     @State private var recordingAction: ShortcutAction? = nil
     @State private var conflictAlert: ConflictAlertInfo? = nil
@@ -147,6 +148,12 @@ struct SettingsWindowView: View {
             Section(header: Text("Image Folder Access").font(.headline)) {
                 imageFolderAccessSection
             }
+
+            Section(header: Text("Developer").font(.headline)) {
+                Toggle(isOn: $developerState.allowDeveloperModeAccess) {
+                    Text("Allow Developer Mode access")
+                }
+            }
         }
         .listStyle(.inset)
     }
@@ -156,7 +163,10 @@ struct SettingsWindowView: View {
             List {
                 ForEach(ShortcutCategory.allCases) { category in
                     Section(header: Text(category.title).font(.headline)) {
-                        ForEach(ShortcutAction.allCases.filter { $0.category == category }) { action in
+                        ForEach(ShortcutAction.allCases.filter {
+                            $0.category == category
+                                && ($0 != .toggleDeveloperMode || developerState.allowDeveloperModeAccess)
+                        }) { action in
                             ShortcutRowView(
                                 action: action,
                                 shortcuts: shortcuts,
