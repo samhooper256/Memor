@@ -17,6 +17,7 @@ struct InstancesPageView: View {
     let appDatabase: AppDatabase
     @ObservedObject var pageState: InstancesPageState
 
+    @StateObject private var typePickerController = TypePickerController()
     @State private var selectedTypeID: Int64?
     @State private var types: [FlashcardType] = []
     @State private var pageData: TypeInstancesPageData?
@@ -128,7 +129,8 @@ struct InstancesPageView: View {
             InstancesPageKeyCommandHandler(
                 isEnabled: !selectedInstanceIDs.isEmpty,
                 onCommandL: copySelectedInstanceLink,
-                onDelete: promptToDeleteSelectedInstances
+                onDelete: promptToDeleteSelectedInstances,
+                onCommandT: presentTypePicker
             )
         }
         .task {
@@ -375,6 +377,18 @@ struct InstancesPageView: View {
     private func openInstanceEditor(instanceID: Int64) {
         editInstanceWindowState.requestOpen(instanceID: instanceID)
         openWindow(id: "edit-instance")
+    }
+
+    @MainActor
+    private func presentTypePicker() {
+        guard !types.isEmpty else { return }
+        typePickerController.present(
+            types: types,
+            currentTypeID: nil,            // nil ⇒ no green text, no checkmark
+            from: NSApp.keyWindow
+        ) { typeID in
+            selectedTypeID = typeID
+        }
     }
 
     @MainActor
@@ -632,12 +646,14 @@ private struct InstancesPageKeyCommandHandler: NSViewRepresentable {
     let isEnabled: Bool
     let onCommandL: () -> Void
     let onDelete: () -> Void
+    let onCommandT: () -> Void
 
     func makeNSView(context: Context) -> KeyCommandHandlingView {
         let view = KeyCommandHandlingView()
         view.isEnabled = isEnabled
         view.onCommandL = onCommandL
         view.onDelete = onDelete
+        view.onCommandT = onCommandT
         return view
     }
 
@@ -645,12 +661,14 @@ private struct InstancesPageKeyCommandHandler: NSViewRepresentable {
         nsView.isEnabled = isEnabled
         nsView.onCommandL = onCommandL
         nsView.onDelete = onDelete
+        nsView.onCommandT = onCommandT
     }
 
     final class KeyCommandHandlingView: NSView {
         var isEnabled = false
         var onCommandL: (() -> Void)?
         var onDelete: (() -> Void)?
+        var onCommandT: (() -> Void)?
 
         private var monitor: Any?
 
@@ -672,7 +690,17 @@ private struct InstancesPageKeyCommandHandler: NSViewRepresentable {
             guard monitor == nil else { return }
 
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard let self, event.window === self.window, self.isEnabled else {
+                guard let self, event.window === self.window else {
+                    return event
+                }
+
+                // ⌘T opens the type picker regardless of instance selection.
+                if self.isCommandT(event) {
+                    self.onCommandT?()
+                    return nil
+                }
+
+                guard self.isEnabled else {
                     return event
                 }
 
@@ -701,6 +729,12 @@ private struct InstancesPageKeyCommandHandler: NSViewRepresentable {
             let modifierFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             guard modifierFlags == [.command] else { return false }
             return event.charactersIgnoringModifiers?.lowercased() == "l"
+        }
+
+        private func isCommandT(_ event: NSEvent) -> Bool {
+            let modifierFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            guard modifierFlags == [.command] else { return false }
+            return event.charactersIgnoringModifiers?.lowercased() == "t"
         }
 
         private func isDelete(_ event: NSEvent) -> Bool {
