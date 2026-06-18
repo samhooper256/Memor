@@ -3261,6 +3261,7 @@ struct AppDatabase {
 
     func makePointMapInstance(
         title: String,
+        description: String,
         defaultCenterLat: Double,
         defaultCenterLng: Double,
         defaultZoom: Double,
@@ -3283,10 +3284,10 @@ struct AppDatabase {
 
             try db.execute(
                 sql: """
-                    INSERT INTO pointmap_instance (instance_id, title, default_center_lat, default_center_lng, default_zoom, show_all_points_in_question, point_size)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO pointmap_instance (instance_id, title, description, default_center_lat, default_center_lng, default_zoom, show_all_points_in_question, point_size)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                arguments: [instanceID, title, defaultCenterLat, defaultCenterLng, defaultZoom, showAllPointsInQuestion ? 1 : 0, pointSize.rawValue]
+                arguments: [instanceID, title, description, defaultCenterLat, defaultCenterLng, defaultZoom, showAllPointsInQuestion ? 1 : 0, pointSize.rawValue]
             )
 
             for point in points {
@@ -3346,6 +3347,7 @@ struct AppDatabase {
     func updatePointMapInstance(
         instanceID: Int64,
         title: String,
+        description: String,
         defaultCenterLat: Double,
         defaultCenterLng: Double,
         defaultZoom: Double,
@@ -3360,6 +3362,7 @@ struct AppDatabase {
                 sql: """
                     UPDATE pointmap_instance
                     SET title = ?,
+                        description = ?,
                         default_center_lat = ?,
                         default_center_lng = ?,
                         default_zoom = ?,
@@ -3367,7 +3370,7 @@ struct AppDatabase {
                         point_size = ?
                     WHERE instance_id = ?
                     """,
-                arguments: [title, defaultCenterLat, defaultCenterLng, defaultZoom, showAllPointsInQuestion ? 1 : 0, pointSize.rawValue, instanceID]
+                arguments: [title, description, defaultCenterLat, defaultCenterLng, defaultZoom, showAllPointsInQuestion ? 1 : 0, pointSize.rawValue, instanceID]
             )
 
             let existingIDs = Set(existingPoints.map(\.id))
@@ -3426,7 +3429,7 @@ struct AppDatabase {
             guard let row = try Row.fetchOne(
                 db,
                 sql: """
-                    SELECT title, default_center_lat, default_center_lng, default_zoom, show_all_points_in_question, point_size
+                    SELECT title, description, default_center_lat, default_center_lng, default_zoom, show_all_points_in_question, point_size
                     FROM pointmap_instance
                     WHERE instance_id = ?
                     """,
@@ -3438,6 +3441,7 @@ struct AppDatabase {
             let instance = PointMapInstance(
                 instanceID: instanceID,
                 title: row["title"] as String? ?? "",
+                description: row["description"] as String? ?? "",
                 defaultCenterLat: row["default_center_lat"] as Double? ?? 0,
                 defaultCenterLng: row["default_center_lng"] as Double? ?? 0,
                 defaultZoom: row["default_zoom"] as Double? ?? 2,
@@ -3666,6 +3670,7 @@ struct AppDatabase {
 
     func makeBoundaryMapInstance(
         title: String,
+        description: String,
         defaultCenterLat: Double,
         defaultCenterLng: Double,
         defaultZoom: Double,
@@ -3686,10 +3691,10 @@ struct AppDatabase {
 
             try db.execute(
                 sql: """
-                    INSERT INTO boundarymap_instance (instance_id, title, default_center_lat, default_center_lng, default_zoom, show_all_boundaries_in_question)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO boundarymap_instance (instance_id, title, description, default_center_lat, default_center_lng, default_zoom, show_all_boundaries_in_question)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                arguments: [instanceID, title, defaultCenterLat, defaultCenterLng, defaultZoom, showAllBoundariesInQuestion ? 1 : 0]
+                arguments: [instanceID, title, description, defaultCenterLat, defaultCenterLng, defaultZoom, showAllBoundariesInQuestion ? 1 : 0]
             )
 
             for boundary in boundaries {
@@ -3712,6 +3717,7 @@ struct AppDatabase {
     func updateBoundaryMapInstance(
         instanceID: Int64,
         title: String,
+        description: String,
         defaultCenterLat: Double,
         defaultCenterLng: Double,
         defaultZoom: Double,
@@ -3724,13 +3730,14 @@ struct AppDatabase {
                 sql: """
                     UPDATE boundarymap_instance
                     SET title = ?,
+                        description = ?,
                         default_center_lat = ?,
                         default_center_lng = ?,
                         default_zoom = ?,
                         show_all_boundaries_in_question = ?
                     WHERE instance_id = ?
                     """,
-                arguments: [title, defaultCenterLat, defaultCenterLng, defaultZoom, showAllBoundariesInQuestion ? 1 : 0, instanceID]
+                arguments: [title, description, defaultCenterLat, defaultCenterLng, defaultZoom, showAllBoundariesInQuestion ? 1 : 0, instanceID]
             )
 
             let keepIDs = Set(existingAttachments.map(\.id))
@@ -3777,7 +3784,7 @@ struct AppDatabase {
             guard let row = try Row.fetchOne(
                 db,
                 sql: """
-                    SELECT title, default_center_lat, default_center_lng, default_zoom, show_all_boundaries_in_question
+                    SELECT title, description, default_center_lat, default_center_lng, default_zoom, show_all_boundaries_in_question
                     FROM boundarymap_instance
                     WHERE instance_id = ?
                     """,
@@ -3789,6 +3796,7 @@ struct AppDatabase {
             let instance = BoundaryMapInstance(
                 instanceID: instanceID,
                 title: row["title"] as String? ?? "",
+                description: row["description"] as String? ?? "",
                 defaultCenterLat: row["default_center_lat"] as Double? ?? 0,
                 defaultCenterLng: row["default_center_lng"] as Double? ?? 0,
                 defaultZoom: row["default_zoom"] as Double? ?? 2,

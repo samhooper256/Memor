@@ -72,6 +72,7 @@ enum PointMapPointSize: String, Codable, CaseIterable, Hashable {
 struct PointMapInstance: Hashable {
     let instanceID: Int64
     let title: String
+    let description: String
     let defaultCenterLat: Double
     let defaultCenterLng: Double
     let defaultZoom: Double
@@ -102,6 +103,7 @@ struct PointMapInstanceWithPoints: Hashable {
 struct BoundaryMapInstance: Hashable {
     let instanceID: Int64
     let title: String
+    let description: String
     let defaultCenterLat: Double
     let defaultCenterLng: Double
     let defaultZoom: Double

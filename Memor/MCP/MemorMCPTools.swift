@@ -125,6 +125,7 @@ enum MemorMCPTools {
         case "create_pointmap_instance":
             return try jsonResult(createPointMapInstance(
                 title: try arguments.requireString("title"),
+                description: try arguments.optionalString("description") ?? "",
                 defaultCenterLat: try arguments.optionalDouble("default_center_lat") ?? 0,
                 defaultCenterLng: try arguments.optionalDouble("default_center_lng") ?? 0,
                 defaultZoom: try arguments.optionalDouble("default_zoom") ?? 2,
@@ -138,6 +139,7 @@ enum MemorMCPTools {
             return try jsonResult(updatePointMapInstance(
                 instanceID: try arguments.requireInt64("instance_id"),
                 title: try arguments.optionalString("title"),
+                description: try arguments.optionalString("description"),
                 defaultCenterLat: try arguments.optionalDouble("default_center_lat"),
                 defaultCenterLng: try arguments.optionalDouble("default_center_lng"),
                 defaultZoom: try arguments.optionalDouble("default_zoom"),
@@ -187,6 +189,7 @@ enum MemorMCPTools {
         case "create_boundarymap_instance":
             return try jsonResult(createBoundaryMapInstance(
                 title: try arguments.requireString("title"),
+                description: try arguments.optionalString("description") ?? "",
                 defaultCenterLat: try arguments.optionalDouble("default_center_lat") ?? 0,
                 defaultCenterLng: try arguments.optionalDouble("default_center_lng") ?? 0,
                 defaultZoom: try arguments.optionalDouble("default_zoom") ?? 2,
@@ -198,6 +201,7 @@ enum MemorMCPTools {
             return try jsonResult(updateBoundaryMapInstance(
                 instanceID: try arguments.requireInt64("instance_id"),
                 title: try arguments.optionalString("title"),
+                description: try arguments.optionalString("description"),
                 defaultCenterLat: try arguments.optionalDouble("default_center_lat"),
                 defaultCenterLng: try arguments.optionalDouble("default_center_lng"),
                 defaultZoom: try arguments.optionalDouble("default_zoom"),
@@ -754,6 +758,7 @@ enum MemorMCPTools {
 
     private static func createPointMapInstance(
         title: String,
+        description: String,
         defaultCenterLat: Double,
         defaultCenterLng: Double,
         defaultZoom: Double,
@@ -776,6 +781,7 @@ enum MemorMCPTools {
         try validateBoundaryIDs(boundaryIDs, appDatabase: appDatabase)
         let instanceID = try appDatabase.makePointMapInstance(
             title: title,
+            description: description,
             defaultCenterLat: defaultCenterLat,
             defaultCenterLng: defaultCenterLng,
             defaultZoom: defaultZoom,
@@ -791,6 +797,7 @@ enum MemorMCPTools {
     private static func updatePointMapInstance(
         instanceID: Int64,
         title: String?,
+        description: String?,
         defaultCenterLat: Double?,
         defaultCenterLng: Double?,
         defaultZoom: Double?,
@@ -811,6 +818,7 @@ enum MemorMCPTools {
         try appDatabase.updatePointMapInstance(
             instanceID: instanceID,
             title: title ?? current.instance.title,
+            description: description ?? current.instance.description,
             defaultCenterLat: defaultCenterLat ?? current.instance.defaultCenterLat,
             defaultCenterLng: defaultCenterLng ?? current.instance.defaultCenterLng,
             defaultZoom: defaultZoom ?? current.instance.defaultZoom,
@@ -888,6 +896,7 @@ enum MemorMCPTools {
         try appDatabase.updatePointMapInstance(
             instanceID: instanceID,
             title: current.instance.title,
+            description: current.instance.description,
             defaultCenterLat: current.instance.defaultCenterLat,
             defaultCenterLng: current.instance.defaultCenterLng,
             defaultZoom: current.instance.defaultZoom,
@@ -915,6 +924,7 @@ enum MemorMCPTools {
         try appDatabase.updatePointMapInstance(
             instanceID: instanceID,
             title: current.instance.title,
+            description: current.instance.description,
             defaultCenterLat: current.instance.defaultCenterLat,
             defaultCenterLng: current.instance.defaultCenterLng,
             defaultZoom: current.instance.defaultZoom,
@@ -940,6 +950,7 @@ enum MemorMCPTools {
 
     private static func createBoundaryMapInstance(
         title: String,
+        description: String,
         defaultCenterLat: Double,
         defaultCenterLng: Double,
         defaultZoom: Double,
@@ -960,6 +971,7 @@ enum MemorMCPTools {
         try validateBoundaryIDs(drafts.map(\.boundaryID), appDatabase: appDatabase)
         let instanceID = try appDatabase.makeBoundaryMapInstance(
             title: title,
+            description: description,
             defaultCenterLat: defaultCenterLat,
             defaultCenterLng: defaultCenterLng,
             defaultZoom: defaultZoom,
@@ -973,6 +985,7 @@ enum MemorMCPTools {
     private static func updateBoundaryMapInstance(
         instanceID: Int64,
         title: String?,
+        description: String?,
         defaultCenterLat: Double?,
         defaultCenterLng: Double?,
         defaultZoom: Double?,
@@ -1029,6 +1042,7 @@ enum MemorMCPTools {
         try appDatabase.updateBoundaryMapInstance(
             instanceID: instanceID,
             title: title ?? current.instance.title,
+            description: description ?? current.instance.description,
             defaultCenterLat: defaultCenterLat ?? current.instance.defaultCenterLat,
             defaultCenterLng: defaultCenterLng ?? current.instance.defaultCenterLng,
             defaultZoom: defaultZoom ?? current.instance.defaultZoom,
@@ -1667,11 +1681,12 @@ enum MemorMCPTools {
 
             Tool(
                 name: "create_pointmap_instance",
-                description: "Create a new PointMap instance (a named map with studyable points). Optional points array seeds initial points, each {name, latitude, longitude, forward_enabled? (default true), reverse_enabled? (default false), hint? (default empty)}. A point's hint is text shown in Study mode before the answer is revealed, on Forward queries only. default_center_lat/lng (default 0) and default_zoom (default 2) set the question map's initial viewport. point_size (\"small\"/\"medium\"/\"large\", default \"medium\") scales how large the markers render. boundary_ids optionally overlays boundary outlines on the map (discover via list_boundary_sets / list_boundaries).",
+                description: "Create a new PointMap instance (a named map with studyable points). Optional points array seeds initial points, each {name, latitude, longitude, forward_enabled? (default true), reverse_enabled? (default false), hint? (default empty)}. A point's hint is text shown in Study mode before the answer is revealed, on Forward queries only. description (default empty) is a free-text note about the instance; it is never shown in Study mode. default_center_lat/lng (default 0) and default_zoom (default 2) set the question map's initial viewport. point_size (\"small\"/\"medium\"/\"large\", default \"medium\") scales how large the markers render. boundary_ids optionally overlays boundary outlines on the map (discover via list_boundary_sets / list_boundaries).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
                         "title": stringValue,
+                        "description": stringValue,
                         "default_center_lat": numberValue,
                         "default_center_lng": numberValue,
                         "default_zoom": numberValue,
@@ -1699,12 +1714,13 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "update_pointmap_instance",
-                description: "Update a PointMap instance's title, default viewport (center/zoom), show_all_points_in_question, point_size (\"small\"/\"medium\"/\"large\"), and/or attached boundary outlines (boundary_ids replaces the full set). Omitted arguments keep their current values; points are untouched (use add/update/delete_pointmap_point).",
+                description: "Update a PointMap instance's title, description (free-text note, never shown in Study mode), default viewport (center/zoom), show_all_points_in_question, point_size (\"small\"/\"medium\"/\"large\"), and/or attached boundary outlines (boundary_ids replaces the full set). Omitted arguments keep their current values; points are untouched (use add/update/delete_pointmap_point).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
                         "instance_id": int64Number,
                         "title": stringValue,
+                        "description": stringValue,
                         "default_center_lat": numberValue,
                         "default_center_lng": numberValue,
                         "default_zoom": numberValue,
@@ -1765,11 +1781,12 @@ enum MemorMCPTools {
 
             Tool(
                 name: "create_boundarymap_instance",
-                description: "Create a new BoundaryMap instance (a named map whose studyable items are attached boundary outlines, e.g. countries or states). boundaries is an array of {boundary_id, forward_enabled? (default true), reverse_enabled? (default false)} — discover boundary IDs via list_boundary_sets / list_boundaries. default_center_lat/lng (default 0) and default_zoom (default 2) set the question map's initial viewport.",
+                description: "Create a new BoundaryMap instance (a named map whose studyable items are attached boundary outlines, e.g. countries or states). boundaries is an array of {boundary_id, forward_enabled? (default true), reverse_enabled? (default false)} — discover boundary IDs via list_boundary_sets / list_boundaries. description (default empty) is a free-text note about the instance; it is never shown in Study mode. default_center_lat/lng (default 0) and default_zoom (default 2) set the question map's initial viewport.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
                         "title": stringValue,
+                        "description": stringValue,
                         "default_center_lat": numberValue,
                         "default_center_lng": numberValue,
                         "default_zoom": numberValue,
@@ -1792,12 +1809,13 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "update_boundarymap_instance",
-                description: "Update a BoundaryMap instance: title/viewport settings, attach new boundaries (add_boundaries: [{boundary_id, forward_enabled?, reverse_enabled?}]), detach attachments (remove_attachment_ids — deletes their queries and SRS progress), and/or toggle query directions on existing attachments (set_enabled: [{attachment_id, forward_enabled?, reverse_enabled?}]). Omitted arguments keep their current values. Attachment IDs come from get_instance. WARNING: disabling a direction permanently deletes that direction's SRS progress.",
+                description: "Update a BoundaryMap instance: title, description (free-text note, never shown in Study mode), viewport settings, attach new boundaries (add_boundaries: [{boundary_id, forward_enabled?, reverse_enabled?}]), detach attachments (remove_attachment_ids — deletes their queries and SRS progress), and/or toggle query directions on existing attachments (set_enabled: [{attachment_id, forward_enabled?, reverse_enabled?}]). Omitted arguments keep their current values. Attachment IDs come from get_instance. WARNING: disabling a direction permanently deletes that direction's SRS progress.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
                         "instance_id": int64Number,
                         "title": stringValue,
+                        "description": stringValue,
                         "default_center_lat": numberValue,
                         "default_center_lng": numberValue,
                         "default_zoom": numberValue,
@@ -2279,6 +2297,7 @@ private struct PointMapInstanceDTO: Encodable {
     let kind = "pointmap"
     let instanceID: Int64
     let title: String
+    let description: String
     let defaultCenterLat: Double
     let defaultCenterLng: Double
     let defaultZoom: Double
@@ -2291,6 +2310,7 @@ private struct PointMapInstanceDTO: Encodable {
     init(_ instance: PointMapInstanceWithPoints) {
         instanceID = instance.instance.instanceID
         title = instance.instance.title
+        description = instance.instance.description
         defaultCenterLat = instance.instance.defaultCenterLat
         defaultCenterLng = instance.instance.defaultCenterLng
         defaultZoom = instance.instance.defaultZoom
@@ -2321,6 +2341,7 @@ private struct BoundaryMapInstanceDTO: Encodable {
     let kind = "boundarymap"
     let instanceID: Int64
     let title: String
+    let description: String
     let defaultCenterLat: Double
     let defaultCenterLng: Double
     let defaultZoom: Double
@@ -2330,6 +2351,7 @@ private struct BoundaryMapInstanceDTO: Encodable {
     init(_ instance: BoundaryMapInstanceWithBoundaries) {
         instanceID = instance.instance.instanceID
         title = instance.instance.title
+        description = instance.instance.description
         defaultCenterLat = instance.instance.defaultCenterLat
         defaultCenterLng = instance.instance.defaultCenterLng
         defaultZoom = instance.instance.defaultZoom

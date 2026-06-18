@@ -195,6 +195,7 @@ extension AppDatabase {
                     instance_id INTEGER PRIMARY KEY
                         REFERENCES instance_id_type_id(instance_id) ON DELETE CASCADE,
                     title TEXT NOT NULL DEFAULT '',
+                    description TEXT NOT NULL DEFAULT '',
                     default_center_lat REAL NOT NULL DEFAULT 0,
                     default_center_lng REAL NOT NULL DEFAULT 0,
                     default_zoom REAL NOT NULL DEFAULT 2,
@@ -227,6 +228,7 @@ extension AppDatabase {
             try migrateReverseQueryColumns(db: db, table: "pointmap_point")
             try migratePointMapPointHintColumn(db: db)
             try migratePointMapInstancePointSizeColumn(db: db)
+            try migratePointMapInstanceDescriptionColumn(db: db)
 
             try db.execute(sql: """
                 CREATE INDEX IF NOT EXISTS idx_pointmap_point_instance
@@ -295,6 +297,7 @@ extension AppDatabase {
                     instance_id INTEGER PRIMARY KEY
                         REFERENCES instance_id_type_id(instance_id) ON DELETE CASCADE,
                     title TEXT NOT NULL DEFAULT '',
+                    description TEXT NOT NULL DEFAULT '',
                     default_center_lat REAL NOT NULL DEFAULT 0,
                     default_center_lng REAL NOT NULL DEFAULT 0,
                     default_zoom REAL NOT NULL DEFAULT 2,
@@ -344,6 +347,8 @@ extension AppDatabase {
                 CREATE INDEX IF NOT EXISTS idx_boundarymap_query_attachment
                     ON boundarymap_query(attachment_id)
                 """)
+
+            try migrateBoundaryMapInstanceDescriptionColumn(db: db)
 
             // Seed the built-in PointMap type (idempotent)
             let existingPointMapTypeID = try Int64.fetchOne(
@@ -547,6 +552,28 @@ extension AppDatabase {
         let names = Set(info.compactMap { $0["name"] as String? })
         if !names.contains("point_size") {
             try db.execute(sql: "ALTER TABLE \"pointmap_instance\" ADD COLUMN point_size TEXT NOT NULL DEFAULT 'medium'")
+        }
+    }
+
+    // Adds the per-instance description column to pointmap_instance for databases
+    // created before instance descriptions existed. Idempotent: the ALTER runs only
+    // when the column is absent. Existing rows default to '' (blank note).
+    private static func migratePointMapInstanceDescriptionColumn(db: Database) throws {
+        let info = try Row.fetchAll(db, sql: "PRAGMA table_info(\"pointmap_instance\")")
+        let names = Set(info.compactMap { $0["name"] as String? })
+        if !names.contains("description") {
+            try db.execute(sql: "ALTER TABLE \"pointmap_instance\" ADD COLUMN description TEXT NOT NULL DEFAULT ''")
+        }
+    }
+
+    // Adds the per-instance description column to boundarymap_instance for databases
+    // created before instance descriptions existed. Idempotent: the ALTER runs only
+    // when the column is absent. Existing rows default to '' (blank note).
+    private static func migrateBoundaryMapInstanceDescriptionColumn(db: Database) throws {
+        let info = try Row.fetchAll(db, sql: "PRAGMA table_info(\"boundarymap_instance\")")
+        let names = Set(info.compactMap { $0["name"] as String? })
+        if !names.contains("description") {
+            try db.execute(sql: "ALTER TABLE \"boundarymap_instance\" ADD COLUMN description TEXT NOT NULL DEFAULT ''")
         }
     }
 

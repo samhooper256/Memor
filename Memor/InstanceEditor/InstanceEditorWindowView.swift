@@ -351,6 +351,13 @@ struct InstanceEditorWindowView: View {
                     .textFieldStyle(.roundedBorder)
             }
 
+            HStack(spacing: 6) {
+                Text("Description:")
+                    .font(.subheadline)
+                TextField("", text: $draft.pointMapDescription)
+                    .textFieldStyle(.roundedBorder)
+            }
+
             HStack(alignment: .center, spacing: 8) {
                 Text("Boundaries:")
                     .font(.subheadline)
@@ -629,6 +636,7 @@ struct InstanceEditorWindowView: View {
 
     private func resetPointMapState() {
         draft.pointMapTitle = ""
+        draft.pointMapDescription = ""
         draft.pointMapExistingPoints = []
         draft.pointMapNewPoints = []
         draft.pointMapSortMode = .creation
@@ -652,6 +660,7 @@ struct InstanceEditorWindowView: View {
 
     private func loadPointMapInto(instance: PointMapInstanceWithPoints) {
         draft.pointMapTitle = instance.instance.title
+        draft.pointMapDescription = instance.instance.description
         draft.pointMapExistingPoints = instance.points
         draft.pointMapNewPoints = []
         draft.pointMapSortMode = .creation
@@ -973,6 +982,13 @@ struct InstanceEditorWindowView: View {
                     .textFieldStyle(.roundedBorder)
             }
 
+            HStack(spacing: 6) {
+                Text("Description:")
+                    .font(.subheadline)
+                TextField("", text: $draft.boundaryMapDescription)
+                    .textFieldStyle(.roundedBorder)
+            }
+
             MapReader { proxy in
                 ZStack {
                     Map(position: $draft.boundaryMapCameraPosition) {
@@ -1195,6 +1211,7 @@ struct InstanceEditorWindowView: View {
 
     private func resetBoundaryMapState() {
         draft.boundaryMapTitle = ""
+        draft.boundaryMapDescription = ""
         draft.boundaryMapExistingAttachments = []
         draft.boundaryMapNewAttachments = []
         draft.boundaryMapDeletedExistingIDs = []
@@ -1218,6 +1235,7 @@ struct InstanceEditorWindowView: View {
 
     private func loadBoundaryMapInto(instance: BoundaryMapInstanceWithBoundaries) {
         draft.boundaryMapTitle = instance.instance.title
+        draft.boundaryMapDescription = instance.instance.description
         draft.boundaryMapExistingAttachments = instance.attachments
         draft.boundaryMapNewAttachments = []
         draft.boundaryMapDeletedExistingIDs = []
@@ -2039,6 +2057,7 @@ struct InstanceEditorWindowView: View {
     @MainActor
     private func submitPointMapInstance(typeID: Int64) async {
         let title = draft.pointMapTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let description = draft.pointMapDescription
         let region = draft.pointMapCurrentRegion
         let latDelta = max(region.span.latitudeDelta, 0.0001)
         let zoom = log2(360.0 / latDelta)
@@ -2059,6 +2078,7 @@ struct InstanceEditorWindowView: View {
             case .add:
                 let instanceID = try appDatabase.makePointMapInstance(
                     title: title,
+                    description: description,
                     defaultCenterLat: region.center.latitude,
                     defaultCenterLng: region.center.longitude,
                     defaultZoom: zoom,
@@ -2093,6 +2113,7 @@ struct InstanceEditorWindowView: View {
                 try appDatabase.updatePointMapInstance(
                     instanceID: loadedInstanceID,
                     title: title,
+                    description: description,
                     defaultCenterLat: saveLat,
                     defaultCenterLng: saveLng,
                     defaultZoom: saveZoom,
@@ -2122,6 +2143,7 @@ struct InstanceEditorWindowView: View {
     @MainActor
     private func submitBoundaryMapInstance(typeID: Int64) async {
         let title = draft.boundaryMapTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let description = draft.boundaryMapDescription
         let region = draft.boundaryMapCurrentRegion
         let latDelta = max(region.span.latitudeDelta, 0.0001)
         let zoom = log2(360.0 / latDelta)
@@ -2138,6 +2160,7 @@ struct InstanceEditorWindowView: View {
             case .add:
                 let instanceID = try appDatabase.makeBoundaryMapInstance(
                     title: title,
+                    description: description,
                     defaultCenterLat: region.center.latitude,
                     defaultCenterLng: region.center.longitude,
                     defaultZoom: zoom,
@@ -2172,6 +2195,7 @@ struct InstanceEditorWindowView: View {
                 try appDatabase.updateBoundaryMapInstance(
                     instanceID: loadedInstanceID,
                     title: title,
+                    description: description,
                     defaultCenterLat: saveLat,
                     defaultCenterLng: saveLng,
                     defaultZoom: saveZoom,

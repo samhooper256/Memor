@@ -56,6 +56,7 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
     // MARK: PointMap state
 
     @Published var pointMapTitle: String = ""
+    @Published var pointMapDescription: String = ""
     @Published var pointMapCameraPosition: MapCameraPosition = .region(
         MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: 0, longitude: 0),
@@ -84,6 +85,7 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
     // MARK: BoundaryMap state
 
     @Published var boundaryMapTitle: String = ""
+    @Published var boundaryMapDescription: String = ""
     @Published var boundaryMapCameraPosition: MapCameraPosition = .region(
         MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: 0, longitude: 0),
@@ -150,8 +152,10 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
             && linkTargetsByLinkFieldID.values.allSatisfy(\.isEmpty)
             && maxIntervalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && pointMapTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && pointMapDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && boundaryPickerState.selectedIDs.isEmpty
             && boundaryMapTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && boundaryMapDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && boundaryMapPickerState.selectedIDs.isEmpty
     }
 
