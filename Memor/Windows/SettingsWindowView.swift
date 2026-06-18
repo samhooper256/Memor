@@ -18,7 +18,16 @@ struct SettingsWindowView: View {
     @State private var showResetAllAlert = false
     @State private var grantedFolders: [ImageFolderAccess] = []
     @State private var folderError: String? = nil
+    @State private var selectedTab: SettingsTab = .general
     @Environment(\.dismiss) private var dismiss
+
+    private enum SettingsTab: String, CaseIterable, Identifiable {
+        case general = "General"
+        case keyboardShortcuts = "Keyboard Shortcuts"
+
+        var id: String { rawValue }
+        var title: String { rawValue }
+    }
 
     private static let timeZoneGroups: [(region: String, options: [TimeZoneOption])] = [
         (region: "United States", options: TimeZoneSettings.usTimeZoneOptions),
@@ -40,47 +49,20 @@ struct SettingsWindowView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            List {
-                ForEach(ShortcutCategory.allCases) { category in
-                    Section(header: Text(category.title).font(.headline)) {
-                        ForEach(ShortcutAction.allCases.filter { $0.category == category }) { action in
-                            ShortcutRowView(
-                                action: action,
-                                shortcuts: shortcuts,
-                                recordingAction: $recordingAction,
-                                onCaptured: { binding in handleCapture(binding, for: action) }
-                            )
-                        }
-                    }
-                }
-
-                Section(header: Text("Editor Behavior").font(.headline)) {
-                    Toggle(isOn: $editorSettings.autoReplaceHTMLEntities) {
-                        Text("Auto-replace `<<` with `&lt;` and `>>` with `&gt;`")
-                    }
-                }
-
-                Section(header: Text("Time Zone").font(.headline)) {
-                    timeZoneSection
-                }
-
-                Section(header: Text("Image Folder Access").font(.headline)) {
-                    imageFolderAccessSection
-                }
-            }
-            .listStyle(.inset)
+        HStack(spacing: 0) {
+            sidebar
 
             Divider()
 
-            HStack {
-                Spacer()
-                Button("Reset All to Defaults") {
-                    showResetAllAlert = true
+            Group {
+                switch selectedTab {
+                case .general:
+                    generalTab
+                case .keyboardShortcuts:
+                    keyboardShortcutsTab
                 }
-                .disabled(shortcuts.bindings.isEmpty)
             }
-            .padding(12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 620, minHeight: 520)
         .navigationTitle("Settings")
@@ -118,6 +100,85 @@ struct SettingsWindowView: View {
         }
         .task {
             reloadGrantedFolders()
+        }
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(SettingsTab.allCases) { tab in
+                sidebarRow(tab)
+            }
+            Spacer()
+        }
+        .padding(8)
+        .frame(width: 190)
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    private func sidebarRow(_ tab: SettingsTab) -> some View {
+        let isSelected = selectedTab == tab
+        return Button {
+            selectedTab = tab
+        } label: {
+            Text(tab.title)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(isSelected ? Color.blue : Color.clear)
+                .foregroundStyle(isSelected ? Color.white : Color.primary)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var generalTab: some View {
+        List {
+            Section(header: Text("Editor Behavior").font(.headline)) {
+                Toggle(isOn: $editorSettings.autoReplaceHTMLEntities) {
+                    Text("Auto-replace `<<` with `&lt;` and `>>` with `&gt;`")
+                }
+            }
+
+            Section(header: Text("Time Zone").font(.headline)) {
+                timeZoneSection
+            }
+
+            Section(header: Text("Image Folder Access").font(.headline)) {
+                imageFolderAccessSection
+            }
+        }
+        .listStyle(.inset)
+    }
+
+    private var keyboardShortcutsTab: some View {
+        VStack(spacing: 0) {
+            List {
+                ForEach(ShortcutCategory.allCases) { category in
+                    Section(header: Text(category.title).font(.headline)) {
+                        ForEach(ShortcutAction.allCases.filter { $0.category == category }) { action in
+                            ShortcutRowView(
+                                action: action,
+                                shortcuts: shortcuts,
+                                recordingAction: $recordingAction,
+                                onCaptured: { binding in handleCapture(binding, for: action) }
+                            )
+                        }
+                    }
+                }
+            }
+            .listStyle(.inset)
+
+            Divider()
+
+            HStack {
+                Spacer()
+                Button("Reset All to Defaults") {
+                    showResetAllAlert = true
+                }
+                .disabled(shortcuts.bindings.isEmpty)
+            }
+            .padding(12)
         }
     }
 
