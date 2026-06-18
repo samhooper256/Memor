@@ -150,6 +150,7 @@ struct InstanceFieldEditor: View {
     let onRequestHyperlink: ((InstanceTextView.CommandAwareTextView) -> Void)?
     let onMoveToNextField: () -> Void
     let onMoveToPreviousField: () -> Void
+    var dedupesTrailingLineBreak: Bool = false
     @State private var editorHeight: CGFloat = minimumEditorHeight
     @State private var isStickyHovered = false
 
@@ -199,7 +200,8 @@ struct InstanceFieldEditor: View {
                     editorHeight = max(Self.minimumEditorHeight, contentHeight)
                 },
                 onMoveToNextField: onMoveToNextField,
-                onMoveToPreviousField: onMoveToPreviousField
+                onMoveToPreviousField: onMoveToPreviousField,
+                dedupesTrailingLineBreak: dedupesTrailingLineBreak
             )
                 .frame(
                     maxWidth: .infinity,
@@ -227,6 +229,7 @@ struct InstanceTextView: NSViewRepresentable {
     let onContentHeightChange: (CGFloat) -> Void
     let onMoveToNextField: () -> Void
     let onMoveToPreviousField: () -> Void
+    var dedupesTrailingLineBreak: Bool = false
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -269,6 +272,7 @@ struct InstanceTextView: NSViewRepresentable {
         textView.string = text
         textView.fieldID = fieldID
         textView.focusController = focusController
+        textView.dedupesTrailingLineBreak = dedupesTrailingLineBreak
         textView.commandHandler = { selector in
             context.coordinator.handleCommand(selector)
         }
@@ -306,6 +310,7 @@ struct InstanceTextView: NSViewRepresentable {
             }
         }
         (textView as? CommandAwareTextView)?.onRequestHyperlink = onRequestHyperlink
+        (textView as? CommandAwareTextView)?.dedupesTrailingLineBreak = dedupesTrailingLineBreak
         focusController.register(textView, fieldID: fieldID)
         context.coordinator.updateContentHeight(for: textView)
     }
@@ -420,6 +425,9 @@ struct InstanceTextView: NSViewRepresentable {
         var fieldID: Int64?
         var commandHandler: ((Selector) -> Bool)?
         var onRequestHyperlink: ((CommandAwareTextView) -> Void)?
+        // When true, pressing Enter at the end of a line that already ends with
+        // "<br>" inserts only a newline instead of another "<br>" + newline.
+        var dedupesTrailingLineBreak = false
 
         private struct PendingEntityRevert {
             let entityRange: NSRange
@@ -451,6 +459,28 @@ struct InstanceTextView: NSViewRepresentable {
         ) {
             pendingRevert = nil
             super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        }
+
+        // True when there is no selection, the caret is at the end of its line
+        // (end of text or immediately before a newline), and the line text up to the
+        // caret ends with "<br>".
+        private func caretAtEndOfLineEndingWithBr() -> Bool {
+            guard selectedRange().length == 0 else { return false }
+            let caret = selectedRange().location
+            let nsString = string as NSString
+            guard caret <= nsString.length else { return false }
+            if caret < nsString.length {
+                let nextChar = nsString.substring(with: NSRange(location: caret, length: 1))
+                guard nextChar == "\n" else { return false }
+            }
+            let lineBreak = nsString.range(
+                of: "\n",
+                options: .backwards,
+                range: NSRange(location: 0, length: caret)
+            )
+            let lineStart = lineBreak.location == NSNotFound ? 0 : lineBreak.location + lineBreak.length
+            let lineText = nsString.substring(with: NSRange(location: lineStart, length: caret - lineStart))
+            return lineText.hasSuffix("<br>")
         }
 
         private func previousCharacter() -> String? {
@@ -535,8 +565,14 @@ struct InstanceTextView: NSViewRepresentable {
             let isReturnKey = event.keyCode == 36 || event.keyCode == 76
             if isReturnKey {
                 if modifierFlags == [] {
-                    // Plain Return: insert <br> then a newline
-                    insertText("<br>\n", replacementRange: selectedRange())
+                    // Plain Return: insert <br> then a newline. If the caret already
+                    // sits at the end of a line ending in "<br>", skip the extra "<br>"
+                    // so the line isn't terminated by two of them.
+                    if dedupesTrailingLineBreak, caretAtEndOfLineEndingWithBr() {
+                        insertText("\n", replacementRange: selectedRange())
+                    } else {
+                        insertText("<br>\n", replacementRange: selectedRange())
+                    }
                     return
                 } else if modifierFlags == [.shift] {
                     // Shift+Return: insert a plain newline
