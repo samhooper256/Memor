@@ -238,6 +238,8 @@ private struct CollectionDetailPageView: View {
     @State private var isIDCopyButtonHovered = false
     @State private var pendingRemovalInstanceIDs: [Int64] = []
     @State private var isRemovalConfirmationPresented = false
+    @State private var pendingDeletionInstanceIDs: [Int64] = []
+    @State private var isDeletionConfirmationPresented = false
     @FocusState private var isRenameFieldFocused: Bool
 
     init(collection: Collection, appDatabase: AppDatabase, onBack: @escaping () -> Void) {
@@ -395,6 +397,9 @@ private struct CollectionDetailPageView: View {
                         Button("Remove from Collection", role: .destructive) {
                             promptToRemoveInstances(items)
                         }
+                        Button("Delete", role: .destructive) {
+                            promptToDeleteInstances(items)
+                        }
                     }
                 } primaryAction: { selectedIDs in
                     guard let instanceID = selectedIDs.first else { return }
@@ -422,6 +427,18 @@ private struct CollectionDetailPageView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This removes the instance from this collection. The instance itself is not deleted.")
+        }
+        .alert(
+            deletionConfirmationTitle,
+            isPresented: $isDeletionConfirmationPresented
+        ) {
+            Button("Delete", role: .destructive) {
+                confirmPendingDeletion()
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This permanently deletes the instance from the database. This action is irreversible.")
         }
         .onExitCommand(perform: onBack)
         .task {
@@ -498,6 +515,36 @@ private struct CollectionDetailPageView: View {
         }
         instances.removeAll { idsToRemove.contains($0.id) }
         selectedInstanceIDs.subtract(idsToRemove)
+    }
+
+    private var deletionConfirmationTitle: String {
+        let count = pendingDeletionInstanceIDs.count
+        if count == 1 {
+            return "Are you sure you want to delete this instance?"
+        } else {
+            return "Are you sure you want to delete these \(count) instances?"
+        }
+    }
+
+    private func promptToDeleteInstances(_ instanceIDs: Set<Int64>) {
+        guard !instanceIDs.isEmpty else { return }
+        pendingDeletionInstanceIDs = Array(instanceIDs)
+        isDeletionConfirmationPresented = true
+    }
+
+    private func confirmPendingDeletion() {
+        let idsToDelete = Set(pendingDeletionInstanceIDs)
+        pendingDeletionInstanceIDs = []
+        isDeletionConfirmationPresented = false
+        guard !idsToDelete.isEmpty else { return }
+        for instanceID in idsToDelete {
+            try? appDatabase.deleteInstance(instanceID: instanceID)
+        }
+        instances.removeAll { idsToDelete.contains($0.id) }
+        selectedInstanceIDs.subtract(idsToDelete)
+        // A hard delete affects other views (Instances tab, Stacks counts), so
+        // tell them to refresh.
+        NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
     }
 }
 
