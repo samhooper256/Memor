@@ -637,9 +637,12 @@ struct InstanceEditorWindowView: View {
         )
         draft.pointMapCurrentRegion = region
         draft.pointMapCameraPosition = .region(region)
-        // Explicit entry is a deliberate intent to set the default viewport, so commit it
-        // on save (the editor checkbox ticks on to reflect this).
-        draft.pointMapApplyCurrentViewport = true
+        // Explicit entry directly updates the map's stored default viewport (what gets
+        // saved when "set to current" is unchecked). It must NOT tick the checkbox —
+        // that's a separate, user-controlled choice to instead capture the live viewport.
+        draft.pointMapLoadedDefaultCenterLat = lat
+        draft.pointMapLoadedDefaultCenterLng = lng
+        draft.pointMapLoadedDefaultZoom = clampedZoom
     }
 
     private func resetPointMapState() {
