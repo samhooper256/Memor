@@ -36,6 +36,9 @@ struct InstanceEditorWindowView: View {
 
     @State private var types: [FlashcardType] = []
     @State private var isInitialLoadComplete = false
+    // Set when the user picks a type via the ⌘T picker, so loadFields can focus
+    // the first field editor for Object types once the new fields have rendered.
+    @State private var shouldFocusFirstFieldAfterTypePick = false
     @State private var toast: ToastMessage?
     @State private var toastTask: Task<Void, Never>?
     @State private var allCollectionItems: [CollectionChecklistItem] = []
@@ -81,6 +84,11 @@ struct InstanceEditorWindowView: View {
 
     private var isNodeTypeSelected: Bool {
         selectedType?.isNode ?? false
+    }
+
+    /// A plain Object type: a real type that is neither a Node nor a built-in Map.
+    private var isObjectTypeSelected: Bool {
+        selectedType != nil && !isNodeTypeSelected && !isPointMapSelected && !isBoundaryMapSelected
     }
 
     /// Mirrors the selected type's map-kind and name onto the draft so it can
@@ -1859,7 +1867,21 @@ struct InstanceEditorWindowView: View {
             focusController.reset(with: draft.fields.map(\.id))
             focusController.focusField(draft.fields.first?.id)
             loadCollectionItems()
+
+            // When the type was just chosen via the ⌘T picker, re-issue focus for
+            // Object types after this render cycle. The picker panel's close causes
+            // the editor window to restore its previous first responder, which would
+            // otherwise win the race against the focus requested just above.
+            if shouldFocusFirstFieldAfterTypePick {
+                shouldFocusFirstFieldAfterTypePick = false
+                if isObjectTypeSelected, let firstFieldID = draft.fields.first?.id {
+                    DispatchQueue.main.async {
+                        focusController.focusField(firstFieldID)
+                    }
+                }
+            }
         } catch {
+            shouldFocusFirstFieldAfterTypePick = false
             draft.fields = []
             draft.loadedTypeID = nil
             draft.loadedInstanceID = nil
@@ -2311,6 +2333,7 @@ struct InstanceEditorWindowView: View {
             currentTypeID: draft.selectedTypeID,
             from: currentWindow
         ) { [self] typeID in
+            shouldFocusFirstFieldAfterTypePick = true
             draft.selectedTypeID = typeID
         }
     }
