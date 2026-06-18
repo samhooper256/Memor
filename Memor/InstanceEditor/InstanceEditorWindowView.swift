@@ -46,6 +46,7 @@ struct InstanceEditorWindowView: View {
     @StateObject private var focusController = AddInstanceFieldFocusController()
     @StateObject private var hyperlinkSearchController = HyperlinkSearchController()
     @StateObject private var typePickerController = TypePickerController()
+    @StateObject private var tableSizePickerController = TableSizePickerController()
     @StateObject private var advancedSettingsController = AdvancedSettingsController()
 
     // Deletion confirmations for the map query lists
@@ -238,6 +239,7 @@ struct InstanceEditorWindowView: View {
             pointMapPointController.close()
             hyperlinkSearchController.close()
             typePickerController.close()
+            tableSizePickerController.close()
             advancedSettingsController.close()
         }
         .background {
@@ -305,12 +307,21 @@ struct InstanceEditorWindowView: View {
             }
 
             if !isPointMapSelected && !isBoundaryMapSelected {
-                Button {
-                    insertImageIntoCurrentField()
-                } label: {
-                    ShortcutLabel(title: "Insert Image", action: .editorInsertImage)
+                HStack(spacing: 8) {
+                    Button {
+                        insertImageIntoCurrentField()
+                    } label: {
+                        ShortcutLabel(title: "Insert Image", action: .editorInsertImage)
+                    }
+                    .controlSize(.small)
+
+                    Button {
+                        presentTablePicker()
+                    } label: {
+                        Text("Insert Table")
+                    }
+                    .controlSize(.small)
                 }
-                .controlSize(.small)
             }
         }
     }
@@ -2373,6 +2384,33 @@ struct InstanceEditorWindowView: View {
             showToast(message: "Select a field before inserting an image.", style: .error)
             return
         }
+    }
+
+    @MainActor
+    private func presentTablePicker() {
+        tableSizePickerController.present(
+            initialRows: TableInsertSizeStore.shared.lastRows,
+            initialCols: TableInsertSizeStore.shared.lastCols,
+            from: NSApp.keyWindow
+        ) { [self] rows, cols in
+            insertTableIntoCurrentField(rows: rows, cols: cols)
+        }
+    }
+
+    @MainActor
+    private func insertTableIntoCurrentField(rows: Int, cols: Int) {
+        let rowsHTML = (1...rows).map { r in
+            "<tr>" + (1...cols).map { c in "<td>CELL\(r)_\(c)</td>" }.joined() + "</tr>"
+        }.joined(separator: "\n")
+        let tableHTML = "<table>\n" + rowsHTML + "\n</table>"
+
+        guard focusController.insertAtEndOfFocusedLine(tableHTML, selecting: "CELL1_1") else {
+            showToast(message: "Select a field before inserting a table.", style: .error)
+            return
+        }
+
+        TableInsertSizeStore.shared.lastRows = rows
+        TableInsertSizeStore.shared.lastCols = cols
     }
 
     private func toggleSticky(typeID: Int64, fieldID: Int64) {
