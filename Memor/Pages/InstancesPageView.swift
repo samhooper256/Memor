@@ -31,6 +31,7 @@ struct InstancesPageView: View {
     @State private var toastMessage: String?
     @State private var toastTask: Task<Void, Never>?
     @State private var searchQuery = ""
+    @State private var searchFocusRequest: UUID?
     @State private var debouncedSearchQuery = ""
     @State private var debounceTask: Task<Void, Never>?
     @State private var searchErrorMessage: String?
@@ -69,7 +70,7 @@ struct InstancesPageView: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     } else if selectedType != nil, let pageData {
                         VStack(alignment: .leading, spacing: 8) {
-                            SearchQueryTextField("Search instances", text: $searchQuery)
+                            SearchQueryTextField("Search instances", text: $searchQuery, focusRequest: searchFocusRequest)
                                 .searchCodeEditorStyle()
 
                             if let searchErrorMessage {
@@ -130,7 +131,8 @@ struct InstancesPageView: View {
                 isEnabled: !selectedInstanceIDs.isEmpty,
                 onCommandL: copySelectedInstanceLink,
                 onDelete: promptToDeleteSelectedInstances,
-                onCommandT: presentTypePicker
+                onCommandT: presentTypePicker,
+                onCommandF: focusSearchField
             )
         }
         .task {
@@ -377,6 +379,11 @@ struct InstancesPageView: View {
     private func openInstanceEditor(instanceID: Int64) {
         editInstanceWindowState.requestOpen(instanceID: instanceID)
         openWindow(id: "edit-instance")
+    }
+
+    @MainActor
+    private func focusSearchField() {
+        searchFocusRequest = UUID()
     }
 
     @MainActor
@@ -647,6 +654,7 @@ private struct InstancesPageKeyCommandHandler: NSViewRepresentable {
     let onCommandL: () -> Void
     let onDelete: () -> Void
     let onCommandT: () -> Void
+    let onCommandF: () -> Void
 
     func makeNSView(context: Context) -> KeyCommandHandlingView {
         let view = KeyCommandHandlingView()
@@ -654,6 +662,7 @@ private struct InstancesPageKeyCommandHandler: NSViewRepresentable {
         view.onCommandL = onCommandL
         view.onDelete = onDelete
         view.onCommandT = onCommandT
+        view.onCommandF = onCommandF
         return view
     }
 
@@ -662,6 +671,7 @@ private struct InstancesPageKeyCommandHandler: NSViewRepresentable {
         nsView.onCommandL = onCommandL
         nsView.onDelete = onDelete
         nsView.onCommandT = onCommandT
+        nsView.onCommandF = onCommandF
     }
 
     final class KeyCommandHandlingView: NSView {
@@ -669,6 +679,7 @@ private struct InstancesPageKeyCommandHandler: NSViewRepresentable {
         var onCommandL: (() -> Void)?
         var onDelete: (() -> Void)?
         var onCommandT: (() -> Void)?
+        var onCommandF: (() -> Void)?
 
         private var monitor: Any?
 
@@ -697,6 +708,12 @@ private struct InstancesPageKeyCommandHandler: NSViewRepresentable {
                 // ⌘T opens the type picker regardless of instance selection.
                 if self.isCommandT(event) {
                     self.onCommandT?()
+                    return nil
+                }
+
+                // ⌘F focuses the search box regardless of instance selection.
+                if self.isCommandF(event) {
+                    self.onCommandF?()
                     return nil
                 }
 
@@ -735,6 +752,12 @@ private struct InstancesPageKeyCommandHandler: NSViewRepresentable {
             let modifierFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             guard modifierFlags == [.command] else { return false }
             return event.charactersIgnoringModifiers?.lowercased() == "t"
+        }
+
+        private func isCommandF(_ event: NSEvent) -> Bool {
+            let modifierFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            guard modifierFlags == [.command] else { return false }
+            return event.charactersIgnoringModifiers?.lowercased() == "f"
         }
 
         private func isDelete(_ event: NSEvent) -> Bool {
