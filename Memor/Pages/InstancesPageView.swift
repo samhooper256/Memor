@@ -151,6 +151,9 @@ struct InstancesPageView: View {
             searchQuery = ""
             debouncedSearchQuery = ""
             searchErrorMessage = nil
+            if newValue != nil {
+                searchFocusRequest = UUID()
+            }
         }
         .onChange(of: searchQuery) { _, newValue in
             scheduleDebouncedSearch(for: newValue)
