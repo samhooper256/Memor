@@ -714,6 +714,7 @@ struct TypeDetailPageView: View {
             htmlText: $selectedQueryHTML,
             cssText: $selectedTypeCSS,
             fieldNames: Set(fields.map(\.name)),
+            booleanFieldNames: Set(fields.filter { $0.fieldType == .boolean }.map(\.name)),
             activeEditor: $activeEditor,
             splitRatio: $editorSplitRatio
         )

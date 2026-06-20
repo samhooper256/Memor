@@ -26,6 +26,7 @@ private struct QueryTypeEditorPane: View {
     @Binding var text: String
     let highlightedTokens: Set<String>
     let fieldNames: Set<String>
+    let booleanFieldNames: Set<String>
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -43,6 +44,7 @@ private struct QueryTypeEditorPane: View {
                 text: $text,
                 highlightedTokens: highlightedTokens,
                 fieldNames: fieldNames,
+                booleanFieldNames: booleanFieldNames,
                 isFocused: Binding(
                     get: { activeEditor == editor },
                     set: { isFocused in
@@ -64,6 +66,7 @@ struct PlainCodeTextView: NSViewRepresentable {
     @Binding var text: String
     let highlightedTokens: Set<String>
     let fieldNames: Set<String>
+    let booleanFieldNames: Set<String>
     @Binding var isFocused: Bool
 
     func makeCoordinator() -> Coordinator {
@@ -71,6 +74,7 @@ struct PlainCodeTextView: NSViewRepresentable {
             text: $text,
             highlightedTokens: highlightedTokens,
             fieldNames: fieldNames,
+            booleanFieldNames: booleanFieldNames,
             isFocused: $isFocused
         )
     }
@@ -126,6 +130,7 @@ struct PlainCodeTextView: NSViewRepresentable {
 
         context.coordinator.highlightedTokens = highlightedTokens
         context.coordinator.fieldNames = fieldNames
+        context.coordinator.booleanFieldNames = booleanFieldNames
         context.coordinator.applySyntaxHighlighting()
 
         if isFocused, textView.window?.firstResponder !== textView {
@@ -137,6 +142,7 @@ struct PlainCodeTextView: NSViewRepresentable {
         @Binding private var text: String
         var highlightedTokens: Set<String>
         var fieldNames: Set<String>
+        var booleanFieldNames: Set<String>
         @Binding var isFocused: Bool
         weak var textView: NSTextView?
         private let baseFont = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
@@ -146,11 +152,13 @@ struct PlainCodeTextView: NSViewRepresentable {
             text: Binding<String>,
             highlightedTokens: Set<String>,
             fieldNames: Set<String>,
+            booleanFieldNames: Set<String>,
             isFocused: Binding<Bool>
         ) {
             _text = text
             self.highlightedTokens = highlightedTokens
             self.fieldNames = fieldNames
+            self.booleanFieldNames = booleanFieldNames
             _isFocused = isFocused
         }
 
@@ -210,8 +218,19 @@ struct PlainCodeTextView: NSViewRepresentable {
                         return
                     }
 
-                    let fieldName = String(textStorage.string[range])
-                    guard fieldNames.contains(fieldName) else { return }
+                    let content = String(textStorage.string[range])
+                    // Plain {{FieldName}} for any field, plus the Boolean-only colon
+                    // forms {{BoolField:bit}} and {{BoolField:value_if_true:value_if_false}}
+                    // (recognized by the part before the first colon being a boolean field).
+                    let isPlaceholder: Bool
+                    if fieldNames.contains(content) {
+                        isPlaceholder = true
+                    } else if let colonIndex = content.firstIndex(of: ":") {
+                        isPlaceholder = booleanFieldNames.contains(String(content[..<colonIndex]))
+                    } else {
+                        isPlaceholder = false
+                    }
+                    guard isPlaceholder else { return }
 
                     textStorage.addAttribute(
                         .foregroundColor,
@@ -268,6 +287,7 @@ struct QueryTypeEditorsSplitView: View {
     @Binding var htmlText: String
     @Binding var cssText: String
     let fieldNames: Set<String>
+    let booleanFieldNames: Set<String>
     @Binding var activeEditor: FocusedEditor?
     @Binding var splitRatio: CGFloat
 
@@ -293,7 +313,8 @@ struct QueryTypeEditorsSplitView: View {
                     title: "HTML",
                     text: $htmlText,
                     highlightedTokens: ["{{#QuestionContent}}", "{{#Tags}}"],
-                    fieldNames: fieldNames
+                    fieldNames: fieldNames,
+                    booleanFieldNames: booleanFieldNames
                 )
                     .frame(width: leftPaneWidth)
 
@@ -336,7 +357,8 @@ struct QueryTypeEditorsSplitView: View {
                     title: "CSS",
                     text: $cssText,
                     highlightedTokens: [],
-                    fieldNames: []
+                    fieldNames: [],
+                    booleanFieldNames: []
                 )
                     .frame(width: rightPaneWidth)
             }

@@ -63,6 +63,7 @@ struct GlobalCodeEditorWindowView: View {
                 text: $text,
                 highlightedTokens: kind == .html ? ["{{#Content}}"] : [],
                 fieldNames: [],
+                booleanFieldNames: [],
                 isFocused: $isFocused
             )
             .frame(height: 500)
