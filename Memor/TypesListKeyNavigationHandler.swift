@@ -60,9 +60,11 @@ struct TypesListKeyNavigationHandler: NSViewRepresentable {
             guard monitor == nil else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard let self, self.isEnabled, event.window === self.window else { return event }
-                // Only grab bare keys — leave anything with ⌘/⌥/⌃ to other handlers.
-                let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-                guard modifiers.isEmpty else { return event }
+                // Only grab bare keys — leave anything with ⌘/⌥/⌃/⇧ to other handlers.
+                // NB: arrow keys always carry .function and .numericPad, so we must
+                // ignore those (and .capsLock) rather than require *no* modifiers.
+                let blockingModifiers: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
+                guard event.modifierFlags.intersection(blockingModifiers).isEmpty else { return event }
 
                 switch event.keyCode {
                 case 126: // up arrow
