@@ -19,16 +19,47 @@ func renderQueryHTMLTemplate(
     fieldValuesByName.reduce(into: html) { renderedHTML, entry in
         let (name, value) = entry
         if booleanFieldNames.contains(name) {
-            // Boolean fields are stored as "0"/"1": {{Name:bit}} renders the raw
-            // bit, {{Name}} renders the word "true"/"false". The two tokens are
-            // distinct literals, so replacement order is irrelevant.
+            // Boolean fields are stored as "0"/"1". Three placeholder forms, handled
+            // most-specific first (their colon counts make them mutually exclusive):
+            //   {{Name:value_if_true:value_if_false}}  -> the chosen branch verbatim
+            //   {{Name:bit}}                           -> "1"/"0"
+            //   {{Name}}                               -> "true"/"false"
             let isTrue = value == "1"
+            renderedHTML = replaceBooleanTernaryPlaceholders(in: renderedHTML, fieldName: name, isTrue: isTrue)
             renderedHTML = renderedHTML.replacingOccurrences(of: "{{\(name):bit}}", with: isTrue ? "1" : "0")
             renderedHTML = renderedHTML.replacingOccurrences(of: "{{\(name)}}", with: isTrue ? "true" : "false")
         } else {
             renderedHTML = renderedHTML.replacingOccurrences(of: "{{\(name)}}", with: value)
         }
     }
+}
+
+// Replaces every {{fieldName:value_if_true:value_if_false}} placeholder with the
+// branch selected by `isTrue`. The first colon (after the field name) and the
+// second colon are separators; any later colons are part of value_if_false. Either
+// branch may be empty. Consistent with how the editor recognizes placeholders,
+// branch values may not contain `{` or `}`, which also keeps a match from spanning
+// across adjacent placeholders.
+private func replaceBooleanTernaryPlaceholders(in html: String, fieldName: String, isTrue: Bool) -> String {
+    let escapedName = NSRegularExpression.escapedPattern(for: fieldName)
+    // true branch: no colon, no braces; false branch: braces excluded, colons kept.
+    let pattern = "\\{\\{\(escapedName):([^:{}]*):([^{}]*)\\}\\}"
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { return html }
+
+    let nsHTML = html as NSString
+    let matches = regex.matches(in: html, range: NSRange(location: 0, length: nsHTML.length))
+    guard !matches.isEmpty else { return html }
+
+    var result = html
+    // Replace from the end so earlier match ranges stay valid as we mutate.
+    for match in matches.reversed() {
+        let branchRange = match.range(at: isTrue ? 1 : 2)
+        let replacement = branchRange.location == NSNotFound ? "" : nsHTML.substring(with: branchRange)
+        if let range = Range(match.range, in: result) {
+            result.replaceSubrange(range, with: replacement)
+        }
+    }
+    return result
 }
 
 func injectQueryCSS(into html: String, appDatabase: AppDatabase, typeCSS: String) throws -> String {
