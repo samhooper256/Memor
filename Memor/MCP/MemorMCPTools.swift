@@ -2112,11 +2112,13 @@ private struct FieldDTO: Encodable {
     let id: Int64
     let name: String
     let fieldDisplayIndex: Int
+    let fieldType: String
 
     init(_ field: TypeField) {
         id = field.id
         name = field.name
         fieldDisplayIndex = field.fieldDisplayIndex
+        fieldType = field.fieldType.rawValue
     }
 }
 

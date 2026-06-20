@@ -11,9 +11,23 @@ import SwiftUI
 import UniformTypeIdentifiers
 import WebKit
 
-func renderQueryHTMLTemplate(_ html: String, fieldValuesByName: [String: String]) -> String {
+func renderQueryHTMLTemplate(
+    _ html: String,
+    fieldValuesByName: [String: String],
+    booleanFieldNames: Set<String> = []
+) -> String {
     fieldValuesByName.reduce(into: html) { renderedHTML, entry in
-        renderedHTML = renderedHTML.replacingOccurrences(of: "{{\(entry.key)}}", with: entry.value)
+        let (name, value) = entry
+        if booleanFieldNames.contains(name) {
+            // Boolean fields are stored as "0"/"1": {{Name:bit}} renders the raw
+            // bit, {{Name}} renders the word "true"/"false". The two tokens are
+            // distinct literals, so replacement order is irrelevant.
+            let isTrue = value == "1"
+            renderedHTML = renderedHTML.replacingOccurrences(of: "{{\(name):bit}}", with: isTrue ? "1" : "0")
+            renderedHTML = renderedHTML.replacingOccurrences(of: "{{\(name)}}", with: isTrue ? "true" : "false")
+        } else {
+            renderedHTML = renderedHTML.replacingOccurrences(of: "{{\(name)}}", with: value)
+        }
     }
 }
 
@@ -48,7 +62,11 @@ func buildRenderedQuestionHTML(appDatabase: AppDatabase, query: StudyQuery) thro
         questionHTML: query.questionHTML,
         instanceID: query.instanceID
     )
-    let renderedHTML = renderQueryHTMLTemplate(previewHTML, fieldValuesByName: query.fieldValuesByName)
+    let renderedHTML = renderQueryHTMLTemplate(
+        previewHTML,
+        fieldValuesByName: query.fieldValuesByName,
+        booleanFieldNames: query.booleanFieldNames
+    )
     return try injectQueryCSS(into: renderedHTML, appDatabase: appDatabase, typeCSS: query.typeCSS)
 }
 
@@ -59,7 +77,11 @@ func buildRenderedAnswerHTML(appDatabase: AppDatabase, query: StudyQuery) throws
         answerHTML: query.answerHTML,
         instanceID: query.instanceID
     )
-    let renderedHTML = renderQueryHTMLTemplate(previewHTML, fieldValuesByName: query.fieldValuesByName)
+    let renderedHTML = renderQueryHTMLTemplate(
+        previewHTML,
+        fieldValuesByName: query.fieldValuesByName,
+        booleanFieldNames: query.booleanFieldNames
+    )
     return try injectQueryCSS(into: renderedHTML, appDatabase: appDatabase, typeCSS: query.typeCSS)
 }
 let localImageResourceScheme = "flashcards-local-image"

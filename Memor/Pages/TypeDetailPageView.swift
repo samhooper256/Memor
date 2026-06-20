@@ -40,6 +40,7 @@ struct TypeDetailPageView: View {
     @State private var previewErrorMessage: String?
     @State private var isAddFieldPopoverPresented = false
     @State private var newFieldName = ""
+    @State private var newFieldType: FieldKind = .text
     @State private var fieldPendingDeletion: TypeField?
     @State private var fieldPendingRename: TypeField?
     @State private var isRenameFieldPopoverPresented = false
@@ -246,7 +247,17 @@ struct TypeDetailPageView: View {
                                     }
                                 }
 
-                            Text("You can change this later.")
+                            Text("You can rename this later.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            Picker("Field Type", selection: $newFieldType) {
+                                Text("Text").tag(FieldKind.text)
+                                Text("Boolean").tag(FieldKind.boolean)
+                            }
+                            .pickerStyle(.radioGroup)
+
+                            Text("Field type can't be changed later.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
 
@@ -786,9 +797,10 @@ struct TypeDetailPageView: View {
         }
 
         do {
-            _ = try appDatabase.addField(toTypeID: type.id, name: trimmedFieldName)
+            _ = try appDatabase.addField(toTypeID: type.id, name: trimmedFieldName, fieldType: newFieldType)
             fields = try appDatabase.fetchFieldsForDisplay(forTypeID: type.id)
             newFieldName = ""
+            newFieldType = .text
             isAddFieldPopoverPresented = false
             errorMessage = nil
         } catch {
@@ -1194,10 +1206,15 @@ private struct FieldsSectionView: View {
                 .foregroundStyle(.secondary)
                 .font(.caption)
 
+            Image(systemName: field.fieldType == .boolean ? "checkmark.square" : "textformat")
+                .foregroundStyle(.secondary)
+                .help(field.fieldType == .boolean ? "Boolean field" : "Text field")
+
             Text(field.name)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            if isNode {
+            // Boolean fields can't be the primary field (it drives node display chips).
+            if isNode && field.fieldType == .text {
                 Button {
                     onSetPrimary(field)
                 } label: {

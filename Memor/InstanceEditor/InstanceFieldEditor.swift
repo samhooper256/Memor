@@ -261,6 +261,78 @@ struct InstanceFieldEditor: View {
     }
 }
 
+// Editor cell for a boolean field. Mirrors InstanceFieldEditor's header chrome
+// (name label + optional sticky toggle) but the body is a single checkbox instead
+// of a text view. The value is stored as the string "0"/"1" in the draft.
+struct InstanceBooleanFieldEditor: View {
+    let fieldName: String
+    @Binding var value: String
+    let isSticky: Bool
+    let showStickyToggle: Bool
+    let onToggleSticky: () -> Void
+    @State private var isStickyHovered = false
+
+    private var isOn: Binding<Bool> {
+        Binding(
+            get: { value == "1" },
+            set: { value = $0 ? "1" : "0" }
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 0) {
+                Text(fieldName)
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
+
+                Spacer(minLength: 0)
+
+                if showStickyToggle {
+                    Button(action: onToggleSticky) {
+                        Image(systemName: "pin.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(isSticky ? .blue : Color.secondary.opacity(0.4))
+                            .rotationEffect(.degrees(45))
+                            .frame(width: 20, height: 20)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(isStickyHovered ? Color.secondary.opacity(0.15) : Color.clear)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { hovering in
+                        isStickyHovered = hovering
+                    }
+                    .help(isSticky ? "Unstick field (⌘S)" : "Stick field (⌘S)")
+                    .padding(.trailing, 8)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Divider()
+
+            Toggle(isOn: isOn) {
+                Text(isOn.wrappedValue ? "True" : "False")
+                    .font(.callout)
+            }
+            .toggleStyle(.checkbox)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(Color(NSColor.controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
+        }
+    }
+}
+
 struct InstanceTextView: NSViewRepresentable {
     @Binding var text: String
     let focusController: AddInstanceFieldFocusController

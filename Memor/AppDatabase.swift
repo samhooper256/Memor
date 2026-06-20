@@ -2361,7 +2361,8 @@ struct AppDatabase {
                         name,
                         field_index AS fieldIndex,
                         field_display_index AS fieldDisplayIndex,
-                        COALESCE(is_primary, 0) AS isPrimary
+                        COALESCE(is_primary, 0) AS isPrimary,
+                        field_type AS fieldType
                     FROM field
                     WHERE type_id = ?
                     ORDER BY field_index, id
@@ -2382,7 +2383,8 @@ struct AppDatabase {
                         name,
                         field_index AS fieldIndex,
                         field_display_index AS fieldDisplayIndex,
-                        COALESCE(is_primary, 0) AS isPrimary
+                        COALESCE(is_primary, 0) AS isPrimary,
+                        field_type AS fieldType
                     FROM field
                     WHERE type_id = ?
                     ORDER BY field_display_index, id
@@ -2973,6 +2975,15 @@ struct AppDatabase {
                 )
             }
 
+            // Carry the type's boolean field names so the draft preview renders
+            // {{Bool}} / {{Bool:bit}} correctly once the caller supplies values
+            // via withFieldValues.
+            let booleanFieldNames = Set(try String.fetchAll(
+                db,
+                sql: "SELECT name FROM field WHERE type_id = ? AND field_type = 'boolean'",
+                arguments: [typeID]
+            ))
+
             return StudyQuery(
                 instanceID: 0,
                 queryTypeID: queryRow.queryTypeID,
@@ -2986,6 +2997,7 @@ struct AppDatabase {
                 answerHTML: answerHTML,
                 typeCSS: queryRow.typeCSS,
                 fieldValuesByName: [:],
+                booleanFieldNames: booleanFieldNames,
                 linkFieldID: queryRow.linkFieldID
             )
         }
@@ -3177,7 +3189,8 @@ struct AppDatabase {
                         type_id AS typeID,
                         name,
                         field_index AS fieldIndex,
-                        field_display_index AS fieldDisplayIndex
+                        field_display_index AS fieldDisplayIndex,
+                        field_type AS fieldType
                     FROM field
                     WHERE type_id = ?
                     ORDER BY field_index, id
@@ -3199,7 +3212,7 @@ struct AppDatabase {
             var arguments: [DatabaseValue] = []
             arguments.append(instanceID.databaseValue)
             arguments.append(contentsOf: fields.map { field in
-                (fieldValuesByFieldID[field.id] ?? "").databaseValue
+                Self.normalizedFieldValue(fieldValuesByFieldID[field.id] ?? "", kind: field.fieldType).databaseValue
             })
             try db.execute(sql: insertSQL, arguments: StatementArguments(arguments)!)
 
@@ -3306,7 +3319,8 @@ struct AppDatabase {
                         type_id AS typeID,
                         name,
                         field_index AS fieldIndex,
-                        field_display_index AS fieldDisplayIndex
+                        field_display_index AS fieldDisplayIndex,
+                        field_type AS fieldType
                     FROM field
                     WHERE type_id = ?
                     ORDER BY field_index, id
@@ -3318,7 +3332,9 @@ struct AppDatabase {
                 "\"field\(field.fieldIndex)\" = ?"
             }.joined(separator: ", ")
             let arguments = StatementArguments(
-                fields.map { field in fieldValuesByFieldID[field.id] ?? "" } + [String(instanceID)]
+                fields.map { field in
+                    Self.normalizedFieldValue(fieldValuesByFieldID[field.id] ?? "", kind: field.fieldType)
+                } + [String(instanceID)]
             )
             try db.execute(
                 sql: """
@@ -4073,7 +4089,21 @@ struct AppDatabase {
         }
     }
 
-    func addField(toTypeID typeID: Int64, name: String) throws -> TypeField {
+    // Canonical on-disk value for a field. Text fields store their value verbatim;
+    // boolean fields are stored as the strings "0"/"1", so any truthy input
+    // ("1"/"true", case-insensitive) becomes "1" and everything else "0". This is
+    // the single chokepoint for both the editor and MCP writes.
+    static func normalizedFieldValue(_ value: String, kind: FieldKind) -> String {
+        switch kind {
+        case .text:
+            return value
+        case .boolean:
+            let v = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return (v == "1" || v == "true") ? "1" : "0"
+        }
+    }
+
+    func addField(toTypeID typeID: Int64, name: String, fieldType: FieldKind = .text) throws -> TypeField {
         try dbQueue.write { db in
             let nextFieldIndex = (try Int.fetchOne(
                 db,
@@ -4087,17 +4117,21 @@ struct AppDatabase {
 
             try db.execute(
                 sql: """
-                    INSERT INTO field (type_id, name, field_index, field_display_index)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO field (type_id, name, field_index, field_display_index, field_type)
+                    VALUES (?, ?, ?, ?, ?)
                     """,
-                arguments: [typeID, name, nextFieldIndex, nextFieldIndex]
+                arguments: [typeID, name, nextFieldIndex, nextFieldIndex, fieldType.rawValue]
             )
             let fieldID = db.lastInsertedRowID
 
+            // Boolean fields are stored as the text "0"/"1" so the rest of the
+            // value pipeline (read/write/search) treats them like any text column;
+            // NOT NULL DEFAULT '0' backfills false into existing rows.
+            let columnDefinition = fieldType == .boolean ? "TEXT NOT NULL DEFAULT '0'" : "TEXT DEFAULT ''"
             try db.execute(
                 sql: """
                     ALTER TABLE "type\(typeID)"
-                    ADD COLUMN "field\(nextFieldIndex)" TEXT DEFAULT ''
+                    ADD COLUMN "field\(nextFieldIndex)" \(columnDefinition)
                     """
             )
 
@@ -4106,7 +4140,8 @@ struct AppDatabase {
                 typeID: typeID,
                 name: name,
                 fieldIndex: nextFieldIndex,
-                fieldDisplayIndex: nextFieldIndex
+                fieldDisplayIndex: nextFieldIndex,
+                fieldType: fieldType
             )
         }
     }
@@ -4122,7 +4157,8 @@ struct AppDatabase {
                         name,
                         field_index AS fieldIndex,
                         field_display_index AS fieldDisplayIndex,
-                        COALESCE(is_primary, 0) AS isPrimary
+                        COALESCE(is_primary, 0) AS isPrimary,
+                        field_type AS fieldType
                     FROM field
                     WHERE id = ? AND type_id = ?
                     """,
@@ -4134,13 +4170,18 @@ struct AppDatabase {
             if field.isPrimary {
                 throw DatabaseError(message: "Cannot delete the primary field. Mark another text field as primary first.")
             }
-            let textFieldCount = try Int.fetchOne(
-                db,
-                sql: "SELECT COUNT(*) FROM field WHERE type_id = ?",
-                arguments: [typeID]
-            ) ?? 0
-            if textFieldCount <= 1 {
-                throw DatabaseError(message: "A type must have at least one text field.")
+            // Only text fields count toward the minimum: every type must keep at
+            // least one text field (it supplies the instance display value).
+            // Boolean fields can always be deleted.
+            if field.fieldType == .text {
+                let textFieldCount = try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM field WHERE type_id = ? AND field_type = 'text'",
+                    arguments: [typeID]
+                ) ?? 0
+                if textFieldCount <= 1 {
+                    throw DatabaseError(message: "A type must have at least one text field.")
+                }
             }
 
             try db.execute(
@@ -4198,6 +4239,16 @@ struct AppDatabase {
     // controls the (separately re-orderable) display order.
     func setPrimaryField(fieldID: Int64, forTypeID typeID: Int64) throws {
         try dbQueue.write { db in
+            // The primary field supplies node display chips/summaries, so it must
+            // be a text field — a boolean primary would render as "0"/"1".
+            let fieldTypeRaw = try String.fetchOne(
+                db,
+                sql: "SELECT field_type FROM field WHERE id = ? AND type_id = ?",
+                arguments: [fieldID, typeID]
+            )
+            if fieldTypeRaw == FieldKind.boolean.rawValue {
+                throw DatabaseError(message: "A boolean field cannot be the primary field.")
+            }
             try db.execute(
                 sql: "UPDATE field SET is_primary = 0 WHERE type_id = ?",
                 arguments: [typeID]
@@ -4364,9 +4415,10 @@ struct AppDatabase {
                     name,
                     field_index AS fieldIndex,
                     field_display_index AS fieldDisplayIndex,
-                    COALESCE(is_primary, 0) AS isPrimary
+                    COALESCE(is_primary, 0) AS isPrimary,
+                    field_type AS fieldType
                 FROM field
-                WHERE type_id = ?
+                WHERE type_id = ? AND field_type = 'text'
                 ORDER BY field_display_index, id
                 """,
             arguments: [typeID]
@@ -4980,7 +5032,8 @@ struct AppDatabase {
                     type_id AS typeID,
                     name,
                     field_index AS fieldIndex,
-                    field_display_index AS fieldDisplayIndex
+                    field_display_index AS fieldDisplayIndex,
+                    field_type AS fieldType
                 FROM field
                 WHERE type_id = ?
                 ORDER BY field_index, id
@@ -5004,6 +5057,7 @@ struct AppDatabase {
         let fieldValuesByName = Dictionary(uniqueKeysWithValues: fields.map { field in
             (field.name, row["field\(field.fieldIndex)"] as String? ?? "")
         })
+        let booleanFieldNames = Set(fields.filter { $0.fieldType == .boolean }.map(\.name))
 
         // For Node link queries the answer is computed from the instance's links
         // in that field, then wrapped exactly like a standard answer so the global
@@ -5034,6 +5088,7 @@ struct AppDatabase {
             answerHTML: answerHTML,
             typeCSS: queryRow.typeCSS,
             fieldValuesByName: fieldValuesByName,
+            booleanFieldNames: booleanFieldNames,
             linkFieldID: queryRow.linkFieldID
         )
     }

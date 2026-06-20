@@ -29,7 +29,8 @@ extension AppDatabase {
                     name TEXT,
                     field_index INTEGER,
                     field_display_index INTEGER,
-                    is_primary INTEGER NOT NULL DEFAULT 0
+                    is_primary INTEGER NOT NULL DEFAULT 0,
+                    field_type TEXT NOT NULL DEFAULT 'text'
                 ) STRICT
                 """)
 
@@ -60,6 +61,7 @@ extension AppDatabase {
 
             try migrateNodeTypeColumns(db: db)
             try migrateTypeDescriptionColumn(db: db)
+            try migrateFieldTypeColumn(db: db)
 
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS globals (
@@ -606,6 +608,17 @@ extension AppDatabase {
         let names = Set(info.compactMap { $0["name"] as String? })
         if !names.contains("description") {
             try db.execute(sql: "ALTER TABLE \"type\" ADD COLUMN description TEXT")
+        }
+    }
+
+    // Adds the field.field_type column (text/boolean) to databases created before
+    // Boolean fields existed. Idempotent. Existing fields default to 'text', i.e.
+    // ordinary free-text fields, unchanged.
+    private static func migrateFieldTypeColumn(db: Database) throws {
+        let info = try Row.fetchAll(db, sql: "PRAGMA table_info(field)")
+        let names = Set(info.compactMap { $0["name"] as String? })
+        if !names.contains("field_type") {
+            try db.execute(sql: "ALTER TABLE field ADD COLUMN field_type TEXT NOT NULL DEFAULT 'text'")
         }
     }
 

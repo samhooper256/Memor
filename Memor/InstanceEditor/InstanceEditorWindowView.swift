@@ -1512,33 +1512,47 @@ struct InstanceEditorWindowView: View {
     private var fieldEditors: some View {
         VStack(alignment: .leading, spacing: 12) {
             SwiftUI.ForEach(draft.fields) { field in
-                InstanceFieldEditor(
-                    fieldName: field.name,
-                    text: binding(for: field.id),
-                    focusController: focusController,
-                    fieldID: field.id,
-                    isSticky: draft.stickyFieldIDs.contains(field.id),
-                    showStickyToggle: mode == .add,
-                    onToggleSticky: {
-                        if let selectedTypeID = draft.selectedTypeID {
-                            toggleSticky(typeID: selectedTypeID, fieldID: field.id)
+                if field.fieldType == .boolean {
+                    InstanceBooleanFieldEditor(
+                        fieldName: field.name,
+                        value: binding(for: field.id),
+                        isSticky: draft.stickyFieldIDs.contains(field.id),
+                        showStickyToggle: mode == .add,
+                        onToggleSticky: {
+                            if let selectedTypeID = draft.selectedTypeID {
+                                toggleSticky(typeID: selectedTypeID, fieldID: field.id)
+                            }
                         }
-                    },
-                    onSubmit: submitInstance,
-                    onRequestHyperlink: { textView in
-                        hyperlinkSearchController.present(
-                            appDatabase: appDatabase,
-                            from: textView
-                        )
-                    },
-                    onMoveToNextField: {
-                        focusNextField(after: field.id)
-                    },
-                    onMoveToPreviousField: {
-                        focusPreviousField(before: field.id)
-                    },
-                    dedupesTrailingLineBreak: mode == .edit
-                )
+                    )
+                } else {
+                    InstanceFieldEditor(
+                        fieldName: field.name,
+                        text: binding(for: field.id),
+                        focusController: focusController,
+                        fieldID: field.id,
+                        isSticky: draft.stickyFieldIDs.contains(field.id),
+                        showStickyToggle: mode == .add,
+                        onToggleSticky: {
+                            if let selectedTypeID = draft.selectedTypeID {
+                                toggleSticky(typeID: selectedTypeID, fieldID: field.id)
+                            }
+                        },
+                        onSubmit: submitInstance,
+                        onRequestHyperlink: { textView in
+                            hyperlinkSearchController.present(
+                                appDatabase: appDatabase,
+                                from: textView
+                            )
+                        },
+                        onMoveToNextField: {
+                            focusNextField(after: field.id)
+                        },
+                        onMoveToPreviousField: {
+                            focusPreviousField(before: field.id)
+                        },
+                        dedupesTrailingLineBreak: mode == .edit
+                    )
+                }
             }
         }
     }
@@ -1787,8 +1801,8 @@ struct InstanceEditorWindowView: View {
             draft.loadedInstanceID = nil
             draft.selectedTypeID = editorData.typeID
             loadCollectionItems()
-            focusController.reset(with: draft.fields.map(\.id))
-            focusController.focusField(draft.fields.first?.id)
+            focusController.reset(with: navigableFieldIDs)
+            focusController.focusField(navigableFieldIDs.first)
         } catch {
             print("Failed to load instance for duplication: \(error)")
             await applyRequestedTypeSelection()
@@ -1879,8 +1893,8 @@ struct InstanceEditorWindowView: View {
             )
             draft.loadedTypeID = typeID
             draft.loadedInstanceID = nil
-            focusController.reset(with: draft.fields.map(\.id))
-            focusController.focusField(draft.fields.first?.id)
+            focusController.reset(with: navigableFieldIDs)
+            focusController.focusField(navigableFieldIDs.first)
             loadCollectionItems()
 
             // When the type was just chosen via the ⌘T picker, re-issue focus for
@@ -1889,7 +1903,7 @@ struct InstanceEditorWindowView: View {
             // otherwise win the race against the focus requested just above.
             if shouldFocusFirstFieldAfterTypePick {
                 shouldFocusFirstFieldAfterTypePick = false
-                if isObjectTypeSelected, let firstFieldID = draft.fields.first?.id {
+                if isObjectTypeSelected, let firstFieldID = navigableFieldIDs.first {
                     DispatchQueue.main.async {
                         focusController.focusField(firstFieldID)
                     }
@@ -1994,8 +2008,8 @@ struct InstanceEditorWindowView: View {
             collectionSearchQuery = ""
             draft.maxIntervalText = editorData.maxInterval.map(String.init) ?? ""
             loadCollectionItems()
-            focusController.reset(with: draft.fields.map(\.id))
-            focusController.focusField(draft.fields.first?.id)
+            focusController.reset(with: navigableFieldIDs)
+            focusController.focusField(navigableFieldIDs.first)
         } catch {
             print("Failed to load instance editor data: \(error)")
             draft.fields = []
@@ -2427,42 +2441,40 @@ struct InstanceEditorWindowView: View {
         }
     }
 
+    // Tab navigation only visits text fields — boolean fields are checkboxes, not
+    // NSTextViews, so they aren't part of the focus chain.
+    private var navigableFieldIDs: [Int64] {
+        draft.fields.filter { $0.fieldType == .text }.map(\.id)
+    }
+
     private func focusNextField(after fieldID: Int64?) {
-        guard !draft.fields.isEmpty else { return }
+        let ids = navigableFieldIDs
+        guard !ids.isEmpty else { return }
 
-        if fieldID == nil {
-            focusController.focusField(draft.fields.first?.id)
+        guard let fieldID, let currentIndex = ids.firstIndex(of: fieldID) else {
+            focusController.focusField(ids.first)
             return
         }
 
-        guard let currentIndex = draft.fields.firstIndex(where: { $0.id == fieldID }) else {
-            focusController.focusField(draft.fields.first?.id)
-            return
-        }
-
-        let nextIndex = draft.fields.index(after: currentIndex)
-        if nextIndex < draft.fields.endIndex {
-            focusController.focusField(draft.fields[nextIndex].id)
+        let nextIndex = ids.index(after: currentIndex)
+        if nextIndex < ids.endIndex {
+            focusController.focusField(ids[nextIndex])
         } else {
             focusController.focusCollectionSearch()
         }
     }
 
     private func focusPreviousField(before fieldID: Int64?) {
-        guard !draft.fields.isEmpty else { return }
+        let ids = navigableFieldIDs
+        guard !ids.isEmpty else { return }
 
-        if fieldID == nil {
-            focusController.focusField(draft.fields.last?.id)
+        guard let fieldID, let currentIndex = ids.firstIndex(of: fieldID) else {
+            focusController.focusField(ids.last)
             return
         }
 
-        guard let currentIndex = draft.fields.firstIndex(where: { $0.id == fieldID }) else {
-            focusController.focusField(draft.fields.last?.id)
-            return
-        }
-
-        if currentIndex > draft.fields.startIndex {
-            focusController.focusField(draft.fields[draft.fields.index(before: currentIndex)].id)
+        if currentIndex > ids.startIndex {
+            focusController.focusField(ids[ids.index(before: currentIndex)])
         } else {
             focusController.focusCollectionSearch()
         }

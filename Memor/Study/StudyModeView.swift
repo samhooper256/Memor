@@ -542,7 +542,8 @@ struct StudyModeView: View {
                 questionHTML: refreshed.questionHTML,
                 answerHTML: refreshed.answerHTML,
                 typeCSS: refreshed.typeCSS,
-                fieldValuesByName: refreshed.fieldValuesByName
+                fieldValuesByName: refreshed.fieldValuesByName,
+                booleanFieldNames: refreshed.booleanFieldNames
             )
             self.currentQuery = updated
             renderedQuestionHTML = try buildRenderedQuestionHTML(appDatabase: appDatabase, query: updated)
@@ -710,6 +711,7 @@ struct StudyModeView: View {
                     answerHTML: refreshed.answerHTML,
                     typeCSS: refreshed.typeCSS,
                     fieldValuesByName: refreshed.fieldValuesByName,
+                    booleanFieldNames: refreshed.booleanFieldNames,
                     kind: refreshed.kind,
                     pointMapPayload: pointMapPayload,
                     boundaryMapPayload: boundaryMapPayload,
@@ -863,6 +865,7 @@ struct StudyModeView: View {
                 answerHTML: query.answerHTML,
                 typeCSS: query.typeCSS,
                 fieldValuesByName: query.fieldValuesByName,
+                booleanFieldNames: query.booleanFieldNames,
                 kind: query.kind,
                 pointMapPayload: query.pointMapPayload,
                 boundaryMapPayload: query.boundaryMapPayload,

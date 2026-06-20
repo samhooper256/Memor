@@ -124,6 +124,14 @@ struct BoundaryMapInstanceWithBoundaries: Hashable {
     let attachments: [BoundaryMapAttachedBoundary]
 }
 
+// The kind of a field on an Object/Node type. `text` is a free-text field;
+// `boolean` is a checkbox stored as the text "0"/"1" in the type{N} table.
+// A field's kind is fixed at creation time and cannot be changed afterward.
+enum FieldKind: String, Codable, Hashable {
+    case text
+    case boolean
+}
+
 struct TypeField: Identifiable, FetchableRecord, Decodable {
     let id: Int64
     let typeID: Int64
@@ -131,19 +139,30 @@ struct TypeField: Identifiable, FetchableRecord, Decodable {
     let fieldIndex: Int
     let fieldDisplayIndex: Int
     let isPrimary: Bool
+    let fieldType: FieldKind
 
-    init(id: Int64, typeID: Int64, name: String, fieldIndex: Int, fieldDisplayIndex: Int, isPrimary: Bool = false) {
+    init(
+        id: Int64,
+        typeID: Int64,
+        name: String,
+        fieldIndex: Int,
+        fieldDisplayIndex: Int,
+        isPrimary: Bool = false,
+        fieldType: FieldKind = .text
+    ) {
         self.id = id
         self.typeID = typeID
         self.name = name
         self.fieldIndex = fieldIndex
         self.fieldDisplayIndex = fieldDisplayIndex
         self.isPrimary = isPrimary
+        self.fieldType = fieldType
     }
 
-    // Lenient: SELECTs that don't project isPrimary default it to false.
+    // Lenient: SELECTs that don't project isPrimary / fieldType default them to
+    // false / .text respectively.
     enum CodingKeys: String, CodingKey {
-        case id, typeID, name, fieldIndex, fieldDisplayIndex, isPrimary
+        case id, typeID, name, fieldIndex, fieldDisplayIndex, isPrimary, fieldType
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -153,6 +172,7 @@ struct TypeField: Identifiable, FetchableRecord, Decodable {
         fieldIndex = try c.decode(Int.self, forKey: .fieldIndex)
         fieldDisplayIndex = try c.decode(Int.self, forKey: .fieldDisplayIndex)
         isPrimary = (try? c.decodeIfPresent(Bool.self, forKey: .isPrimary)) ?? false
+        fieldType = (try? c.decodeIfPresent(FieldKind.self, forKey: .fieldType)) ?? .text
     }
 }
 
@@ -474,6 +494,9 @@ struct StudyQuery: Identifiable, Hashable {
     let answerHTML: String
     let typeCSS: String
     let fieldValuesByName: [String: String]
+    // Names of the instance's boolean fields, so the template renderer can map
+    // {{Name}} → "true"/"false" and {{Name:bit}} → "1"/"0". Empty for map queries.
+    var booleanFieldNames: Set<String> = []
     var kind: StudyQueryKind = .standard
     var pointMapPayload: PointMapStudyPayload? = nil
     var boundaryMapPayload: BoundaryMapStudyPayload? = nil
@@ -501,6 +524,7 @@ struct StudyQuery: Identifiable, Hashable {
             answerHTML: answerHTML,
             typeCSS: typeCSS,
             fieldValuesByName: newFieldValuesByName,
+            booleanFieldNames: booleanFieldNames,
             kind: kind,
             pointMapPayload: pointMapPayload,
             boundaryMapPayload: boundaryMapPayload,
