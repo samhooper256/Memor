@@ -38,6 +38,10 @@ struct TypeDetailPageView: View {
     @State private var errorMessage: String?
     @State private var previewHTML = ""
     @State private var previewErrorMessage: String?
+    // The preview hosts a WKWebView, whose synchronous creation (~hundreds of ms
+    // the first time) would otherwise block the navigation into this page. Mount
+    // it one runloop after the page's first paint so the transition feels instant.
+    @State private var isPreviewMounted = false
     @State private var isAddFieldPopoverPresented = false
     @State private var newFieldName = ""
     @State private var newFieldType: FieldKind = .text
@@ -304,6 +308,9 @@ struct TypeDetailPageView: View {
         .onExitCommand(perform: onBack)
         .task {
             await loadTypeDetails()
+            // First paint (page chrome + editors) is done; now bring in the
+            // WebView-backed preview without having blocked the navigation.
+            isPreviewMounted = true
         }
         .task(id: shouldAutoPresentRenamePopover) {
             guard shouldAutoPresentRenamePopover, !hasAutoPresentedRenamePopover else { return }
@@ -513,12 +520,18 @@ struct TypeDetailPageView: View {
                         }
 
                         queryTypeEditorsCard
-                        
-                        PreviewCanvasSection(
-                            html: previewHTML,
-                            errorMessage: previewErrorMessage
-                        )
-                        .frame(maxWidth: .infinity)
+
+                        if isPreviewMounted {
+                            PreviewCanvasSection(
+                                html: previewHTML,
+                                errorMessage: previewErrorMessage
+                            )
+                            .frame(maxWidth: .infinity)
+                        } else {
+                            // Reserve the preview's footprint so layout doesn't jump
+                            // when the WebView mounts a beat later.
+                            Color.clear.frame(maxWidth: .infinity, minHeight: 500)
+                        }
         }
     }
 
