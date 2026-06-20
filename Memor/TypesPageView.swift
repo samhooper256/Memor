@@ -20,6 +20,7 @@ struct TypesPageView: View {
     @State private var selectedType: FlashcardType?
     @State private var autoRenameTypeID: Int64?
     @State private var types: [FlashcardType] = []
+    @State private var highlightedTypeID: Int64?
     @State private var searchText = ""
     @State private var errorMessage: String?
     @State private var typePendingDeletion: FlashcardType?
@@ -35,6 +36,20 @@ struct TypesPageView: View {
         let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return types }
         return types.filter { $0.name.localizedCaseInsensitiveContains(trimmed) }
+    }
+
+    // The keyboard-selected ("currently selected") type on the list page.
+    private var highlightedType: FlashcardType? {
+        filteredTypes.first { $0.id == highlightedTypeID }
+    }
+
+    // Moves the keyboard selection up (-1) or down (+1) through filteredTypes,
+    // clamped at both ends (no wraparound).
+    private func moveHighlight(by delta: Int) {
+        guard !filteredTypes.isEmpty else { return }
+        let current = filteredTypes.firstIndex { $0.id == highlightedTypeID } ?? 0
+        let next = min(max(current + delta, 0), filteredTypes.count - 1)
+        highlightedTypeID = filteredTypes[next].id
     }
 
     var body: some View {
@@ -61,6 +76,16 @@ struct TypesPageView: View {
                 navigationState.requestedTypeDetailID = nil
                 selectedType = type
             }
+            // When the list page is shown (tab switch or back-from-detail):
+            // select the first type and focus the search box.
+            if selectedType == nil {
+                highlightedTypeID = filteredTypes.first?.id
+                isSearchFocused = true
+            }
+        }
+        .onChange(of: searchText) { _, _ in
+            // Keep the selection on the top match as filtering changes.
+            highlightedTypeID = filteredTypes.first?.id
         }
         .onChange(of: navigationState.resetToHomeNonce) { _, _ in
             selectedType = nil
@@ -105,6 +130,7 @@ struct TypesPageView: View {
     }
 
     private var typesListPage: some View {
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 Text(AppTab.types.title)
@@ -150,6 +176,7 @@ struct TypesPageView: View {
                         ForEach(filteredTypes) { type in
                             TypeRowView(
                                 type: type,
+                                isHighlighted: type.id == highlightedTypeID,
                                 onOpen: {
                                     selectedType = type
                                 },
@@ -157,6 +184,7 @@ struct TypesPageView: View {
                                     typePendingDeletion = type
                                 }
                             )
+                            .id(type.id)
                         }
                     }
                 }
@@ -164,10 +192,27 @@ struct TypesPageView: View {
             .padding(24)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
+        .onChange(of: highlightedTypeID) { _, id in
+            guard let id else { return }
+            withAnimation { proxy.scrollTo(id, anchor: .center) }
+        }
         .background {
             FindShortcutKeyHandler(shortcutSettings: shortcutSettings) {
                 isSearchFocused = true
             }
+        }
+        .background {
+            TypesListKeyNavigationHandler(
+                isEnabled: !isAddTypePopoverPresented && typePendingDeletion == nil,
+                onMoveUp: { moveHighlight(by: -1) },
+                onMoveDown: { moveHighlight(by: 1) },
+                onOpen: {
+                    if let type = highlightedType, !type.isBuiltin {
+                        selectedType = type
+                    }
+                }
+            )
+        }
         }
     }
 
@@ -280,6 +325,7 @@ extension FlashcardType {
 
 private struct TypeRowView: View {
     let type: FlashcardType
+    let isHighlighted: Bool
     let onOpen: () -> Void
     let onDelete: () -> Void
 
@@ -327,7 +373,10 @@ private struct TypeRowView: View {
         .overlay {
             ZStack(alignment: .topTrailing) {
                 RoundedRectangle(cornerRadius: 14)
-                    .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
+                    .stroke(
+                        isHighlighted ? Color.blue : Color.secondary.opacity(0.15),
+                        lineWidth: isHighlighted ? 2 : 1
+                    )
 
                 if isHovered && !type.isBuiltin {
                     Button(action: onDelete) {
