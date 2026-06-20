@@ -97,6 +97,7 @@ struct MemorApp: App {
                 .environmentObject(searchWindowState)
                 .environmentObject(editInstanceWindowState)
                 .environmentObject(addInstanceWindowState)
+                .environmentObject(queryPreviewWindowState)
                 .environmentObject(stacksPageState)
                 .environmentObject(quickStudyState)
                 .environmentObject(shortcutSettings)

@@ -92,6 +92,7 @@ struct SearchWindowView: View {
     @EnvironmentObject private var windowState: SearchWindowState
     @EnvironmentObject private var editInstanceWindowState: EditInstanceWindowState
     @EnvironmentObject private var addInstanceWindowState: AddInstanceWindowState
+    @EnvironmentObject private var queryPreviewWindowState: QueryPreviewWindowState
     @EnvironmentObject private var stacksPageState: StacksPageState
     @EnvironmentObject private var quickStudyState: QuickStudyState
     @EnvironmentObject private var shortcutSettings: ShortcutSettings
@@ -484,6 +485,13 @@ struct SearchWindowView: View {
                let queryID = items.first,
                let instanceIDPart = queryID.split(separator: ":").first,
                let instanceID = Int64(instanceIDPart) {
+                let idParts = queryID.split(separator: ":")
+                if idParts.count >= 2, let queryTypeID = Int64(idParts[1]) {
+                    Button("Preview") {
+                        queryPreviewWindowState.requestOpen(instanceID: instanceID, queryTypeID: queryTypeID)
+                        openWindow(id: "query-preview")
+                    }
+                }
                 Button("Edit Instance") {
                     editInstanceWindowState.requestOpen(instanceID: instanceID)
                     openWindow(id: "edit-instance")
