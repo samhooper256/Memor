@@ -261,9 +261,9 @@ struct InstanceFieldEditor: View {
     }
 }
 
-// Editor cell for a boolean field. Mirrors InstanceFieldEditor's header chrome
-// (name label + optional sticky toggle) but the body is a single checkbox instead
-// of a text view. The value is stored as the string "0"/"1" in the draft.
+// Editor cell for a boolean field: a plain checkbox labeled with the field name —
+// no bordered container, unlike text fields. The value is stored as the string
+// "0"/"1" in the draft. In Add mode the sticky pin sits inline after the checkbox.
 struct InstanceBooleanFieldEditor: View {
     let fieldName: String
     @Binding var value: String
@@ -280,56 +280,35 @@ struct InstanceBooleanFieldEditor: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 0) {
-                Text(fieldName)
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
-
-                Spacer(minLength: 0)
-
-                if showStickyToggle {
-                    Button(action: onToggleSticky) {
-                        Image(systemName: "pin.fill")
-                            .font(.system(size: 10))
-                            .foregroundStyle(isSticky ? .blue : Color.secondary.opacity(0.4))
-                            .rotationEffect(.degrees(45))
-                            .frame(width: 20, height: 20)
-                            .background(
-                                RoundedRectangle(cornerRadius: 4)
-                                    .fill(isStickyHovered ? Color.secondary.opacity(0.15) : Color.clear)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .onHover { hovering in
-                        isStickyHovered = hovering
-                    }
-                    .help(isSticky ? "Unstick field (⌘S)" : "Stick field (⌘S)")
-                    .padding(.trailing, 8)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            Divider()
-
+        HStack(spacing: 8) {
             Toggle(isOn: isOn) {
-                Text(isOn.wrappedValue ? "True" : "False")
+                Text(fieldName)
                     .font(.callout)
             }
             .toggleStyle(.checkbox)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if showStickyToggle {
+                Button(action: onToggleSticky) {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(isSticky ? .blue : Color.secondary.opacity(0.4))
+                        .rotationEffect(.degrees(45))
+                        .frame(width: 20, height: 20)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(isStickyHovered ? Color.secondary.opacity(0.15) : Color.clear)
+                        )
+                }
+                .buttonStyle(.plain)
+                .onHover { hovering in
+                    isStickyHovered = hovering
+                }
+                .help(isSticky ? "Unstick field (⌘S)" : "Stick field (⌘S)")
+            }
+
+            Spacer(minLength: 0)
         }
-        .background(Color(NSColor.controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .overlay {
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
-        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
