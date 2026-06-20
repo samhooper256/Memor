@@ -126,7 +126,16 @@ final class LocalImageURLSchemeHandler: NSObject, WKURLSchemeHandler {
         }
 
         do {
-            let data = try Data(contentsOf: fileURL)
+            // Re-assert the security scope around the read via AppDatabase rather than reading
+            // directly: the scopes started at launch can lapse after sleep/idle, which would
+            // otherwise break rendering of already-inserted images. Falls back to a direct read
+            // when no AppDatabase is available (e.g. draft previews) or the file needs no scope.
+            let data: Data
+            if let appDatabase = AppDatabase.shared {
+                data = try appDatabase.readSecurityScopedFile(at: fileURL)
+            } else {
+                data = try Data(contentsOf: fileURL)
+            }
             let mimeType = UTType(filenameExtension: fileURL.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
             let response = URLResponse(
                 url: requestURL,

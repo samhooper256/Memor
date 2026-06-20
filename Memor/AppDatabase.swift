@@ -236,6 +236,25 @@ struct AppDatabase {
             previousURL?.stopAccessingSecurityScopedResource()
         }
 
+        /// A retained scoped URL whose standardized path equals `targetPath`, or whose
+        /// directory is an ancestor of it (i.e. a granted folder containing the file).
+        /// Used to re-assert access immediately before reading a local image.
+        func scopedURL(coveringPath targetPath: String) -> URL? {
+            lock.lock()
+            defer { lock.unlock() }
+
+            if let exact = activeFolderURLsByPath[targetPath] {
+                return exact
+            }
+            for (path, url) in activeFolderURLsByPath {
+                let prefix = path.hasSuffix("/") ? path : path + "/"
+                if targetPath.hasPrefix(prefix) {
+                    return url
+                }
+            }
+            return nil
+        }
+
         private static func standardizedPath(for url: URL) -> String {
             url.standardizedFileURL.resolvingSymlinksInPath().path(percentEncoded: false)
         }
@@ -246,6 +265,14 @@ struct AppDatabase {
     private let globalQueryCSSCache = GlobalQueryHTMLCache()
     private let imageFolderAccessController = ImageFolderAccessController()
     private let grantedFolderAccessController = ImageFolderAccessController()
+
+    /// Process-wide reference used by `LocalImageURLSchemeHandler` to re-assert security scopes
+    /// around local-image reads. There is exactly one `AppDatabase` per process; the scheme
+    /// handler is created in several views with no `AppDatabase` of their own, so a shared
+    /// reference avoids threading it through every `QueryHTMLView` call site. `AppDatabase` is a
+    /// struct whose state lives in shared reference-type members (`dbQueue`, the access
+    /// controllers), so this stored copy drives the same underlying objects.
+    static var shared: AppDatabase?
 
     init(fileManager: FileManager = .default) throws {
         let databaseURL = try Self.makeDatabaseURL(fileManager: fileManager)
@@ -272,6 +299,8 @@ struct AppDatabase {
         // under the active parent scope.
         try restoreImageFolderAccess()
         try restoreImageFileAccess()
+
+        Self.shared = self
     }
 
     private static func makeDatabaseURL(fileManager: FileManager) throws -> URL {
@@ -559,13 +588,22 @@ struct AppDatabase {
     }
 
     func grantImageFileAccess(fileURL: URL) throws {
-        let standardizedFileURL = fileURL.standardizedFileURL.resolvingSymlinksInPath()
-        let bookmarkData = try standardizedFileURL.bookmarkData(
+        // Create the bookmark from the ORIGINAL URL handed to us (e.g. from NSOpenPanel).
+        // Deriving a new URL via standardizedFileURL drops the panel's implicit security-scope
+        // grant, which made bookmark creation silently depend on a long-lived folder scope that
+        // can lapse after sleep/idle (producing "Failed to retrieve app-scope key"). Access the
+        // original URL across creation instead. A false return is expected for panel URLs whose
+        // grant is already implicitly active, so it is not fatal.
+        let didStartAccess = fileURL.startAccessingSecurityScopedResource()
+        defer { if didStartAccess { fileURL.stopAccessingSecurityScopedResource() } }
+
+        let bookmarkData = try fileURL.bookmarkData(
             options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess],
             includingResourceValuesForKeys: nil,
             relativeTo: nil
         )
-        let standardizedPath = standardizedFileURL.path(percentEncoded: false)
+        let standardizedPath = fileURL.standardizedFileURL.resolvingSymlinksInPath()
+            .path(percentEncoded: false)
 
         try dbQueue.write { db in
             try db.execute(
@@ -593,14 +631,122 @@ struct AppDatabase {
         imageFolderAccessController.replaceAccess(forPath: standardizedPath, with: resolvedURL)
     }
 
-    func grantImageFolderAccess(folderURL: URL) throws -> ImageFolderAccess {
-        let standardizedFolderURL = folderURL.standardizedFileURL.resolvingSymlinksInPath()
-        let bookmarkData = try standardizedFolderURL.bookmarkData(
+    /// Reads a local image file, re-asserting the security scope around the read instead of
+    /// relying on a scope started long ago at launch (which can lapse after sleep/idle and break
+    /// rendering of already-inserted images). Tries the retained per-file / granted-folder scope
+    /// first; on a permission failure it re-resolves the stored bookmark (refreshing it if stale)
+    /// and retries once.
+    func readSecurityScopedFile(at fileURL: URL) throws -> Data {
+        let targetPath = fileURL.standardizedFileURL.resolvingSymlinksInPath()
+            .path(percentEncoded: false)
+
+        // 1. Re-assert a retained scope (per-file, else containing granted folder) for the read.
+        if let scopedURL = imageFolderAccessController.scopedURL(coveringPath: targetPath)
+            ?? grantedFolderAccessController.scopedURL(coveringPath: targetPath) {
+            let didStart = scopedURL.startAccessingSecurityScopedResource()
+            defer { if didStart { scopedURL.stopAccessingSecurityScopedResource() } }
+            if let data = try? Data(contentsOf: fileURL) {
+                return data
+            }
+        }
+
+        // 2. Re-resolve the stored bookmark (per-file row, else any covering folder row), refresh
+        //    it if stale, and retry the read under the freshly-resolved scope.
+        if let data = try? readByReResolvingBookmark(targetPath: targetPath) {
+            return data
+        }
+
+        // 3. Last resort: read directly (covers draft previews and files needing no scope).
+        return try Data(contentsOf: fileURL)
+    }
+
+    private func readByReResolvingBookmark(targetPath: String) throws -> Data? {
+        struct BookmarkRow: FetchableRecord, Decodable {
+            let id: Int64
+            let path: String
+            let bookmarkData: Data
+        }
+
+        // Per-file bookmark whose path matches exactly, then any folder bookmark that contains it.
+        let fileRow = try dbQueue.read { db in
+            try BookmarkRow.fetchOne(
+                db,
+                sql: "SELECT id, path, bookmark_data AS bookmarkData FROM image_file WHERE path = ?",
+                arguments: [targetPath]
+            )
+        }
+        let folderRows = try dbQueue.read { db in
+            try BookmarkRow.fetchAll(
+                db,
+                sql: "SELECT id, path, bookmark_data AS bookmarkData FROM image_folder ORDER BY id"
+            )
+        }
+
+        var candidates: [(table: String, row: BookmarkRow)] = []
+        if let fileRow {
+            candidates.append(("image_file", fileRow))
+        }
+        for row in folderRows {
+            let prefix = row.path.hasSuffix("/") ? row.path : row.path + "/"
+            if targetPath == row.path || targetPath.hasPrefix(prefix) {
+                candidates.append(("image_folder", row))
+            }
+        }
+
+        for candidate in candidates {
+            do {
+                var isStale = false
+                let resolvedURL = try URL(
+                    resolvingBookmarkData: candidate.row.bookmarkData,
+                    options: [.withSecurityScope],
+                    relativeTo: nil,
+                    bookmarkDataIsStale: &isStale
+                )
+                let didStart = resolvedURL.startAccessingSecurityScopedResource()
+                defer { if didStart { resolvedURL.stopAccessingSecurityScopedResource() } }
+
+                let fileURL = URL(fileURLWithPath: targetPath)
+                let data = try Data(contentsOf: fileURL)
+
+                if isStale {
+                    try? refreshStaleBookmark(table: candidate.table, id: candidate.row.id, url: resolvedURL)
+                }
+                return data
+            } catch {
+                continue
+            }
+        }
+        return nil
+    }
+
+    private func refreshStaleBookmark(table: String, id: Int64, url: URL) throws {
+        let updatedBookmarkData = try url.bookmarkData(
             options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess],
             includingResourceValuesForKeys: nil,
             relativeTo: nil
         )
-        let standardizedPath = standardizedFolderURL.path(percentEncoded: false)
+        let updatedPath = url.standardizedFileURL.resolvingSymlinksInPath().path(percentEncoded: false)
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE \(table) SET path = ?, bookmark_data = ? WHERE id = ?",
+                arguments: [updatedPath, updatedBookmarkData, id]
+            )
+        }
+    }
+
+    func grantImageFolderAccess(folderURL: URL) throws -> ImageFolderAccess {
+        // Same reasoning as grantImageFileAccess: create the bookmark from the ORIGINAL panel URL
+        // (which carries the fresh grant) rather than a derived/standardized URL that drops it.
+        let didStartAccess = folderURL.startAccessingSecurityScopedResource()
+        defer { if didStartAccess { folderURL.stopAccessingSecurityScopedResource() } }
+
+        let bookmarkData = try folderURL.bookmarkData(
+            options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess],
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        )
+        let standardizedPath = folderURL.standardizedFileURL.resolvingSymlinksInPath()
+            .path(percentEncoded: false)
 
         let insertedID: Int64 = try dbQueue.write { db in
             try db.execute(
