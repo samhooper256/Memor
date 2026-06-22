@@ -150,10 +150,19 @@ struct TableSizePickerView: View {
             .padding(.horizontal, 12)
             .padding(.top, 12)
 
-            grid
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.horizontal, 12)
-                .padding(.bottom, 12)
+            VStack(spacing: 6) {
+                grid
+
+                // Show the hovered table size (e.g. "3x4") centered under the grid.
+                // An empty string reserves the row height so the grid doesn't shift.
+                Text(hoverSizeText)
+                    .font(.caption)
+                    .foregroundStyle(.gray)
+                    .frame(height: 14)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 12)
         }
         .background {
             RoundedRectangle(cornerRadius: 8)
@@ -192,6 +201,11 @@ struct TableSizePickerView: View {
                 }
             }
             .onSubmit { state.insertFromTextFields() }
+    }
+
+    private var hoverSizeText: String {
+        guard let row = state.hoveredRow, let col = state.hoveredCol else { return "" }
+        return "\(row)x\(col)"
     }
 
     private var grid: some View {
