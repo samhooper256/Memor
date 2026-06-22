@@ -29,6 +29,13 @@ enum HyperlinkSearchMode: Hashable {
     }
 }
 
+// The popup has two pages: the default "Link" page (search + 3 search modes) and the
+// "Pre-Filters" page (⌘P) for picking the saved search string AND-ed into every search.
+enum HyperlinkSearchPage: Hashable {
+    case link
+    case preFilters
+}
+
 @MainActor
 final class HyperlinkSearchController: ObservableObject {
     private weak var panel: HyperlinkSearchPanel?
@@ -69,7 +76,7 @@ final class HyperlinkSearchController: ObservableObject {
         self.popupState = popupState
 
         let panel = HyperlinkSearchPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 260),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 280),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
@@ -139,6 +146,9 @@ final class HyperlinkSearchController: ObservableObject {
 @MainActor
 final class HyperlinkSearchPopupState: NSObject, ObservableObject, NSWindowDelegate {
     static var lastUsedMode: HyperlinkSearchMode = .instances
+    // Persists the active pre-filter across reopening the popup within a launch (mirrors
+    // lastUsedMode); not persisted across launches, so it defaults to nil = "(no pre-filter)".
+    static var lastActivePreFilter: String?
 
     @Published var searchQuery: String
     @Published var mode: HyperlinkSearchMode = HyperlinkSearchPopupState.lastUsedMode
@@ -150,6 +160,13 @@ final class HyperlinkSearchPopupState: NSObject, ObservableObject, NSWindowDeleg
     @Published var highlightedID: String?
     @Published var isSearchFieldFocused = false
     @Published var searchFieldFocusRequest = UUID()
+
+    // Page + pre-filter state.
+    @Published var page: HyperlinkSearchPage = .link
+    @Published var activePreFilter: String? = HyperlinkSearchPopupState.lastActivePreFilter
+    @Published var preFilterSearchQuery = ""
+    @Published var preFilterHighlightedID: String?
+    @Published var preFilterFocusRequest = UUID()
 
     let appDatabase: AppDatabase
     let onSelectInstance: (Int64) -> Void
@@ -191,8 +208,21 @@ final class HyperlinkSearchPopupState: NSObject, ObservableObject, NSWindowDeleg
         }
     }
 
+    // The query actually run: the active pre-filter AND-ed with the user's input. Each side
+    // is wrapped in parens so a pre-filter (or input) containing a top-level OR doesn't
+    // mis-associate against the other side (space = AND, OR is explicit in the grammar).
+    private func effectiveQuery() -> String {
+        let pf = (activePreFilter ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let user = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch (pf.isEmpty, user.isEmpty) {
+        case (true, _): return searchQuery
+        case (false, true): return "(\(pf))"
+        case (false, false): return "(\(pf)) (\(user))"
+        }
+    }
+
     func performSearch() {
-        let query = searchQuery
+        let query = effectiveQuery()
         let activeMode = mode
         searchTask?.cancel()
         searchTask = Task { @MainActor [weak self] in
@@ -346,6 +376,101 @@ final class HyperlinkSearchPopupState: NSObject, ObservableObject, NSWindowDeleg
     func windowDidResignKey(_ notification: Notification) {
         close()
     }
+
+    // MARK: - Pre-Filters page
+
+    func filteredPreFilters() -> [String] {
+        let needle = preFilterSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return PreFilterStore.shared.preFilters }
+        return PreFilterStore.shared.preFilters.filter {
+            $0.range(of: needle, options: .caseInsensitive) != nil
+        }
+    }
+
+    // Row IDs for the Pre-Filters list: "none" (clear), "pf:<index-in-filtered>", "add".
+    func preFilterRowIDs() -> [String] {
+        ["none"] + filteredPreFilters().indices.map { "pf:\($0)" } + ["add"]
+    }
+
+    func switchToPreFiltersPage() {
+        page = .preFilters
+        preFilterSearchQuery = ""
+        preFilterHighlightedID = preFilterRowIDs().first
+        preFilterFocusRequest = UUID()
+    }
+
+    func returnToLinkPage() {
+        page = .link
+        performSearch()
+        focusSearchField(clearHighlight: false)
+    }
+
+    func moveSelectionDownPreFilters() {
+        let ids = preFilterRowIDs()
+        guard !ids.isEmpty else { return }
+        if let preFilterHighlightedID, let currentIndex = ids.firstIndex(of: preFilterHighlightedID) {
+            let nextIndex = currentIndex + 1
+            self.preFilterHighlightedID = nextIndex < ids.count ? ids[nextIndex] : ids.first
+        } else {
+            preFilterHighlightedID = ids.first
+        }
+    }
+
+    func moveSelectionUpPreFilters() {
+        let ids = preFilterRowIDs()
+        guard !ids.isEmpty else { return }
+        if let preFilterHighlightedID,
+           let currentIndex = ids.firstIndex(of: preFilterHighlightedID),
+           currentIndex > 0 {
+            self.preFilterHighlightedID = ids[currentIndex - 1]
+        } else {
+            self.preFilterHighlightedID = ids.last
+        }
+    }
+
+    func selectPreFilter(rowID: String) {
+        let filtered = filteredPreFilters()
+        switch rowID {
+        case "none":
+            activePreFilter = nil
+        case "add":
+            let trimmed = preFilterSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            PreFilterStore.shared.add(trimmed)
+            activePreFilter = trimmed
+        default:
+            guard rowID.hasPrefix("pf:"),
+                  let index = Int(rowID.dropFirst(3)),
+                  index < filtered.count else { return }
+            activePreFilter = filtered[index]
+        }
+        Self.lastActivePreFilter = activePreFilter
+        returnToLinkPage()
+    }
+
+    func chooseHighlightedPreFilter() {
+        guard let preFilterHighlightedID else { return }
+        selectPreFilter(rowID: preFilterHighlightedID)
+    }
+
+    // Returns true if a real pre-filter row was highlighted and removed.
+    @discardableResult
+    func deleteHighlightedPreFilter() -> Bool {
+        guard let highlighted = preFilterHighlightedID, highlighted.hasPrefix("pf:"),
+              let index = Int(highlighted.dropFirst(3)) else { return false }
+        let filtered = filteredPreFilters()
+        guard index < filtered.count else { return false }
+        PreFilterStore.shared.remove(filtered[index])
+        // Re-clamp the highlight to a valid neighbor in the now-shorter list.
+        let ids = preFilterRowIDs()
+        if ids.contains(highlighted) {
+            preFilterHighlightedID = highlighted
+        } else {
+            let fallbackIndex = min(index, filteredPreFilters().count - 1)
+            preFilterHighlightedID = fallbackIndex >= 0 ? "pf:\(fallbackIndex)" : "none"
+        }
+        return true
+    }
 }
 
 struct HyperlinkSelectionContext {
@@ -356,8 +481,48 @@ struct HyperlinkSelectionContext {
 
 struct HyperlinkSearchPopupView: View {
     @ObservedObject var state: HyperlinkSearchPopupState
+    // Observed so the Pre-Filters list re-renders live when entries are added/removed.
+    @ObservedObject private var preFilterStore = PreFilterStore.shared
 
     var body: some View {
+        Group {
+            switch state.page {
+            case .link:
+                linkPage
+            case .preFilters:
+                preFiltersPage
+            }
+        }
+        .background {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(nsColor: .controlBackgroundColor))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .background {
+            WindowKeyCommandHandler(
+                // Escape on the Pre-Filters page returns to the Link page; on the Link
+                // page it closes the popup.
+                onEscape: { state.page == .preFilters ? state.returnToLinkPage() : state.close() },
+                onCommandReturn: nil,
+                onCommandS: nil,
+                onCommandI: nil,
+                onCommandO: nil
+            )
+        }
+        .onAppear {
+            state.performSearch()
+            state.focusSearchField(clearHighlight: false)
+        }
+        .onChange(of: state.searchQuery) { _, _ in
+            state.performSearch()
+        }
+    }
+
+    private var linkPage: some View {
         VStack(spacing: 0) {
             HyperlinkSearchTextField(
                 text: $state.searchQuery,
@@ -367,11 +532,25 @@ struct HyperlinkSearchPopupView: View {
                 onMoveUp: state.moveSelectionUp,
                 onSubmit: state.chooseHighlightedResult,
                 onToggleMode: state.toggleMode,
+                onSwitchToPreFilters: state.switchToPreFiltersPage,
                 onManualFocus: state.searchFieldDidReceiveManualFocus,
                 onFocus: state.searchFieldDidBecomeFocused
             )
             .frame(height: 30)
             .background(Color(nsColor: .controlBackgroundColor))
+
+            // Active pre-filter status row (⌘P to change).
+            HStack(spacing: 0) {
+                Text(state.activePreFilter ?? "(no pre-filter)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(state.activePreFilter == nil ? .secondary : .primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 18)
+            .background(Color(nsColor: .windowBackgroundColor))
 
             HStack(spacing: 6) {
                 Text("Searching:")
@@ -488,31 +667,79 @@ struct HyperlinkSearchPopupView: View {
               }
             }
         }
-        .background {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color(nsColor: .controlBackgroundColor))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
-                }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .background {
-            WindowKeyCommandHandler(
-                onEscape: state.close,
-                onCommandReturn: nil,
-                onCommandS: nil,
-                onCommandI: nil,
-                onCommandO: nil
+    }
+
+    private var preFiltersPage: some View {
+        VStack(spacing: 0) {
+            HyperlinkSearchTextField(
+                text: $state.preFilterSearchQuery,
+                focusRequest: state.preFilterFocusRequest,
+                canMoveDownToResults: { true },
+                onMoveDown: state.moveSelectionDownPreFilters,
+                onMoveUp: { state.moveSelectionUpPreFilters(); return false },
+                onSubmit: state.chooseHighlightedPreFilter,
+                onToggleMode: {},
+                onSwitchToPreFilters: nil,
+                onDeleteHighlighted: { state.deleteHighlightedPreFilter() },
+                onManualFocus: {},
+                onFocus: {}
             )
+            .frame(height: 30)
+            .background(Color(nsColor: .controlBackgroundColor))
+
+            HStack(spacing: 6) {
+                Text("Pre-Filters")
+                    .font(.caption)
+                    .foregroundStyle(.white)
+                Text("(Esc to go back)")
+                    .font(.caption)
+                    .foregroundStyle(.gray)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 22)
+            .background(Color(nsColor: .windowBackgroundColor))
+
+            Divider()
+
+            ScrollViewReader { proxy in
+              ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    preFilterRow(id: "none", label: "(no pre-filter)", isBold: false, isMono: false)
+                    let filtered = state.filteredPreFilters()
+                    ForEach(Array(filtered.enumerated()), id: \.offset) { index, preFilter in
+                        preFilterRow(id: "pf:\(index)", label: preFilter, isBold: false, isMono: true)
+                    }
+                    preFilterRow(id: "add", label: "+ add new pre-filter", isBold: true, isMono: false)
+                }
+              }
+              .frame(maxWidth: .infinity, maxHeight: .infinity)
+              .background(Color(nsColor: .controlBackgroundColor))
+              .onChange(of: state.preFilterHighlightedID) { _, newID in
+                  guard let newID else { return }
+                  proxy.scrollTo(newID, anchor: nil)
+              }
+            }
         }
-        .onAppear {
-            state.performSearch()
-            state.focusSearchField(clearHighlight: false)
+    }
+
+    @ViewBuilder
+    private func preFilterRow(id: String, label: String, isBold: Bool, isMono: Bool) -> some View {
+        let isHighlighted = state.preFilterHighlightedID == id
+        Button {
+            state.selectPreFilter(rowID: id)
+        } label: {
+            Text(label)
+                .font(isMono ? .system(size: 12, design: .monospaced) : .body)
+                .bold(isBold)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(isHighlighted ? Color.green.opacity(0.75) : Color.clear)
+                .foregroundStyle(isHighlighted ? Color.white : Color.primary)
         }
-        .onChange(of: state.searchQuery) { _, _ in
-            state.performSearch()
-        }
+        .buttonStyle(.plain)
+        .id(id)
     }
 
     @ViewBuilder
@@ -544,6 +771,10 @@ struct HyperlinkSearchTextField: NSViewRepresentable {
     let onMoveUp: () -> Bool
     let onSubmit: () -> Void
     let onToggleMode: () -> Void
+    // ⌘P switches to the Pre-Filters page (Link-page field only); Delete on an empty field
+    // deletes the highlighted pre-filter (Pre-Filters-page field only). Both default to nil.
+    var onSwitchToPreFilters: (() -> Void)? = nil
+    var onDeleteHighlighted: (() -> Bool)? = nil
     let onManualFocus: () -> Void
     let onFocus: () -> Void
 
@@ -555,6 +786,7 @@ struct HyperlinkSearchTextField: NSViewRepresentable {
             onMoveUp: onMoveUp,
             onSubmit: onSubmit,
             onToggleMode: onToggleMode,
+            onDeleteHighlighted: onDeleteHighlighted,
             onManualFocus: onManualFocus,
             onFocus: onFocus
         )
@@ -573,6 +805,8 @@ struct HyperlinkSearchTextField: NSViewRepresentable {
         textField.onMoveUp = onMoveUp
         textField.onSubmit = onSubmit
         textField.onToggleMode = onToggleMode
+        textField.onSwitchToPreFilters = onSwitchToPreFilters
+        textField.onDeleteHighlighted = onDeleteHighlighted
         textField.onManualFocus = onManualFocus
         textField.onFocus = onFocus
         context.coordinator.textField = textField
@@ -588,6 +822,8 @@ struct HyperlinkSearchTextField: NSViewRepresentable {
         nsView.onMoveUp = onMoveUp
         nsView.onSubmit = onSubmit
         nsView.onToggleMode = onToggleMode
+        nsView.onSwitchToPreFilters = onSwitchToPreFilters
+        nsView.onDeleteHighlighted = onDeleteHighlighted
         nsView.onManualFocus = onManualFocus
         nsView.onFocus = onFocus
         context.coordinator.applyFocusRequest(focusRequest)
@@ -600,6 +836,7 @@ struct HyperlinkSearchTextField: NSViewRepresentable {
         let onMoveUp: () -> Bool
         let onSubmit: () -> Void
         let onToggleMode: () -> Void
+        let onDeleteHighlighted: (() -> Bool)?
         let onManualFocus: () -> Void
         let onFocus: () -> Void
         weak var textField: HyperlinkSearchField?
@@ -612,6 +849,7 @@ struct HyperlinkSearchTextField: NSViewRepresentable {
             onMoveUp: @escaping () -> Bool,
             onSubmit: @escaping () -> Void,
             onToggleMode: @escaping () -> Void,
+            onDeleteHighlighted: (() -> Bool)?,
             onManualFocus: @escaping () -> Void,
             onFocus: @escaping () -> Void
         ) {
@@ -621,6 +859,7 @@ struct HyperlinkSearchTextField: NSViewRepresentable {
             self.onMoveUp = onMoveUp
             self.onSubmit = onSubmit
             self.onToggleMode = onToggleMode
+            self.onDeleteHighlighted = onDeleteHighlighted
             self.onManualFocus = onManualFocus
             self.onFocus = onFocus
         }
@@ -660,6 +899,14 @@ struct HyperlinkSearchTextField: NSViewRepresentable {
                 onSubmit()
                 return true
             }
+            if selector == #selector(NSResponder.deleteBackward(_:)), let onDeleteHighlighted {
+                // Delete deletes the highlighted pre-filter, but only when the field is empty
+                // so normal text deletion in a non-empty search box is unaffected.
+                let editorText = textField?.currentEditor()?.string ?? textField?.stringValue ?? ""
+                if editorText.isEmpty, onDeleteHighlighted() {
+                    return true
+                }
+            }
             return false
         }
 
@@ -691,6 +938,8 @@ final class HyperlinkSearchField: NSTextField {
     var onMoveUp: (() -> Bool)?
     var onSubmit: (() -> Void)?
     var onToggleMode: (() -> Void)?
+    var onSwitchToPreFilters: (() -> Void)?
+    var onDeleteHighlighted: (() -> Bool)?
     var onManualFocus: (() -> Void)?
     var onFocus: (() -> Void)?
 
@@ -716,6 +965,20 @@ final class HyperlinkSearchField: NSTextField {
             return
         }
         super.doCommand(by: selector)
+    }
+
+    // ⌘P → Pre-Filters page. Handled here (not keyDown) because while the field is being
+    // edited the field editor is first responder, so command-key events arrive via
+    // performKeyEquivalent rather than the field's own keyDown. Only the Link-page field
+    // sets onSwitchToPreFilters; the Pre-Filters-page field leaves it nil and returns false.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if modifiers == [.command], event.charactersIgnoringModifiers?.lowercased() == "p",
+           let onSwitchToPreFilters {
+            onSwitchToPreFilters()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
     }
 
     override func keyDown(with event: NSEvent) {
