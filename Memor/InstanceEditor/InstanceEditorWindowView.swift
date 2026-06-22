@@ -1550,7 +1550,7 @@ struct InstanceEditorWindowView: View {
                         onMoveToPreviousField: {
                             focusPreviousField(before: field.id)
                         },
-                        dedupesTrailingLineBreak: mode == .edit
+                        dedupesTrailingLineBreak: true
                     )
                 }
             }
