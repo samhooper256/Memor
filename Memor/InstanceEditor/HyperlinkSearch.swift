@@ -76,7 +76,7 @@ final class HyperlinkSearchController: ObservableObject {
         self.popupState = popupState
 
         let panel = HyperlinkSearchPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 280),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 320),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
