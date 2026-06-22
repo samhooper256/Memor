@@ -53,6 +53,10 @@ private let sharedSearchHelpComponents: [SearchHelpComponent] = [
         description: "Shorthand for collection:."
     ),
     SearchHelpComponent(
+        segments: [("col:", searchOperatorColor), ("ID", nil)],
+        description: "Restrict to items in the collection with this numeric ID, e.g. col:67. (collection:ID works too. Collection names can't start with a digit, so this is unambiguous.)"
+    ),
+    SearchHelpComponent(
         segments: [("id:", searchOperatorColor), ("number", nil)],
         description: "Restrict to the single instance with this ID."
     ),

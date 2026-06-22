@@ -51,6 +51,7 @@ struct AppDatabase {
     nonisolated indirect enum SearchExpression: Hashable {
         case literal(String)
         case collection(String)
+        case collectionID(Int64)
         case type(String)
         case id(Int64)
         case noQueries
@@ -891,8 +892,19 @@ struct AppDatabase {
         }
     }
 
+    // A collection name may not start with a digit, so the `col:`/`collection:` search
+    // component can treat a leading-digit argument as a collection ID without ambiguity.
+    nonisolated static func collectionNameStartsWithDigit(_ name: String) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let first = trimmed.first else { return false }
+        return first.isNumber
+    }
+
     func createCollection(name: String) throws -> Collection {
-        try dbQueue.write { db in
+        if Self.collectionNameStartsWithDigit(name) {
+            throw DatabaseError(message: "A collection name cannot start with a digit.")
+        }
+        return try dbQueue.write { db in
             try db.execute(
                 sql: """
                     INSERT INTO collection (name)
@@ -917,6 +929,9 @@ struct AppDatabase {
     }
 
     func renameCollection(id: Int64, to newName: String) throws {
+        if Self.collectionNameStartsWithDigit(newName) {
+            throw DatabaseError(message: "A collection name cannot start with a digit.")
+        }
         try dbQueue.write { db in
             try db.execute(
                 sql: """
@@ -5246,6 +5261,20 @@ struct AppDatabase {
                 """,
                 arguments
             )
+        case .collectionID(let collectionID):
+            var arguments = StatementArguments()
+            arguments += [collectionID]
+            return (
+                """
+                EXISTS (
+                    SELECT 1
+                    FROM instance_id_collection_id
+                    WHERE instance_id_collection_id.instance_id = \(instanceAlias).instance_id
+                        AND instance_id_collection_id.collection_id = ?
+                )
+                """,
+                arguments
+            )
         case .id(let instanceID):
             var arguments = StatementArguments()
             arguments += [instanceID]
@@ -5716,6 +5745,20 @@ struct AppDatabase {
                         ON collection.id = instance_id_collection_id.collection_id
                     WHERE instance_id_collection_id.instance_id = \(instanceAlias).instance_id
                         AND collection.name = ? COLLATE NOCASE
+                )
+                """,
+                arguments
+            )
+        case .collectionID(let collectionID):
+            var arguments = StatementArguments()
+            arguments += [collectionID]
+            return (
+                """
+                EXISTS (
+                    SELECT 1
+                    FROM instance_id_collection_id
+                    WHERE instance_id_collection_id.instance_id = \(instanceAlias).instance_id
+                        AND instance_id_collection_id.collection_id = ?
                 )
                 """,
                 arguments
@@ -6431,20 +6474,18 @@ struct AppDatabase {
                     guard allowsTypeCollectionId else {
                         throw DatabaseError(message: "The collection: component cannot be used when searching points and boundaries.")
                     }
-                    let collectionName = String(token.dropFirst("collection:".count))
-                    guard !collectionName.isEmpty else {
-                        throw DatabaseError(message: "The collection: component requires a collection name.")
-                    }
-                    return .collection(collectionName)
+                    return try Self.parseCollectionComponent(
+                        argument: String(token.dropFirst("collection:".count)),
+                        componentName: "collection:"
+                    )
                 } else if token.hasPrefix("col:") {
                     guard allowsTypeCollectionId else {
                         throw DatabaseError(message: "The col: component cannot be used when searching points and boundaries.")
                     }
-                    let collectionName = String(token.dropFirst("col:".count))
-                    guard !collectionName.isEmpty else {
-                        throw DatabaseError(message: "The col: component requires a collection name.")
-                    }
-                    return .collection(collectionName)
+                    return try Self.parseCollectionComponent(
+                        argument: String(token.dropFirst("col:".count)),
+                        componentName: "col:"
+                    )
                 } else if token.hasPrefix("type:") {
                     guard allowsTypeCollectionId else {
                         throw DatabaseError(message: "The type: component cannot be used when searching points and boundaries.")
@@ -6476,6 +6517,22 @@ struct AppDatabase {
             var currentToken: String? {
                 guard index < tokens.count else { return nil }
                 return tokens[index]
+            }
+
+            // Parses a `collection:`/`col:` argument. A leading digit means a collection ID
+            // (e.g. `col:67`); otherwise it's a collection name. Collection names can never
+            // start with a digit (enforced on create/rename), so this is unambiguous.
+            static func parseCollectionComponent(argument: String, componentName: String) throws -> SearchExpression {
+                guard !argument.isEmpty else {
+                    throw DatabaseError(message: "The \(componentName) component requires a collection name or ID.")
+                }
+                if let first = argument.first, first.isNumber {
+                    guard let collectionID = Int64(argument) else {
+                        throw DatabaseError(message: "The \(componentName) component requires a valid integer collection ID.")
+                    }
+                    return .collectionID(collectionID)
+                }
+                return .collection(argument)
             }
         }
 
@@ -6569,6 +6626,21 @@ struct AppDatabase {
                 arguments
             )
 
+        case .collectionID(let collectionID):
+            var arguments = StatementArguments()
+            arguments += [collectionID]
+            return (
+                """
+                EXISTS (
+                    SELECT 1
+                    FROM instance_id_collection_id
+                    WHERE instance_id_collection_id.instance_id = \(tableAlias).id
+                        AND instance_id_collection_id.collection_id = ?
+                )
+                """,
+                arguments
+            )
+
         case .type(let searchedTypeName):
             var arguments = StatementArguments()
             arguments += [typeName, searchedTypeName]
@@ -6646,7 +6718,7 @@ struct AppDatabase {
         guard let expression else { return [] }
 
         switch expression {
-        case .literal, .type, .id, .noQueries, .new:
+        case .literal, .type, .id, .noQueries, .new, .collectionID:
             return []
         case .collection(let collectionName):
             return [collectionName]

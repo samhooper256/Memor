@@ -53,7 +53,7 @@ extension AppDatabase {
 
         func evaluate(_ expression: SearchExpression) -> Bool? {
             switch expression {
-            case .literal, .collection, .id, .noQueries:
+            case .literal, .collection, .collectionID, .id, .noQueries:
                 return nil
             case .type(let searchedTypeName):
                 return sqliteNocaseEquals(typeName, searchedTypeName)

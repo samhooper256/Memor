@@ -131,6 +131,12 @@ struct CollectionsPageView: View {
                         }
                     }
 
+                if AppDatabase.collectionNameStartsWithDigit(newCollectionName) {
+                    Text("A collection name cannot start with a digit.")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+
                 HStack {
                     Spacer()
 
@@ -144,7 +150,10 @@ struct CollectionsPageView: View {
                         }
                     }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(newCollectionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(
+                        newCollectionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || AppDatabase.collectionNameStartsWithDigit(newCollectionName)
+                    )
                 }
             }
             .padding(20)
@@ -192,6 +201,10 @@ struct CollectionsPageView: View {
     private func addCollection() async {
         let trimmedCollectionName = newCollectionName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedCollectionName.isEmpty else { return }
+        if AppDatabase.collectionNameStartsWithDigit(trimmedCollectionName) {
+            errorMessage = "A collection name cannot start with a digit."
+            return
+        }
 
         do {
             _ = try appDatabase.createCollection(name: trimmedCollectionName)
@@ -289,6 +302,12 @@ private struct CollectionDetailPageView: View {
                                     renameCollection()
                                 }
 
+                            if AppDatabase.collectionNameStartsWithDigit(renamedCollectionName) {
+                                Text("A collection name cannot start with a digit.")
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
+                            }
+
                             HStack {
                                 Spacer()
 
@@ -300,7 +319,10 @@ private struct CollectionDetailPageView: View {
                                     renameCollection()
                                 }
                                 .keyboardShortcut(.defaultAction)
-                                .disabled(renamedCollectionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                .disabled(
+                                    renamedCollectionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                        || AppDatabase.collectionNameStartsWithDigit(renamedCollectionName)
+                                )
                             }
                         }
                         .padding(16)
@@ -481,6 +503,7 @@ private struct CollectionDetailPageView: View {
     private func renameCollection() {
         let trimmed = renamedCollectionName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        guard !AppDatabase.collectionNameStartsWithDigit(trimmed) else { return }
         do {
             try appDatabase.renameCollection(id: collection.id, to: trimmed)
             displayedName = trimmed
