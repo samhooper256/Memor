@@ -748,10 +748,19 @@ struct InstanceEditorWindowView: View {
             let dy = entryLocal.y - localPoint.y
             if dx * dx + dy * dy <= hitRadius * hitRadius {
                 let ref = entry.ref
-                return [
-                    MapMenuAction(title: "Edit") { presentEditPointPopup(for: ref) },
-                    MapMenuAction(title: "Delete") { removePointMapEntry(ref) }
+                var actions: [MapMenuAction] = [
+                    MapMenuAction(title: "Edit") { presentEditPointPopup(for: ref) }
                 ]
+                // Resetting writes SRS state directly to the saved point, so it's only
+                // meaningful once the instance exists (Edit mode), matching the points
+                // list's "Reset Queries" submenu.
+                if mode == .edit {
+                    actions.append(MapMenuAction(title: "Reset all queries") {
+                        resetAllPointMapEntryQueries(ref)
+                    })
+                }
+                actions.append(MapMenuAction(title: "Delete") { removePointMapEntry(ref) })
+                return actions
             }
         }
         guard let coord = proxy.convert(localPoint, from: .local) else { return [] }
@@ -961,6 +970,20 @@ struct InstanceEditorWindowView: View {
     // (Edit mode only — new points have no persisted queries yet). Writes straight to
     // the DB and reports how many queries were actually reset via a green toast.
     @MainActor
+    // Resets both directions' SRS state for a single point (the map right-click
+    // "Reset all queries" item).
+    private func resetAllPointMapEntryQueries(_ ref: PointMapEntryRef) {
+        guard case .existing(let pointID) = ref else { return }
+        do {
+            let forward = try appDatabase.resetPointMapPointDueDates(pointIDs: [pointID], isReverse: false)
+            let reverse = try appDatabase.resetPointMapPointDueDates(pointIDs: [pointID], isReverse: true)
+            NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
+            showToast(message: "Reset due dates for \(forward + reverse) queries", style: .success)
+        } catch {
+            showToast(message: "Failed to reset due dates.", style: .error)
+        }
+    }
+
     private func resetPointMapEntriesDueDates(_ refs: Set<PointMapEntryRef>, isReverse: Bool) {
         let pointIDs = refs.compactMap { ref -> Int64? in
             if case .existing(let id) = ref { return id }
