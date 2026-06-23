@@ -589,47 +589,65 @@ struct AppDatabase {
     }
 
     func grantImageFileAccess(fileURL: URL) throws {
-        // Create the bookmark from the ORIGINAL URL handed to us (e.g. from NSOpenPanel).
-        // Deriving a new URL via standardizedFileURL drops the panel's implicit security-scope
-        // grant, which made bookmark creation silently depend on a long-lived folder scope that
-        // can lapse after sleep/idle (producing "Failed to retrieve app-scope key"). Access the
-        // original URL across creation instead. A false return is expected for panel URLs whose
-        // grant is already implicitly active, so it is not fatal.
-        let didStartAccess = fileURL.startAccessingSecurityScopedResource()
-        defer { if didStartAccess { fileURL.stopAccessingSecurityScopedResource() } }
-
-        let bookmarkData = try fileURL.bookmarkData(
-            options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess],
-            includingResourceValuesForKeys: nil,
-            relativeTo: nil
-        )
         let standardizedPath = fileURL.standardizedFileURL.resolvingSymlinksInPath()
             .path(percentEncoded: false)
 
-        try dbQueue.write { db in
-            try db.execute(
-                sql: """
-                    INSERT INTO image_file (path, bookmark_data)
-                    VALUES (?, ?)
-                    ON CONFLICT(path) DO UPDATE SET
-                        bookmark_data = excluded.bookmark_data
-                    """,
-                arguments: [standardizedPath, bookmarkData]
+        // Hold the panel's fresh security-scope grant across bookmark creation. (Create the
+        // bookmark from the ORIGINAL panel URL — standardizing first drops the grant; see 12f3f79.)
+        let didStartAccess = fileURL.startAccessingSecurityScopedResource()
+
+        // Best-effort: mint and persist a security-scoped bookmark so the image still renders
+        // after relaunch. This can fail with NSCocoaErrorDomain Code=256 "Failed to retrieve
+        // app-scope key" — the sandbox sometimes can't vend the per-app key used to sign
+        // app-scoped bookmarks (notably under ad-hoc-signed debug builds, and after long
+        // idle/sleep). When it fails we must NOT block the insert: fall back to retaining the
+        // panel's live grant for this session so the image inserts and renders now, and let
+        // persistence be retried the next time access is granted.
+        do {
+            let bookmarkData = try fileURL.bookmarkData(
+                options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess],
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
             )
+
+            try dbQueue.write { db in
+                try db.execute(
+                    sql: """
+                        INSERT INTO image_file (path, bookmark_data)
+                        VALUES (?, ?)
+                        ON CONFLICT(path) DO UPDATE SET
+                            bookmark_data = excluded.bookmark_data
+                        """,
+                    arguments: [standardizedPath, bookmarkData]
+                )
+            }
+
+            var isStale = false
+            let resolvedURL = try URL(
+                resolvingBookmarkData: bookmarkData,
+                options: [.withSecurityScope],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            )
+            if resolvedURL.startAccessingSecurityScopedResource() {
+                // The controller now owns the resolved scope; release the panel grant.
+                if didStartAccess { fileURL.stopAccessingSecurityScopedResource() }
+                imageFolderAccessController.replaceAccess(forPath: standardizedPath, with: resolvedURL)
+                return
+            }
+            // Resolution didn't yield an active scope — fall through to retain the panel grant.
+        } catch {
+            print("Failed to persist image bookmark (using session-only access): \(error)")
+            // Fall through to the session-only grant below.
         }
 
-        var isStale = false
-        let resolvedURL = try URL(
-            resolvingBookmarkData: bookmarkData,
-            options: [.withSecurityScope],
-            relativeTo: nil,
-            bookmarkDataIsStale: &isStale
-        )
-        guard resolvedURL.startAccessingSecurityScopedResource() else {
+        // Fallback: keep the panel's live grant for this session so the image is usable now.
+        // The controller takes ownership of the started scope (it stops it on replacement /
+        // deinit), so we must not stop it here.
+        guard didStartAccess else {
             throw DatabaseError(message: "Failed to start security-scoped access for the selected image.")
         }
-
-        imageFolderAccessController.replaceAccess(forPath: standardizedPath, with: resolvedURL)
+        imageFolderAccessController.replaceAccess(forPath: standardizedPath, with: fileURL)
     }
 
     /// Reads a local image file, re-asserting the security scope around the read instead of
