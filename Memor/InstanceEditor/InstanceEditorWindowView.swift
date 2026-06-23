@@ -2522,7 +2522,12 @@ struct InstanceEditorWindowView: View {
         do {
             try appDatabase.deleteInstance(instanceID: loadedInstanceID)
             NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
-            dismiss()
+            // Close the entire Edit Instance window. Deferred to the next runloop tick so
+            // the confirmation alert finishes tearing down first — dismissing the window
+            // while its alert is still the active modal would otherwise be dropped.
+            DispatchQueue.main.async {
+                dismiss()
+            }
         } catch {
             showToast(message: "Failed to delete instance.", style: .error)
         }
