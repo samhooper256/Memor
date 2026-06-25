@@ -400,6 +400,16 @@ struct InstanceTextView: NSViewRepresentable {
                 layoutManager.invalidateLayout(forCharacterRange: NSRange(location: 0, length: (text as NSString).length), actualCharacterRange: nil)
                 layoutManager.ensureLayout(for: textContainer)
             }
+            // Force a full redraw of the text view AND its (non-opaque) clip/scroll view.
+            // When a reused editor loads shorter content than it previously held (e.g. opening
+            // a different instance of the same type), the text view shrinks to fit, but the area
+            // it used to occupy now belongs to the transparent clip view, which nothing repaints
+            // — leaving the previous instance's glyphs drawn there as a ghost. Those glyphs are
+            // not in the text storage (so they're not selectable/editable) and not in the data;
+            // marking the whole region dirty clears them.
+            textView.needsDisplay = true
+            nsView.contentView.needsDisplay = true
+            nsView.needsDisplay = true
         }
         (textView as? CommandAwareTextView)?.onRequestHyperlink = onRequestHyperlink
         (textView as? CommandAwareTextView)?.dedupesTrailingLineBreak = dedupesTrailingLineBreak
