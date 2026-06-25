@@ -1652,17 +1652,20 @@ struct InstanceEditorWindowView: View {
 
     private var filteredCollectionItems: [CollectionChecklistItem] {
         let trimmedQuery = collectionSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        let filtered: [CollectionChecklistItem]
+        let matching: [CollectionChecklistItem]
         if trimmedQuery.isEmpty {
-            let pinned = allCollectionItems.filter(\.isPinned)
-            let unpinned = allCollectionItems.filter { !$0.isPinned }
-            filtered = pinned + unpinned
+            matching = allCollectionItems
         } else {
-            filtered = allCollectionItems.filter {
+            matching = allCollectionItems.filter {
                 $0.name.localizedCaseInsensitiveContains(trimmedQuery)
             }
         }
-        return filtered
+        // Pinned collections sort to the top, even when a search is active. The search still
+        // filters everything (a pinned collection that doesn't match is hidden); among the
+        // matches, pinned ones come first. Stable partition preserves order within each group.
+        let pinned = matching.filter(\.isPinned)
+        let unpinned = matching.filter { !$0.isPinned }
+        return pinned + unpinned
     }
 
     private var collectionChecklistSection: some View {
