@@ -96,6 +96,7 @@ struct SearchWindowView: View {
     @EnvironmentObject private var stacksPageState: StacksPageState
     @EnvironmentObject private var quickStudyState: QuickStudyState
     @EnvironmentObject private var shortcutSettings: ShortcutSettings
+    @EnvironmentObject private var changeTypeWindowState: ChangeTypeWindowState
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openWindow) private var openWindow
 
@@ -198,6 +199,21 @@ struct SearchWindowView: View {
         return result
     }
 
+    // When every selected instance belongs to a single convertible (non-map) type,
+    // returns that type plus the selected ids; otherwise nil. Drives the "Change Type"
+    // context-menu item (Object/Node sources only).
+    private func convertibleSelection(_ items: Set<Int64>) -> (typeID: Int64, typeName: String, ids: [Int64])? {
+        guard !items.isEmpty else { return nil }
+        var matchingSections: [InstanceSearchSection] = []
+        for section in instanceSections where section.instances.contains(where: { items.contains($0.id) }) {
+            matchingSections.append(section)
+        }
+        guard matchingSections.count == 1, let section = matchingSections.first else { return nil }
+        guard section.typeName != POINTMAP_TYPE_NAME, section.typeName != BOUNDARYMAP_TYPE_NAME else { return nil }
+        let ids = section.instances.map(\.id).filter { items.contains($0) }
+        return (section.typeID, section.typeName, ids)
+    }
+
     // Instances reachable from the Queries results that can be duplicated — i.e.
     // not PointMap/BoundaryMap instances (whose editor doesn't support duplication).
     private var duplicatableQueryInstanceIDs: Set<Int64> {
@@ -240,6 +256,9 @@ struct SearchWindowView: View {
         }
         .onChange(of: windowState.mode) { _, _ in
             clearSelections()
+            Task { await runSearch(for: debouncedSearchQuery) }
+        }
+        .onChange(of: changeTypeWindowState.conversionNonce) { _, _ in
             Task { await runSearch(for: debouncedSearchQuery) }
         }
         .onChange(of: instanceSections) { _, newSections in
@@ -450,6 +469,12 @@ struct SearchWindowView: View {
                     let pasteboard = NSPasteboard.general
                     pasteboard.clearContents()
                     pasteboard.setString("\(instanceID)", forType: .string)
+                }
+            }
+            if let selection = convertibleSelection(items) {
+                Button("Change Type") {
+                    changeTypeWindowState.requestOpen(instanceIDs: selection.ids, sourceTypeID: selection.typeID)
+                    openWindow(id: "change-type")
                 }
             }
             if !items.isEmpty {

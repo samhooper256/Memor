@@ -3418,6 +3418,189 @@ struct AppDatabase {
         }
     }
 
+    // MARK: - Change Type
+
+    /// For a set of instances, returns how many of them have each query type enabled
+    /// (i.e. have a `query` row for it). Used to drive the tri-state source query-type
+    /// checkboxes in the Change Type window.
+    func fetchQueryTypeEnableCounts(instanceIDs: [Int64]) throws -> [Int64: Int] {
+        guard !instanceIDs.isEmpty else { return [:] }
+        return try dbQueue.read { db in
+            let placeholders = Array(repeating: "?", count: instanceIDs.count).joined(separator: ", ")
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT query_type_id AS queryTypeID, COUNT(*) AS cnt
+                    FROM query
+                    WHERE instance_id IN (\(placeholders))
+                    GROUP BY query_type_id
+                    """,
+                arguments: StatementArguments(instanceIDs.map { $0.databaseValue })
+            )
+            var result: [Int64: Int] = [:]
+            for row in rows {
+                result[row["queryTypeID"] as Int64] = Int(row["cnt"] as Int64)
+            }
+            return result
+        }
+    }
+
+    /// Converts every instance in `instanceIDs` (all currently of `sourceTypeID`) to
+    /// `destTypeID`, preserving each instance's ID. Field values are migrated according to
+    /// `fieldMapping` (destFieldID -> sourceFieldID?, nil = leave blank). The converted
+    /// instances get exactly `enabledDestQueryTypeIDs` enabled (SRS state reset). All node
+    /// links touching the converted instances (incoming and outgoing) are removed. When
+    /// `removeFromCollections` is true the instances are removed from all collections.
+    ///
+    /// Supports Object->Object, Object->Node, and Node->Node conversions only.
+    func changeInstanceType(
+        instanceIDs: [Int64],
+        sourceTypeID: Int64,
+        destTypeID: Int64,
+        fieldMapping: [Int64: Int64?],
+        enabledDestQueryTypeIDs: Set<Int64>,
+        removeFromCollections: Bool
+    ) throws {
+        guard sourceTypeID != destTypeID else {
+            throw DatabaseError(message: "Source and destination types must differ.")
+        }
+        guard !instanceIDs.isEmpty else { return }
+
+        try dbQueue.write { db in
+            func fetchFields(_ typeID: Int64) throws -> [TypeField] {
+                try TypeField.fetchAll(
+                    db,
+                    sql: """
+                        SELECT
+                            id,
+                            type_id AS typeID,
+                            name,
+                            field_index AS fieldIndex,
+                            field_display_index AS fieldDisplayIndex,
+                            COALESCE(is_primary, 0) AS isPrimary,
+                            field_type AS fieldType
+                        FROM field
+                        WHERE type_id = ?
+                        ORDER BY field_index, id
+                        """,
+                    arguments: [typeID]
+                )
+            }
+
+            let sourceFields = try fetchFields(sourceTypeID)
+            let destFields = try fetchFields(destTypeID)
+            let sourceFieldByID = Dictionary(uniqueKeysWithValues: sourceFields.map { ($0.id, $0) })
+
+            // Validate the mapping references real fields.
+            for (destFieldID, sourceFieldID) in fieldMapping {
+                guard destFields.contains(where: { $0.id == destFieldID }) else {
+                    throw DatabaseError(message: "Unknown destination field in mapping.")
+                }
+                if let sourceFieldID, sourceFieldByID[sourceFieldID] == nil {
+                    throw DatabaseError(message: "Unknown source field in mapping.")
+                }
+            }
+            // Validate the chosen query types belong to the destination type.
+            let validDestQueryTypeIDs = try Set(Int64.fetchAll(
+                db,
+                sql: "SELECT id FROM query_type WHERE type_id = ?",
+                arguments: [destTypeID]
+            ))
+            for queryTypeID in enabledDestQueryTypeIDs where !validDestQueryTypeIDs.contains(queryTypeID) {
+                throw DatabaseError(message: "Query type does not belong to the destination type.")
+            }
+
+            let destColumnNames = ["id"] + destFields.map { "field\($0.fieldIndex)" }
+            let destPlaceholders = Array(repeating: "?", count: destColumnNames.count).joined(separator: ", ")
+            let destInsertSQL = """
+                INSERT INTO "type\(destTypeID)" (\(destColumnNames.joined(separator: ", ")))
+                VALUES (\(destPlaceholders))
+                """
+
+            let sourceSelectColumns = sourceFields.map { field in
+                "\"field\(field.fieldIndex)\" AS \"field_\(field.id)\""
+            }.joined(separator: ", ")
+
+            for instanceID in instanceIDs {
+                // Confirm the instance is currently of the source type.
+                let currentTypeID = try Int64.fetchOne(
+                    db,
+                    sql: "SELECT type_id FROM instance_id_type_id WHERE instance_id = ?",
+                    arguments: [instanceID]
+                )
+                guard currentTypeID == sourceTypeID else {
+                    throw DatabaseError(message: "Instance \(instanceID) is not of the expected source type.")
+                }
+
+                // 1. Read source field values keyed by source field id.
+                var sourceValuesByFieldID: [Int64: String] = [:]
+                if !sourceFields.isEmpty {
+                    let row = try Row.fetchOne(
+                        db,
+                        sql: """
+                            SELECT \(sourceSelectColumns)
+                            FROM "type\(sourceTypeID)"
+                            WHERE id = ?
+                            """,
+                        arguments: [instanceID]
+                    )
+                    for field in sourceFields {
+                        sourceValuesByFieldID[field.id] = row?["field_\(field.id)"] as String? ?? ""
+                    }
+                }
+
+                // 2. Compute destination values via the mapping.
+                var insertArguments: [DatabaseValue] = [instanceID.databaseValue]
+                for field in destFields {
+                    let mappedSourceID = fieldMapping[field.id] ?? nil
+                    let rawValue = mappedSourceID.flatMap { sourceValuesByFieldID[$0] } ?? ""
+                    insertArguments.append(Self.normalizedFieldValue(rawValue, kind: field.fieldType).databaseValue)
+                }
+
+                // 3. Repoint the instance to the destination type.
+                try db.execute(
+                    sql: "UPDATE instance_id_type_id SET type_id = ? WHERE instance_id = ?",
+                    arguments: [destTypeID, instanceID]
+                )
+
+                // 4. Insert the destination row (same instance id preserved).
+                try db.execute(sql: destInsertSQL, arguments: StatementArguments(insertArguments)!)
+
+                // 5. Remove the old source-type row.
+                try db.execute(
+                    sql: "DELETE FROM \"type\(sourceTypeID)\" WHERE id = ?",
+                    arguments: [instanceID]
+                )
+
+                // 6. Reset queries to exactly the selected destination query types.
+                try db.execute(
+                    sql: "DELETE FROM query WHERE instance_id = ?",
+                    arguments: [instanceID]
+                )
+                for queryTypeID in enabledDestQueryTypeIDs.sorted() {
+                    try db.execute(
+                        sql: "INSERT INTO query (instance_id, query_type_id) VALUES (?, ?)",
+                        arguments: [instanceID, queryTypeID]
+                    )
+                }
+
+                // 7. Remove all node links touching this instance (incoming and outgoing).
+                try db.execute(
+                    sql: "DELETE FROM node_link WHERE source_instance_id = ? OR target_instance_id = ?",
+                    arguments: [instanceID, instanceID]
+                )
+
+                // 8. Optionally drop collection memberships.
+                if removeFromCollections {
+                    try db.execute(
+                        sql: "DELETE FROM instance_id_collection_id WHERE instance_id = ?",
+                        arguments: [instanceID]
+                    )
+                }
+            }
+        }
+    }
+
     // MARK: - PointMap
 
     struct PointMapPointDraft: Hashable {

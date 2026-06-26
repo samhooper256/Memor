@@ -24,6 +24,7 @@ struct MemorApp: App {
     @StateObject private var editInstanceWindowState = EditInstanceWindowState()
     @StateObject private var queryPreviewWindowState = QueryPreviewWindowState()
     @StateObject private var searchWindowState = SearchWindowState()
+    @StateObject private var changeTypeWindowState = ChangeTypeWindowState()
     @StateObject private var stacksPageState = StacksPageState()
     @StateObject private var manageBoundariesWindowState = ManageBoundariesWindowState()
     @StateObject private var stackStatsWindowState = StackStatsWindowState()
@@ -101,7 +102,14 @@ struct MemorApp: App {
                 .environmentObject(stacksPageState)
                 .environmentObject(quickStudyState)
                 .environmentObject(shortcutSettings)
+                .environmentObject(changeTypeWindowState)
         }
+
+        Window("Change Type", id: "change-type") {
+            ChangeTypeWindowView(appDatabase: appDatabase)
+                .environmentObject(changeTypeWindowState)
+        }
+        .windowResizability(.contentSize)
 
         Window("Instance Search Help", id: "instance-search-help") {
             InstanceSearchHelpWindowView()
