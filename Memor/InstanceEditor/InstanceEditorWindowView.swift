@@ -44,6 +44,7 @@ struct InstanceEditorWindowView: View {
     @State private var allCollectionItems: [CollectionChecklistItem] = []
     @State private var collectionSearchQuery = ""
     @State private var collectionsScrollNonce = UUID()
+    @State private var highlightedCollectionID: Int64?   // C; nil = none
     @StateObject private var focusController = AddInstanceFieldFocusController()
     @StateObject private var hyperlinkSearchController = HyperlinkSearchController()
     @StateObject private var typePickerController = TypePickerController()
@@ -1679,6 +1680,25 @@ struct InstanceEditorWindowView: View {
         return pinned + unpinned
     }
 
+    // Moves the highlighted collection ("C") up/down the visible list, clamping at the ends.
+    private func moveHighlight(by delta: Int) {
+        let items = filteredCollectionItems
+        guard !items.isEmpty else { return }
+        let current = items.firstIndex { $0.id == highlightedCollectionID } ?? 0
+        let next = min(max(current + delta, 0), items.count - 1)
+        highlightedCollectionID = items[next].id
+    }
+
+    // Toggles whether the highlighted collection is selected, without changing focus.
+    private func toggleHighlightedCollection() {
+        guard let id = highlightedCollectionID else { return }
+        if draft.selectedCollectionIDs.contains(id) {
+            draft.selectedCollectionIDs.remove(id)
+        } else {
+            draft.selectedCollectionIDs.insert(id)
+        }
+    }
+
     private var collectionChecklistSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
@@ -1696,7 +1716,12 @@ struct InstanceEditorWindowView: View {
                 text: $collectionSearchQuery,
                 focusController: focusController,
                 onTab: { focusNextField(after: nil) },
-                onBackTab: { focusPreviousField(before: nil) }
+                onBackTab: { focusPreviousField(before: nil) },
+                onMoveUp: { moveHighlight(by: -1) },
+                onMoveDown: { moveHighlight(by: 1) },
+                onToggleHighlighted: { toggleHighlightedCollection() },
+                onFocusGained: { highlightedCollectionID = filteredCollectionItems.first?.id },
+                onFocusLost: { highlightedCollectionID = nil }
             )
             .frame(height: 22)
 
@@ -1709,28 +1734,44 @@ struct InstanceEditorWindowView: View {
                     .foregroundStyle(.secondary)
                     .font(.subheadline)
             } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(filteredCollectionItems) { item in
-                            CollectionChecklistRow(
-                                item: item,
-                                isChecked: draft.selectedCollectionIDs.contains(item.id),
-                                onToggleCheck: { isChecked in
-                                    if isChecked {
-                                        draft.selectedCollectionIDs.insert(item.id)
-                                    } else {
-                                        draft.selectedCollectionIDs.remove(item.id)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(filteredCollectionItems) { item in
+                                CollectionChecklistRow(
+                                    item: item,
+                                    isChecked: draft.selectedCollectionIDs.contains(item.id),
+                                    isHighlighted: item.id == highlightedCollectionID,
+                                    onToggleCheck: { isChecked in
+                                        if isChecked {
+                                            draft.selectedCollectionIDs.insert(item.id)
+                                        } else {
+                                            draft.selectedCollectionIDs.remove(item.id)
+                                        }
+                                    },
+                                    onTogglePin: {
+                                        togglePin(for: item)
                                     }
-                                },
-                                onTogglePin: {
-                                    togglePin(for: item)
-                                }
-                            )
+                                )
+                                .id(item.id)
+                            }
+                        }
+                        .background(ScrollBubbleBlocker())
+                    }
+                    .frame(maxHeight: 260)
+                    .onChange(of: highlightedCollectionID) { _, newValue in
+                        guard let newValue else { return }
+                        DispatchQueue.main.async {
+                            proxy.scrollTo(newValue, anchor: .center)
                         }
                     }
-                    .background(ScrollBubbleBlocker())
                 }
-                .frame(maxHeight: 260)
+            }
+        }
+        .onChange(of: collectionSearchQuery) { _, _ in
+            if let c = highlightedCollectionID,
+               !filteredCollectionItems.contains(where: { $0.id == c }) {
+                highlightedCollectionID = filteredCollectionItems.first?.id
             }
         }
         .padding(16)

@@ -14,9 +14,23 @@ struct CollectionSearchTextField: NSViewRepresentable {
     let focusController: AddInstanceFieldFocusController
     let onTab: () -> Void
     let onBackTab: () -> Void
+    let onMoveUp: () -> Void
+    let onMoveDown: () -> Void
+    let onToggleHighlighted: () -> Void
+    let onFocusGained: () -> Void
+    let onFocusLost: () -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, onTab: onTab, onBackTab: onBackTab)
+        Coordinator(
+            text: $text,
+            onTab: onTab,
+            onBackTab: onBackTab,
+            onMoveUp: onMoveUp,
+            onMoveDown: onMoveDown,
+            onToggleHighlighted: onToggleHighlighted,
+            onFocusGained: onFocusGained,
+            onFocusLost: onFocusLost
+        )
     }
 
     func makeNSView(context: Context) -> NSTextField {
@@ -38,6 +52,11 @@ struct CollectionSearchTextField: NSViewRepresentable {
         }
         context.coordinator.onTab = onTab
         context.coordinator.onBackTab = onBackTab
+        context.coordinator.onMoveUp = onMoveUp
+        context.coordinator.onMoveDown = onMoveDown
+        context.coordinator.onToggleHighlighted = onToggleHighlighted
+        context.coordinator.onFocusGained = onFocusGained
+        context.coordinator.onFocusLost = onFocusLost
         focusController.collectionSearchField = nsView
     }
 
@@ -45,16 +64,43 @@ struct CollectionSearchTextField: NSViewRepresentable {
         @Binding private var text: String
         var onTab: () -> Void
         var onBackTab: () -> Void
+        var onMoveUp: () -> Void
+        var onMoveDown: () -> Void
+        var onToggleHighlighted: () -> Void
+        var onFocusGained: () -> Void
+        var onFocusLost: () -> Void
         weak var textField: NSTextField?
 
-        init(text: Binding<String>, onTab: @escaping () -> Void, onBackTab: @escaping () -> Void) {
+        init(
+            text: Binding<String>,
+            onTab: @escaping () -> Void,
+            onBackTab: @escaping () -> Void,
+            onMoveUp: @escaping () -> Void,
+            onMoveDown: @escaping () -> Void,
+            onToggleHighlighted: @escaping () -> Void,
+            onFocusGained: @escaping () -> Void,
+            onFocusLost: @escaping () -> Void
+        ) {
             _text = text
             self.onTab = onTab
             self.onBackTab = onBackTab
+            self.onMoveUp = onMoveUp
+            self.onMoveDown = onMoveDown
+            self.onToggleHighlighted = onToggleHighlighted
+            self.onFocusGained = onFocusGained
+            self.onFocusLost = onFocusLost
         }
 
         func controlTextDidChange(_ obj: Notification) {
             text = textField?.stringValue ?? ""
+        }
+
+        func controlTextDidBeginEditing(_ obj: Notification) {
+            onFocusGained()
+        }
+
+        func controlTextDidEndEditing(_ obj: Notification) {
+            onFocusLost()
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
@@ -64,6 +110,22 @@ struct CollectionSearchTextField: NSViewRepresentable {
             }
             if commandSelector == #selector(NSResponder.insertBacktab(_:)) {
                 onBackTab()
+                return true
+            }
+            // Override the field editor's default caret behavior so the arrows drive
+            // the highlighted-collection cursor instead of moving within the text.
+            if commandSelector == #selector(NSResponder.moveUp(_:)) {
+                onMoveUp()
+                return true
+            }
+            if commandSelector == #selector(NSResponder.moveDown(_:)) {
+                onMoveDown()
+                return true
+            }
+            // Enter toggles the highlighted collection. Consuming it keeps the field
+            // first responder (focus is not lost) and stops the form's default button.
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                onToggleHighlighted()
                 return true
             }
             return false
@@ -153,6 +215,7 @@ private final class WeakScrollViewBox {
 struct CollectionChecklistRow: View {
     let item: CollectionChecklistItem
     let isChecked: Bool
+    let isHighlighted: Bool
     let onToggleCheck: (Bool) -> Void
     let onTogglePin: () -> Void
 
@@ -187,5 +250,9 @@ struct CollectionChecklistRow: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
+        .overlay {
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(isHighlighted ? Color.blue : Color.clear, lineWidth: 1)
+        }
     }
 }
