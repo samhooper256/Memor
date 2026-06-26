@@ -20,6 +20,9 @@ final class AddInstanceWindowState: ObservableObject {
     @Published var selectedDraftID: UUID?
     @Published private(set) var latestAddedTypeID: Int64?
     @Published private(set) var latestAddNonce = UUID()
+    // Bumped every time the window is asked to open, so the editor can reset its
+    // field-area scroll position to the top (the view tree survives close/reopen).
+    @Published private(set) var openNonce = UUID()
     var lastUsedTypeID: Int64?
 
     var selectedDraft: InstanceEditorDraft? {
@@ -46,6 +49,7 @@ final class AddInstanceWindowState: ObservableObject {
     /// A preselected-type open retargets the current tab if it is completely
     /// untouched, otherwise opens a new tab for that type.
     func requestOpen(preselectedTypeID: Int64? = nil) {
+        openNonce = UUID()
         ensureAtLeastOneTab()
         guard let preselectedTypeID else { return }
         if let current = selectedDraft, current.isPristine {
@@ -62,6 +66,7 @@ final class AddInstanceWindowState: ObservableObject {
     }
 
     func requestOpenForDuplication(sourceInstanceID: Int64) {
+        openNonce = UUID()
         ensureAtLeastOneTab()
         if let current = selectedDraft, current.isPristine {
             current.pendingDuplicateSourceInstanceID = sourceInstanceID
@@ -193,6 +198,7 @@ struct AddInstanceWindowView: View {
                     draft: draft,
                     requestedInstanceID: nil,
                     requestNonce: draft.id,
+                    openNonce: windowState.openNonce,
                     dismiss: dismiss,
                     onEditSaved: nil,
                     onAddSaved: { typeID in

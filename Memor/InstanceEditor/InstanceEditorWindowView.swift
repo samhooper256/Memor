@@ -29,6 +29,9 @@ struct InstanceEditorWindowView: View {
     let requestedInstanceID: Int64?
     var requestedAutoEditPointID: Int64? = nil
     let requestNonce: UUID
+    // Add mode only: bumped each time the Add Instance window is opened, so the
+    // field area scrolls back to the top (the editor view survives window reopen).
+    var openNonce: UUID? = nil
     let dismiss: DismissAction
     let onEditSaved: ((Int64) -> Void)?
     let onAddSaved: ((Int64) -> Void)?
@@ -1500,6 +1503,12 @@ struct InstanceEditorWindowView: View {
             }
             .onChange(of: requestNonce) { _, _ in
                 guard mode == .edit else { return }
+                DispatchQueue.main.async {
+                    proxy.scrollTo("fieldsSectionTop", anchor: .top)
+                }
+            }
+            .onChange(of: openNonce) { _, _ in
+                // Add mode: the window was (re)opened — reset the scroll to the top.
                 DispatchQueue.main.async {
                     proxy.scrollTo("fieldsSectionTop", anchor: .top)
                 }
