@@ -47,6 +47,7 @@ struct InstanceEditorWindowView: View {
     @State private var allCollectionItems: [CollectionChecklistItem] = []
     @State private var collectionSearchQuery = ""
     @State private var collectionsScrollNonce = UUID()
+    @State private var addScrollNonce = UUID()   // bumped after an add to reset field scroll
     @State private var highlightedCollectionID: Int64?   // C; nil = none
     @StateObject private var focusController = AddInstanceFieldFocusController()
     @StateObject private var hyperlinkSearchController = HyperlinkSearchController()
@@ -1513,6 +1514,12 @@ struct InstanceEditorWindowView: View {
                     proxy.scrollTo("fieldsSectionTop", anchor: .top)
                 }
             }
+            .onChange(of: addScrollNonce) { _, _ in
+                // Add mode: an instance was just added — reset the scroll to the top.
+                DispatchQueue.main.async {
+                    proxy.scrollTo("fieldsSectionTop", anchor: .top)
+                }
+            }
             .onChange(of: draft.pendingDuplicateSourceInstanceID) { _, newValue in
                 guard mode == .add, newValue != nil else { return }
                 DispatchQueue.main.async {
@@ -2162,6 +2169,7 @@ struct InstanceEditorWindowView: View {
                 // Links are not sticky; clear them for the next add.
                 draft.linkTargetsByLinkFieldID = [:]
                 focusController.focusField(draft.fields.first?.id)
+                addScrollNonce = UUID()
                 showToast(message: "Instance added successfully.", style: .success)
             case .edit:
                 guard let loadedInstanceID = draft.loadedInstanceID else { return }
