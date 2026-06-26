@@ -43,6 +43,7 @@ struct InstanceEditorWindowView: View {
     @State private var toastTask: Task<Void, Never>?
     @State private var allCollectionItems: [CollectionChecklistItem] = []
     @State private var collectionSearchQuery = ""
+    @State private var collectionsScrollNonce = UUID()
     @StateObject private var focusController = AddInstanceFieldFocusController()
     @StateObject private var hyperlinkSearchController = HyperlinkSearchController()
     @StateObject private var typePickerController = TypePickerController()
@@ -146,7 +147,10 @@ struct InstanceEditorWindowView: View {
             onCommandJ: { wrapFocusedSelection(openTag: "<e>", closeTag: "</e>") },
             onCommandL: copyInstanceLinkToClipboard,
             onCommandT: mode == .add ? { presentTypePicker() } : nil,
-            onFocusCollectionSearch: { focusController.focusCollectionSearch(placingCaretAtEnd: true) },
+            onFocusCollectionSearch: {
+                collectionsScrollNonce = UUID()
+                focusController.focusCollectionSearch(placingCaretAtEnd: true)
+            },
             shortcutSettings: shortcutSettings
         )
     }
@@ -1483,9 +1487,15 @@ struct InstanceEditorWindowView: View {
 
                     if draft.selectedTypeID != nil {
                         collectionChecklistSection
+                            .id("collectionsSection")
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+            .onChange(of: collectionsScrollNonce) { _, _ in
+                DispatchQueue.main.async {
+                    proxy.scrollTo("collectionsSection", anchor: .bottom)
+                }
             }
             .onChange(of: requestNonce) { _, _ in
                 guard mode == .edit else { return }
