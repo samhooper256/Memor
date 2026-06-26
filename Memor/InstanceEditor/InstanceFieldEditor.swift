@@ -58,11 +58,15 @@ final class AddInstanceFieldFocusController: ObservableObject {
         textView.window?.makeFirstResponder(textView)
     }
 
-    func focusCollectionSearch() {
+    func focusCollectionSearch(placingCaretAtEnd: Bool = false) {
         activeFieldID = nil
         pendingFocusedFieldID = nil
         guard let collectionSearchField else { return }
         collectionSearchField.window?.makeFirstResponder(collectionSearchField)
+        if placingCaretAtEnd, let editor = collectionSearchField.currentEditor() {
+            let length = (collectionSearchField.stringValue as NSString).length
+            editor.selectedRange = NSRange(location: length, length: 0)
+        }
     }
 
     func reset(with fieldIDs: [Int64]) {

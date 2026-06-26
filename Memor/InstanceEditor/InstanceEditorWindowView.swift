@@ -146,6 +146,7 @@ struct InstanceEditorWindowView: View {
             onCommandJ: { wrapFocusedSelection(openTag: "<e>", closeTag: "</e>") },
             onCommandL: copyInstanceLinkToClipboard,
             onCommandT: mode == .add ? { presentTypePicker() } : nil,
+            onFocusCollectionSearch: { focusController.focusCollectionSearch(placingCaretAtEnd: true) },
             shortcutSettings: shortcutSettings
         )
     }

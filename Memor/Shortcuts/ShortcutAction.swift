@@ -62,6 +62,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
     case editorOpenHyperlinkSearch
     case editorPointMapAddQuery
     case editorPreviewTopQueryType
+    case editorFocusCollectionSearch
 
     // Types page / code editors
     case typesSaveCurrent
@@ -102,6 +103,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         case .editorOpenHyperlinkSearch: return "Open Hyperlink Search"
         case .editorPointMapAddQuery: return "PointMap — Add Query"
         case .editorPreviewTopQueryType: return "Preview Topmost Query"
+        case .editorFocusCollectionSearch: return "Focus Collections Search"
         case .typesSaveCurrent: return "Save Current Editor"
         case .searchResetDueDates: return "Reset Due Dates"
         }
@@ -118,7 +120,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
             return .study
         case .editorSave, .editorSubmit, .editorWrapBold, .editorWrapItalic, .editorWrapEmphasis,
              .editorInsertImage, .editorCopyLink, .editorPickType, .editorOpenHyperlinkSearch,
-             .editorPointMapAddQuery, .editorPreviewTopQueryType:
+             .editorPointMapAddQuery, .editorPreviewTopQueryType, .editorFocusCollectionSearch:
             return .editor
         case .typesSaveCurrent:
             return .types
@@ -158,6 +160,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         case .editorOpenHyperlinkSearch: return KeyBinding(key: "L", modifiers: .command)
         case .editorPointMapAddQuery: return KeyBinding(key: "A")
         case .editorPreviewTopQueryType: return KeyBinding(key: "P", modifiers: .command)
+        case .editorFocusCollectionSearch: return KeyBinding(key: "D", modifiers: .command)
         case .typesSaveCurrent: return KeyBinding(key: "S", modifiers: .command)
         case .searchResetDueDates: return KeyBinding(key: "R", modifiers: .command)
         }

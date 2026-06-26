@@ -18,6 +18,7 @@ struct WindowKeyCommandHandler: NSViewRepresentable {
     var onCommandJ: (() -> Void)? = nil
     var onCommandL: (() -> Void)? = nil
     var onCommandT: (() -> Void)? = nil
+    var onFocusCollectionSearch: (() -> Void)? = nil
     var shortcutSettings: ShortcutSettings? = nil
 
     func makeNSView(context: Context) -> KeyCommandHandlingView {
@@ -31,6 +32,7 @@ struct WindowKeyCommandHandler: NSViewRepresentable {
         view.onCommandJ = onCommandJ
         view.onCommandL = onCommandL
         view.onCommandT = onCommandT
+        view.onFocusCollectionSearch = onFocusCollectionSearch
         view.shortcutSettings = shortcutSettings
         return view
     }
@@ -45,6 +47,7 @@ struct WindowKeyCommandHandler: NSViewRepresentable {
         nsView.onCommandJ = onCommandJ
         nsView.onCommandL = onCommandL
         nsView.onCommandT = onCommandT
+        nsView.onFocusCollectionSearch = onFocusCollectionSearch
         nsView.shortcutSettings = shortcutSettings
     }
 
@@ -58,6 +61,7 @@ struct WindowKeyCommandHandler: NSViewRepresentable {
         var onCommandJ: (() -> Void)?
         var onCommandL: (() -> Void)?
         var onCommandT: (() -> Void)?
+        var onFocusCollectionSearch: (() -> Void)?
         var shortcutSettings: ShortcutSettings?
 
         private var monitor: Any?
@@ -129,6 +133,11 @@ struct WindowKeyCommandHandler: NSViewRepresentable {
                     return nil
                 }
 
+                if self.onFocusCollectionSearch != nil, self.matchesFocusCollectionSearch(event) {
+                    self.onFocusCollectionSearch?()
+                    return nil
+                }
+
                 return event
             }
         }
@@ -197,6 +206,11 @@ struct WindowKeyCommandHandler: NSViewRepresentable {
             let modifierFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             guard modifierFlags == [.command] else { return false }
             return event.charactersIgnoringModifiers?.lowercased() == "t"
+        }
+
+        private func matchesFocusCollectionSearch(_ event: NSEvent) -> Bool {
+            guard let settings = shortcutSettings else { return false }
+            return settings.binding(for: .editorFocusCollectionSearch).matches(event)
         }
     }
 }
