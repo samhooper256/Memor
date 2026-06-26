@@ -1696,12 +1696,13 @@ struct InstanceEditorWindowView: View {
         return pinned + unpinned
     }
 
-    // Moves the highlighted collection ("C") up/down the visible list, clamping at the ends.
+    // Moves the highlighted collection ("C") up/down the visible list, wrapping around
+    // from the top to the bottom and vice versa.
     private func moveHighlight(by delta: Int) {
         let items = filteredCollectionItems
         guard !items.isEmpty else { return }
         let current = items.firstIndex { $0.id == highlightedCollectionID } ?? 0
-        let next = min(max(current + delta, 0), items.count - 1)
+        let next = ((current + delta) % items.count + items.count) % items.count
         highlightedCollectionID = items[next].id
     }
 
