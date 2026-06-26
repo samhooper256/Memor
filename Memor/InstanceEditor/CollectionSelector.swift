@@ -34,13 +34,19 @@ struct CollectionSearchTextField: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSTextField {
-        let textField = NSTextField()
+        let textField = FocusReportingTextField()
         textField.delegate = context.coordinator
         textField.placeholderString = "Search collections"
         textField.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         textField.focusRingType = .none
         textField.bezelStyle = .roundedBezel
         textField.stringValue = text
+        // Detect focus via becomeFirstResponder rather than the delegate's
+        // controlTextDidBeginEditing, which does not reliably fire when the field is
+        // focused programmatically (e.g. the ⌘D shortcut's makeFirstResponder).
+        textField.onBecomeFirstResponder = { [weak coordinator = context.coordinator] in
+            coordinator?.onFocusGained()
+        }
         context.coordinator.textField = textField
         focusController.collectionSearchField = textField
         return textField
@@ -95,10 +101,8 @@ struct CollectionSearchTextField: NSViewRepresentable {
             text = textField?.stringValue ?? ""
         }
 
-        func controlTextDidBeginEditing(_ obj: Notification) {
-            onFocusGained()
-        }
-
+        // Focus gain is detected via FocusReportingTextField.becomeFirstResponder (reliable
+        // for programmatic focus); blur is captured here when the field editor ends.
         func controlTextDidEndEditing(_ obj: Notification) {
             onFocusLost()
         }
@@ -130,6 +134,21 @@ struct CollectionSearchTextField: NSViewRepresentable {
             }
             return false
         }
+    }
+}
+
+// NSTextField that reports when it becomes first responder. makeFirstResponder always
+// calls becomeFirstResponder, so this fires for both clicks and programmatic focus (⌘D),
+// unlike the controlTextDidBeginEditing delegate notification.
+private final class FocusReportingTextField: NSTextField {
+    var onBecomeFirstResponder: (() -> Void)?
+
+    override func becomeFirstResponder() -> Bool {
+        let didBecome = super.becomeFirstResponder()
+        if didBecome {
+            onBecomeFirstResponder?()
+        }
+        return didBecome
     }
 }
 
