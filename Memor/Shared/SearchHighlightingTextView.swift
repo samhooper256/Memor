@@ -117,8 +117,9 @@ struct SearchQueryTextField: NSViewRepresentable {
     var onFocusChange: ((Bool) -> Void)?
     var highlightsNoQueries: Bool
     var onBacktab: (() -> Void)?
+    var onMoveDown: (() -> Void)?
 
-    init(_ placeholder: String, text: Binding<String>, onSubmit: (() -> Void)? = nil, focusRequest: UUID? = nil, highlightsNoQueries: Bool = true, onFocusChange: ((Bool) -> Void)? = nil, onBacktab: (() -> Void)? = nil) {
+    init(_ placeholder: String, text: Binding<String>, onSubmit: (() -> Void)? = nil, focusRequest: UUID? = nil, highlightsNoQueries: Bool = true, onFocusChange: ((Bool) -> Void)? = nil, onBacktab: (() -> Void)? = nil, onMoveDown: (() -> Void)? = nil) {
         self.placeholder = placeholder
         self._text = text
         self.onSubmit = onSubmit
@@ -126,6 +127,7 @@ struct SearchQueryTextField: NSViewRepresentable {
         self.highlightsNoQueries = highlightsNoQueries
         self.onFocusChange = onFocusChange
         self.onBacktab = onBacktab
+        self.onMoveDown = onMoveDown
     }
 
     func makeCoordinator() -> Coordinator {
@@ -162,6 +164,7 @@ struct SearchQueryTextField: NSViewRepresentable {
         textView.placeholderString = placeholder
         textView.onFocusChange = onFocusChange
         textView.onBacktab = onBacktab
+        textView.onMoveDown = onMoveDown
 
         if let textContainer = textView.textContainer {
             textContainer.widthTracksTextView = false
@@ -182,6 +185,7 @@ struct SearchQueryTextField: NSViewRepresentable {
         (textView as? SearchHighlightingTextView)?.onSubmit = onSubmit
         (textView as? SearchHighlightingTextView)?.onFocusChange = onFocusChange
         (textView as? SearchHighlightingTextView)?.onBacktab = onBacktab
+        (textView as? SearchHighlightingTextView)?.onMoveDown = onMoveDown
         if textView.string != text {
             textView.string = text
             context.coordinator.applySyntaxHighlighting()
@@ -233,6 +237,7 @@ struct SearchQueryTextField: NSViewRepresentable {
         var onSubmit: (() -> Void)?
         var onFocusChange: ((Bool) -> Void)?
         var onBacktab: (() -> Void)?
+        var onMoveDown: (() -> Void)?
         var placeholderString: String = ""
 
         override func keyDown(with event: NSEvent) {
@@ -250,6 +255,12 @@ struct SearchQueryTextField: NSViewRepresentable {
             // moving focus.
             if selector == #selector(NSResponder.insertBacktab(_:)), let onBacktab {
                 onBacktab()
+                return
+            }
+            // Down arrow moves focus/selection into the results list (when there is one).
+            // Consume it either way so the caret doesn't move within the search text.
+            if selector == #selector(NSResponder.moveDown(_:)), let onMoveDown {
+                onMoveDown()
                 return
             }
             super.doCommand(by: selector)

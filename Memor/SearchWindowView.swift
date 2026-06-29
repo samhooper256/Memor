@@ -103,6 +103,7 @@ struct SearchWindowView: View {
     let appDatabase: AppDatabase
 
     @FocusState private var isStackNameFocused: Bool
+    @FocusState private var resultsListFocused: Bool
 
     @State private var searchQuery = ""
     @State private var debouncedSearchQuery = ""
@@ -335,7 +336,8 @@ struct SearchWindowView: View {
                     onFocusChange: { isFocused in
                         if isFocused { clearSelections() }
                     },
-                    onBacktab: { cycleMode() }
+                    onBacktab: { cycleMode() },
+                    onMoveDown: { moveFocusToResults() }
                 )
                 .searchCodeEditorStyle()
 
@@ -449,6 +451,7 @@ struct SearchWindowView: View {
             }
         }
         .listStyle(.inset)
+        .focused($resultsListFocused)
         .contextMenu(forSelectionType: Int64.self) { items in
             if items.count == 1, let instanceID = items.first {
                 Button("Edit") {
@@ -505,6 +508,7 @@ struct SearchWindowView: View {
             }
         }
         .listStyle(.inset)
+        .focused($resultsListFocused)
         .contextMenu(forSelectionType: String.self) { items in
             if items.count == 1,
                let queryID = items.first,
@@ -560,6 +564,7 @@ struct SearchWindowView: View {
             }
         }
         .listStyle(.inset)
+        .focused($resultsListFocused)
         .contextMenu(forSelectionType: String.self) { _ in
             // No actions in Points & Boundaries mode.
         } primaryAction: { clickedIDs in
@@ -641,6 +646,23 @@ struct SearchWindowView: View {
         selectedInstanceIDs = []
         selectedQueryIDs = []
         selectedMapElementIDs = []
+    }
+
+    // Down arrow from the focused search box: highlight the first result and move focus
+    // to the results list. No-op (search box keeps focus) when there are no results.
+    private func moveFocusToResults() {
+        switch windowState.mode {
+        case .instances:
+            guard let firstID = instanceSections.first?.instances.first?.id else { return }
+            selectedInstanceIDs = [firstID]
+        case .queries:
+            guard let firstID = querySections.first?.queries.first?.id else { return }
+            selectedQueryIDs = [firstID]
+        case .pointsAndBoundaries:
+            guard let firstID = mapElementSections.first?.elements.first?.id else { return }
+            selectedMapElementIDs = [firstID]
+        }
+        resultsListFocused = true
     }
 
     // MARK: - Search
