@@ -3156,6 +3156,46 @@ struct AppDatabase {
         }
     }
 
+    /// Creates a new (non-link) query type that copies the source query type's
+    /// question/answer HTML verbatim, under the same type.
+    func duplicateQueryType(sourceQueryTypeID: Int64, name: String) throws -> QueryType {
+        try dbQueue.write { db in
+            guard let source = try QueryType.fetchOne(
+                db,
+                sql: """
+                    SELECT
+                        id,
+                        type_id AS typeID,
+                        name,
+                        question_html AS questionHTML,
+                        answer_html AS answerHTML,
+                        link_field_id AS linkFieldID
+                    FROM query_type
+                    WHERE id = ?
+                    """,
+                arguments: [sourceQueryTypeID]
+            ) else {
+                throw DatabaseError(message: "Source query type not found.")
+            }
+
+            try db.execute(
+                sql: """
+                    INSERT INTO query_type (type_id, name, question_html, answer_html)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                arguments: [source.typeID, name, source.questionHTML, source.answerHTML]
+            )
+
+            return QueryType(
+                id: db.lastInsertedRowID,
+                typeID: source.typeID,
+                name: name,
+                questionHTML: source.questionHTML,
+                answerHTML: source.answerHTML
+            )
+        }
+    }
+
     func deleteType(typeID: Int64) throws {
         try dbQueue.write { db in
             try db.execute(

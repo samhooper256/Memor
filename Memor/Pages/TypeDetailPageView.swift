@@ -58,6 +58,8 @@ struct TypeDetailPageView: View {
     @State private var renamedQueryTypeName = ""
     @State private var isAddQueryTypePopoverPresented = false
     @State private var newQueryTypeName = ""
+    @State private var isDuplicateQueryTypePopoverPresented = false
+    @State private var duplicateQueryTypeName = ""
     @State private var queryTypePendingDeletion: QueryType?
     @State private var hasAutoPresentedRenamePopover = false
 
@@ -372,6 +374,11 @@ struct TypeDetailPageView: View {
             activeEditor = nil
             NSApp.keyWindow?.makeFirstResponder(nil)
         }
+        .onChange(of: isDuplicateQueryTypePopoverPresented) { _, isPresented in
+            guard isPresented else { return }
+            activeEditor = nil
+            NSApp.keyWindow?.makeFirstResponder(nil)
+        }
     }
 
     private var queryTypesToolbar: some View {
@@ -479,6 +486,54 @@ struct TypeDetailPageView: View {
                             .onAppear {
                                 DispatchQueue.main.async {
                                     isRenameQueryTypeNameFocused = true
+                                }
+                            }
+                        }
+                        if !displayedQueryTypes.isEmpty {
+                            Button("Duplicate Query Type") {
+                                duplicateQueryTypeName = ""
+                                activeEditor = nil
+                                NSApp.keyWindow?.makeFirstResponder(nil)
+                                isDuplicateQueryTypePopoverPresented = true
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(selectedQueryType == nil || selectedQueryType?.isLinkQuery == true)
+                            .popover(isPresented: $isDuplicateQueryTypePopoverPresented, arrowEdge: .bottom) {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    Text("Duplicate Query Type")
+                                        .font(.headline)
+
+                                    TextField("Query Type Name", text: $duplicateQueryTypeName)
+                                        .textFieldStyle(.roundedBorder)
+                                        .focused($isRenameQueryTypeNameFocused)
+                                        .onSubmit {
+                                            Task {
+                                                await duplicateSelectedQueryType()
+                                            }
+                                        }
+
+                                    HStack {
+                                        Spacer()
+
+                                        Button("Cancel") {
+                                            isDuplicateQueryTypePopoverPresented = false
+                                        }
+
+                                        Button("Duplicate") {
+                                            Task {
+                                                await duplicateSelectedQueryType()
+                                            }
+                                        }
+                                        .keyboardShortcut(.defaultAction)
+                                        .disabled(duplicateQueryTypeName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                    }
+                                }
+                                .padding(16)
+                                .frame(width: 280)
+                                .onAppear {
+                                    DispatchQueue.main.async {
+                                        isRenameQueryTypeNameFocused = true
+                                    }
                                 }
                             }
                         }
@@ -698,6 +753,27 @@ struct TypeDetailPageView: View {
             errorMessage = nil
         } catch {
             errorMessage = "Failed to add query type."
+        }
+    }
+
+    @MainActor
+    private func duplicateSelectedQueryType() async {
+        guard let selectedQueryTypeID else { return }
+
+        let trimmedQueryTypeName = duplicateQueryTypeName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedQueryTypeName.isEmpty else { return }
+
+        do {
+            let newQueryType = try appDatabase.duplicateQueryType(
+                sourceQueryTypeID: selectedQueryTypeID,
+                name: trimmedQueryTypeName
+            )
+            queryTypes = try appDatabase.fetchQueryTypes(forTypeID: type.id)
+            self.selectedQueryTypeID = newQueryType.id
+            isDuplicateQueryTypePopoverPresented = false
+            errorMessage = nil
+        } catch {
+            errorMessage = "Failed to duplicate query type."
         }
     }
 
