@@ -27,7 +27,6 @@ struct TypesPageView: View {
 
     @State private var isAddTypePopoverPresented = false
     @State private var newTypeName = ""
-    @State private var newTypeKind: TypeKind = .object
     @State private var addTypeError: String?
     @FocusState private var isNewTypeNameFocused: Bool
     @FocusState private var isSearchFocused: Bool
@@ -156,7 +155,6 @@ struct TypesPageView: View {
 
                 Button("Add Type") {
                     newTypeName = ""
-                    newTypeKind = .object
                     addTypeError = nil
                     isAddTypePopoverPresented = true
                 }
@@ -228,19 +226,6 @@ struct TypesPageView: View {
                     Task { await addType() }
                 }
 
-            Picker("Kind", selection: $newTypeKind) {
-                Text("Object").tag(TypeKind.object)
-                Text("Node").tag(TypeKind.node)
-            }
-            .pickerStyle(.radioGroup)
-
-            Text(newTypeKind == .node
-                 ? "Node types have text fields and link fields connecting instances of the same type."
-                 : "Object types store text fields.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
             if let addTypeError {
                 Text(addTypeError)
                     .font(.caption)
@@ -282,7 +267,7 @@ struct TypesPageView: View {
         let trimmedName = newTypeName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
         do {
-            let newType = try appDatabase.createType(name: trimmedName, kind: newTypeKind)
+            let newType = try appDatabase.createType(name: trimmedName, kind: .object)
             types = try appDatabase.fetchTypes()
             isAddTypePopoverPresented = false
             selectedType = newType
@@ -315,8 +300,6 @@ extension FlashcardType {
     var kindIcon: (name: String, color: Color) {
         if isMapType {
             return ("map.fill", .yellow)
-        } else if isNode {
-            return ("point.3.filled.connected.trianglepath.dotted", .green)
         } else {
             return ("doc.text.fill", .blue)
         }

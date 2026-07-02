@@ -63,17 +63,6 @@ struct TypeDetailPageView: View {
     @State private var queryTypePendingDeletion: QueryType?
     @State private var hasAutoPresentedRenamePopover = false
 
-    // Node types only
-    @State private var linkFields: [LinkField] = []
-    @State private var isLinkFieldPopoverPresented = false
-    @State private var linkFieldBeingEdited: LinkField?
-    @State private var linkFieldName = ""
-    @State private var linkFieldIsParent = false
-    @State private var linkFieldMinText = "0"
-    @State private var linkFieldMaxText = ""
-    @State private var linkFieldPendingDeletion: LinkField?
-    @FocusState private var isLinkFieldNameFocused: Bool
-
     private var selectedQueryType: QueryType? {
         guard let selectedQueryTypeID else { return nil }
         return queryTypes.first(where: { $0.id == selectedQueryTypeID })
@@ -195,14 +184,13 @@ struct TypeDetailPageView: View {
                     Text(errorMessage)
                         .foregroundStyle(.red)
                 } else {
-                    Text(type.isNode ? "Text Fields" : "Fields")
+                    Text("Fields")
                         .font(.title3)
                         .fontWeight(.semibold)
 
                     VStack(alignment: .leading, spacing: 6) {
                     FieldsSectionView(
                         fields: fields,
-                        isNode: type.isNode,
                         onEditField: { field in
                             fieldPendingRename = field
                             renamedFieldName = field.name
@@ -210,9 +198,6 @@ struct TypeDetailPageView: View {
                         },
                         onDeleteField: { field in
                             fieldPendingDeletion = field
-                        },
-                        onSetPrimary: { field in
-                            Task { await setPrimaryField(field) }
                         },
                         onReorder: { orderedIDs in
                             Task { await reorderFields(orderedIDs: orderedIDs) }
@@ -291,10 +276,6 @@ struct TypeDetailPageView: View {
                     }
                     }
 
-                    if type.isNode {
-                        linkFieldsSection
-                    }
-
                     Text("Query Types")
                         .font(.title3)
                         .fontWeight(.semibold)
@@ -325,12 +306,6 @@ struct TypeDetailPageView: View {
         }
         .onChange(of: selectedQueryTypeID) { _, newValue in
             flushPendingHTMLSave()
-            // Link queries have no editable answer; always show the question editor.
-            if let newValue,
-               queryTypes.first(where: { $0.id == newValue })?.isLinkQuery == true,
-               selectedHTMLContentMode == .answer {
-                selectedHTMLContentMode = .query
-            }
             syncSelectedQueryTypeEditorState(selectedQueryTypeID: newValue)
         }
         .onChange(of: selectedHTMLContentMode) { _, _ in
@@ -354,10 +329,8 @@ struct TypeDetailPageView: View {
         .modifier(TypeDetailAlertsModifier(
             fieldPendingDeletion: $fieldPendingDeletion,
             queryTypePendingDeletion: $queryTypePendingDeletion,
-            linkFieldPendingDeletion: $linkFieldPendingDeletion,
             onDeleteField: { field in Task { await deleteField(field) } },
-            onDeleteQueryType: { queryType in Task { await deleteQueryType(queryType) } },
-            onDeleteLinkField: { linkField in Task { await deleteLinkField(linkField) } }
+            onDeleteQueryType: { queryType in Task { await deleteQueryType(queryType) } }
         ))
         .onChange(of: isRenameQueryTypePopoverPresented) { _, isPresented in
             guard isPresented else { return }
@@ -497,7 +470,7 @@ struct TypeDetailPageView: View {
                                 isDuplicateQueryTypePopoverPresented = true
                             }
                             .buttonStyle(.bordered)
-                            .disabled(selectedQueryType == nil || selectedQueryType?.isLinkQuery == true)
+                            .disabled(selectedQueryType == nil)
                             .popover(isPresented: $isDuplicateQueryTypePopoverPresented, arrowEdge: .bottom) {
                                 VStack(alignment: .leading, spacing: 12) {
                                     Text("Duplicate Query Type")
@@ -543,7 +516,7 @@ struct TypeDetailPageView: View {
                             }
                             .buttonStyle(.bordered)
                             .tint(.red)
-                            .disabled(selectedQueryType == nil || selectedQueryType?.isLinkQuery == true)
+                            .disabled(selectedQueryType == nil)
                         }
                     }
     }
@@ -551,26 +524,19 @@ struct TypeDetailPageView: View {
     @ViewBuilder
     private var queryEditorAndPreview: some View {
         if !displayedQueryTypes.isEmpty {
-                        if selectedQueryType?.isLinkQuery == true {
-                            Text("This is an auto-generated link query. You can edit its question; the answer lists the linked nodes automatically.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        } else {
-                            HStack(spacing: 16) {
-                                RadioSelectionButton(
-                                    title: "Question",
-                                    isSelected: selectedHTMLContentMode == .query
-                                ) {
-                                    selectedHTMLContentMode = .query
-                                }
+                        HStack(spacing: 16) {
+                            RadioSelectionButton(
+                                title: "Question",
+                                isSelected: selectedHTMLContentMode == .query
+                            ) {
+                                selectedHTMLContentMode = .query
+                            }
 
-                                RadioSelectionButton(
-                                    title: "Answer",
-                                    isSelected: selectedHTMLContentMode == .answer
-                                ) {
-                                    selectedHTMLContentMode = .answer
-                                }
+                            RadioSelectionButton(
+                                title: "Answer",
+                                isSelected: selectedHTMLContentMode == .answer
+                            ) {
+                                selectedHTMLContentMode = .answer
                             }
                         }
 
@@ -600,9 +566,6 @@ struct TypeDetailPageView: View {
             selectedTypeCSS = currentType.css
             isSyncingEditorState = false
             fields = try appDatabase.fetchFieldsForDisplay(forTypeID: type.id)
-            if type.isNode {
-                linkFields = try appDatabase.fetchLinkFields(forTypeID: type.id)
-            }
             queryTypes = try appDatabase.fetchQueryTypes(forTypeID: type.id)
             selectedQueryTypeID = displayedQueryTypes.first?.id
             syncSelectedQueryTypeEditorState(selectedQueryTypeID: selectedQueryTypeID)
@@ -945,20 +908,6 @@ struct TypeDetailPageView: View {
         }
     }
 
-    // MARK: - Node types
-
-    @MainActor
-    private func setPrimaryField(_ field: TypeField) async {
-        guard !field.isPrimary else { return }
-        do {
-            try appDatabase.setPrimaryField(fieldID: field.id, forTypeID: type.id)
-            fields = try appDatabase.fetchFieldsForDisplay(forTypeID: type.id)
-            errorMessage = nil
-        } catch {
-            errorMessage = "Failed to set primary field."
-        }
-    }
-
     // Persists a new text-field display order (field_display_index renumbered
     // 1...N) from the drag-reordered list of field IDs.
     @MainActor
@@ -976,214 +925,13 @@ struct TypeDetailPageView: View {
             errorMessage = "Failed to reorder fields."
         }
     }
-
-    private var linkFieldsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Link Fields")
-                .font(.title3)
-                .fontWeight(.semibold)
-
-            if linkFields.isEmpty {
-                Text("No link fields yet.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(linkFields.enumerated()), id: \.element.id) { index, linkField in
-                        HStack(spacing: 12) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(linkField.name)
-                                Text(linkFieldDetailText(linkField))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-
-                            Button {
-                                beginEditingLinkField(linkField)
-                            } label: {
-                                Image(systemName: "pencil")
-                            }
-                            .buttonStyle(.plain)
-
-                            Button {
-                                linkFieldPendingDeletion = linkField
-                            } label: {
-                                Image(systemName: "trash")
-                                    .foregroundStyle(.red)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-
-                        if index < linkFields.count - 1 {
-                            Divider()
-                        }
-                    }
-                }
-                .background(Color(NSColor.controlBackgroundColor))
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 14)
-                        .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
-                }
-            }
-
-            Button("Add Link Field") {
-                beginAddingLinkField()
-            }
-            .popover(isPresented: $isLinkFieldPopoverPresented, arrowEdge: .bottom) {
-                linkFieldPopover
-            }
-        }
-    }
-
-    private var linkFieldPopover: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(linkFieldBeingEdited == nil ? "Add Link Field" : "Edit Link Field")
-                .font(.headline)
-
-            TextField("Link Field Name", text: $linkFieldName)
-                .textFieldStyle(.roundedBorder)
-                .focused($isLinkFieldNameFocused)
-
-            Toggle("Parent link", isOn: $linkFieldIsParent)
-
-            HStack(spacing: 8) {
-                Text("Min:")
-                TextField("0", text: $linkFieldMinText)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 60)
-                    .onChange(of: linkFieldMinText) { _, newValue in
-                        let digits = newValue.filter(\.isNumber)
-                        if digits != newValue { linkFieldMinText = digits }
-                    }
-
-                Text("Max:")
-                TextField("∞", text: $linkFieldMaxText)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 60)
-                    .onChange(of: linkFieldMaxText) { _, newValue in
-                        let digits = newValue.filter(\.isNumber)
-                        if digits != newValue { linkFieldMaxText = digits }
-                    }
-            }
-            Text("Leave Max blank for unlimited.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            HStack {
-                Spacer()
-                Button("Cancel") {
-                    isLinkFieldPopoverPresented = false
-                }
-                Button("Save") {
-                    Task { await saveLinkField() }
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(linkFieldName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-        .padding(16)
-        .frame(width: 300)
-        .onAppear {
-            DispatchQueue.main.async { isLinkFieldNameFocused = true }
-        }
-    }
-
-    private func linkFieldDetailText(_ linkField: LinkField) -> String {
-        let maxText = linkField.maxCount.map(String.init) ?? "∞"
-        var parts = ["min \(linkField.minCount)", "max \(maxText)"]
-        if linkField.isParent { parts.append("parent") }
-        return parts.joined(separator: " · ")
-    }
-
-    private func beginAddingLinkField() {
-        linkFieldBeingEdited = nil
-        linkFieldName = ""
-        linkFieldIsParent = false
-        linkFieldMinText = "0"
-        linkFieldMaxText = ""
-        isLinkFieldPopoverPresented = true
-    }
-
-    private func beginEditingLinkField(_ linkField: LinkField) {
-        linkFieldBeingEdited = linkField
-        linkFieldName = linkField.name
-        linkFieldIsParent = linkField.isParent
-        linkFieldMinText = String(linkField.minCount)
-        linkFieldMaxText = linkField.maxCount.map(String.init) ?? ""
-        isLinkFieldPopoverPresented = true
-    }
-
-    @MainActor
-    private func saveLinkField() async {
-        let trimmedName = linkFieldName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedName.isEmpty else { return }
-        let minCount = Int(linkFieldMinText) ?? 0
-        let maxCount = Int(linkFieldMaxText)
-        if let maxCount, maxCount < minCount {
-            errorMessage = "Maximum must be greater than or equal to minimum."
-            return
-        }
-
-        do {
-            if let linkFieldBeingEdited {
-                try appDatabase.updateLinkField(
-                    linkFieldID: linkFieldBeingEdited.id,
-                    name: trimmedName,
-                    isParent: linkFieldIsParent,
-                    minCount: minCount,
-                    maxCount: maxCount
-                )
-            } else {
-                _ = try appDatabase.createLinkField(
-                    forTypeID: type.id,
-                    name: trimmedName,
-                    isParent: linkFieldIsParent,
-                    minCount: minCount,
-                    maxCount: maxCount
-                )
-            }
-            linkFields = try appDatabase.fetchLinkFields(forTypeID: type.id)
-            queryTypes = try appDatabase.fetchQueryTypes(forTypeID: type.id)
-            if selectedQueryTypeID == nil {
-                selectedQueryTypeID = displayedQueryTypes.first?.id
-                syncSelectedQueryTypeEditorState(selectedQueryTypeID: selectedQueryTypeID)
-            }
-            isLinkFieldPopoverPresented = false
-            errorMessage = nil
-        } catch {
-            errorMessage = (error as? DatabaseError)?.message ?? "Failed to save link field."
-        }
-    }
-
-    @MainActor
-    private func deleteLinkField(_ linkField: LinkField) async {
-        do {
-            try appDatabase.deleteLinkField(linkFieldID: linkField.id)
-            linkFields = try appDatabase.fetchLinkFields(forTypeID: type.id)
-            queryTypes = try appDatabase.fetchQueryTypes(forTypeID: type.id)
-            if !queryTypes.contains(where: { $0.id == selectedQueryTypeID }) {
-                selectedQueryTypeID = displayedQueryTypes.first?.id
-                syncSelectedQueryTypeEditorState(selectedQueryTypeID: selectedQueryTypeID)
-            }
-            linkFieldPendingDeletion = nil
-            errorMessage = nil
-        } catch {
-            errorMessage = "Failed to delete link field."
-        }
-    }
 }
 
 private struct TypeDetailAlertsModifier: ViewModifier {
     @Binding var fieldPendingDeletion: TypeField?
     @Binding var queryTypePendingDeletion: QueryType?
-    @Binding var linkFieldPendingDeletion: LinkField?
     let onDeleteField: (TypeField) -> Void
     let onDeleteQueryType: (QueryType) -> Void
-    let onDeleteLinkField: (LinkField) -> Void
 
     func body(content: Content) -> some View {
         content
@@ -1213,19 +961,6 @@ private struct TypeDetailAlertsModifier: ViewModifier {
             } message: { _ in
                 Text("This action is irreversible.")
             }
-            .alert(
-                "Are you sure you want to delete \(linkFieldPendingDeletion?.name ?? "")?",
-                isPresented: Binding(
-                    get: { linkFieldPendingDeletion != nil },
-                    set: { if !$0 { linkFieldPendingDeletion = nil } }
-                ),
-                presenting: linkFieldPendingDeletion
-            ) { linkField in
-                Button("Delete", role: .destructive) { onDeleteLinkField(linkField) }
-                Button("Cancel", role: .cancel) { linkFieldPendingDeletion = nil }
-            } message: { _ in
-                Text("This action is irreversible. Its auto-generated query type and all links in this field will be deleted.")
-            }
     }
 }
 
@@ -1238,10 +973,8 @@ private struct FieldRowFramePreferenceKey: PreferenceKey {
 
 private struct FieldsSectionView: View {
     let fields: [TypeField]
-    var isNode: Bool = false
     let onEditField: (TypeField) -> Void
     let onDeleteField: (TypeField) -> Void
-    var onSetPrimary: (TypeField) -> Void = { _ in }
     var onReorder: (_ orderedIDs: [Int64]) -> Void = { _ in }
 
     private static let coordinateSpaceName = "fieldsList"
@@ -1302,20 +1035,6 @@ private struct FieldsSectionView: View {
 
             Text(field.name)
                 .frame(maxWidth: .infinity, alignment: .leading)
-
-            // Boolean fields can't be the primary field (it drives node display chips).
-            if isNode && field.fieldType == .text {
-                Button {
-                    onSetPrimary(field)
-                } label: {
-                    Label("Primary", systemImage: field.isPrimary ? "largecircle.fill.circle" : "circle")
-                        .labelStyle(.titleAndIcon)
-                        .font(.caption)
-                        .foregroundStyle(field.isPrimary ? Color.accentColor : Color.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Mark as the primary field")
-            }
 
             Button {
                 onEditField(field)
