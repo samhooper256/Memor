@@ -2418,7 +2418,8 @@ struct AppDatabase {
                         field_index AS fieldIndex,
                         field_display_index AS fieldDisplayIndex,
                         COALESCE(is_primary, 0) AS isPrimary,
-                        field_type AS fieldType
+                        field_type AS fieldType,
+                        COALESCE(is_protected, 0) AS isProtected
                     FROM field
                     WHERE type_id = ?
                     ORDER BY field_index, id
@@ -2440,7 +2441,8 @@ struct AppDatabase {
                         field_index AS fieldIndex,
                         field_display_index AS fieldDisplayIndex,
                         COALESCE(is_primary, 0) AS isPrimary,
-                        field_type AS fieldType
+                        field_type AS fieldType,
+                        COALESCE(is_protected, 0) AS isProtected
                     FROM field
                     WHERE type_id = ?
                     ORDER BY field_display_index, id
@@ -3152,6 +3154,14 @@ struct AppDatabase {
 
     func deleteType(typeID: Int64) throws {
         try dbQueue.write { db in
+            let isBuiltin = try Bool.fetchOne(
+                db,
+                sql: "SELECT COALESCE(is_builtin, 0) FROM \"type\" WHERE id = ?",
+                arguments: [typeID]
+            ) ?? false
+            if isBuiltin {
+                throw DatabaseError(message: "Built-in types cannot be deleted.")
+            }
             try db.execute(
                 sql: """
                     DELETE FROM query_type
@@ -4247,11 +4257,19 @@ struct AppDatabase {
         case .boolean:
             let v = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             return (v == "1" || v == "true") ? "1" : "0"
+        case .sex:
+            // Required with default Male: anything that isn't exactly "female"
+            // (case-insensitive) normalizes to "Male", so the field is never empty.
+            let v = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return v == "female" ? "Female" : "Male"
         }
     }
 
     func addField(toTypeID typeID: Int64, name: String, fieldType: FieldKind = .text) throws -> TypeField {
         try dbQueue.write { db in
+            guard fieldType != .sex else {
+                throw DatabaseError(message: "Sex fields are built into the Person type and cannot be created.")
+            }
             let nextFieldIndex = (try Int.fetchOne(
                 db,
                 sql: """
@@ -4305,7 +4323,8 @@ struct AppDatabase {
                         field_index AS fieldIndex,
                         field_display_index AS fieldDisplayIndex,
                         COALESCE(is_primary, 0) AS isPrimary,
-                        field_type AS fieldType
+                        field_type AS fieldType,
+                        COALESCE(is_protected, 0) AS isProtected
                     FROM field
                     WHERE id = ? AND type_id = ?
                     """,
@@ -4314,6 +4333,9 @@ struct AppDatabase {
                 throw DatabaseError(message: "Field not found.")
             }
 
+            if field.isProtected {
+                throw DatabaseError(message: "This field is built into the Person type and cannot be deleted.")
+            }
             if field.isPrimary {
                 throw DatabaseError(message: "Cannot delete the primary field. Mark another text field as primary first.")
             }
@@ -4359,6 +4381,14 @@ struct AppDatabase {
 
     func renameField(fieldID: Int64, fromTypeID typeID: Int64, to newName: String) throws {
         try dbQueue.write { db in
+            let isProtected = try Bool.fetchOne(
+                db,
+                sql: "SELECT COALESCE(is_protected, 0) FROM field WHERE id = ? AND type_id = ?",
+                arguments: [fieldID, typeID]
+            ) ?? false
+            if isProtected {
+                throw DatabaseError(message: "This field is built into the Person type and cannot be renamed.")
+            }
             try db.execute(
                 sql: """
                     UPDATE field
@@ -4393,8 +4423,8 @@ struct AppDatabase {
                 sql: "SELECT field_type FROM field WHERE id = ? AND type_id = ?",
                 arguments: [fieldID, typeID]
             )
-            if fieldTypeRaw == FieldKind.boolean.rawValue {
-                throw DatabaseError(message: "A boolean field cannot be the primary field.")
+            if fieldTypeRaw == FieldKind.boolean.rawValue || fieldTypeRaw == FieldKind.sex.rawValue {
+                throw DatabaseError(message: "Only a text field can be the primary field.")
             }
             try db.execute(
                 sql: "UPDATE field SET is_primary = 0 WHERE type_id = ?",
@@ -4447,6 +4477,14 @@ struct AppDatabase {
 
     func renameType(typeID: Int64, to newName: String) throws {
         try dbQueue.write { db in
+            let isBuiltin = try Bool.fetchOne(
+                db,
+                sql: "SELECT COALESCE(is_builtin, 0) FROM \"type\" WHERE id = ?",
+                arguments: [typeID]
+            ) ?? false
+            if isBuiltin {
+                throw DatabaseError(message: "Built-in types cannot be renamed.")
+            }
             try db.execute(
                 sql: """
                     UPDATE "type"

@@ -295,6 +295,10 @@ extension FlashcardType {
         isBuiltin && (name == POINTMAP_TYPE_NAME || name == BOUNDARYMAP_TYPE_NAME)
     }
 
+    var isPerson: Bool {
+        isBuiltin && name == PERSON_TYPE_NAME
+    }
+
     // SF Symbol + color indicating the type's kind. Shared by the Types tab and
     // the Instances tab sidebar.
     var kindIcon: (name: String, color: Color) {

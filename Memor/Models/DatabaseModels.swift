@@ -11,6 +11,7 @@ import GRDB
 
 nonisolated let POINTMAP_TYPE_NAME = "PointMap"
 nonisolated let BOUNDARYMAP_TYPE_NAME = "BoundaryMap"
+nonisolated let PERSON_TYPE_NAME = "Person"
 
 struct FlashcardType: Identifiable, FetchableRecord, Decodable, Hashable {
     let id: Int64
@@ -110,10 +111,14 @@ struct BoundaryMapInstanceWithBoundaries: Hashable {
 
 // The kind of a field on an Object type. `text` is a free-text field;
 // `boolean` is a checkbox stored as the text "0"/"1" in the type{N} table.
-// A field's kind is fixed at creation time and cannot be changed afterward.
+// `sex` is the built-in Person type's Male/Female selector, stored as the
+// literal string "Male" or "Female" (so {{Sex}} renders as-is); it is
+// seed-only — users cannot create sex fields. A field's kind is fixed at
+// creation time and cannot be changed afterward.
 enum FieldKind: String, Codable, Hashable {
     case text
     case boolean
+    case sex
 }
 
 struct TypeField: Identifiable, FetchableRecord, Decodable {
@@ -124,6 +129,8 @@ struct TypeField: Identifiable, FetchableRecord, Decodable {
     let fieldDisplayIndex: Int
     let isPrimary: Bool
     let fieldType: FieldKind
+    // Built-in Person fields (Sex/WhenBorn/WhenDied): cannot be renamed or deleted.
+    let isProtected: Bool
 
     init(
         id: Int64,
@@ -132,7 +139,8 @@ struct TypeField: Identifiable, FetchableRecord, Decodable {
         fieldIndex: Int,
         fieldDisplayIndex: Int,
         isPrimary: Bool = false,
-        fieldType: FieldKind = .text
+        fieldType: FieldKind = .text,
+        isProtected: Bool = false
     ) {
         self.id = id
         self.typeID = typeID
@@ -141,12 +149,13 @@ struct TypeField: Identifiable, FetchableRecord, Decodable {
         self.fieldDisplayIndex = fieldDisplayIndex
         self.isPrimary = isPrimary
         self.fieldType = fieldType
+        self.isProtected = isProtected
     }
 
-    // Lenient: SELECTs that don't project isPrimary / fieldType default them to
-    // false / .text respectively.
+    // Lenient: SELECTs that don't project isPrimary / fieldType / isProtected
+    // default them to false / .text / false respectively.
     enum CodingKeys: String, CodingKey {
-        case id, typeID, name, fieldIndex, fieldDisplayIndex, isPrimary, fieldType
+        case id, typeID, name, fieldIndex, fieldDisplayIndex, isPrimary, fieldType, isProtected
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -157,6 +166,7 @@ struct TypeField: Identifiable, FetchableRecord, Decodable {
         fieldDisplayIndex = try c.decode(Int.self, forKey: .fieldDisplayIndex)
         isPrimary = (try? c.decodeIfPresent(Bool.self, forKey: .isPrimary)) ?? false
         fieldType = (try? c.decodeIfPresent(FieldKind.self, forKey: .fieldType)) ?? .text
+        isProtected = (try? c.decodeIfPresent(Bool.self, forKey: .isProtected)) ?? false
     }
 }
 

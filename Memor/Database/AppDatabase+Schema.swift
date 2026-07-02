@@ -46,6 +46,7 @@ extension AppDatabase {
             try migrateFieldPrimaryColumn(db: db)
             try migrateTypeDescriptionColumn(db: db)
             try migrateFieldTypeColumn(db: db)
+            try migrateFieldProtectedColumn(db: db)
 
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS globals (
@@ -311,6 +312,168 @@ extension AppDatabase {
 
             try migrateBoundaryMapInstanceDescriptionColumn(db: db)
 
+            // MARK: Person relationship tables
+            //
+            // Relationships between two Person INSTANCES are stored exactly once,
+            // so both people's views agree by construction. Bare-name entries
+            // (free text standing in for someone without an instance) anchor to
+            // the one instance side and carry no reciprocity. Foreign keys
+            // reference instance_id_type_id as CASCADE backstops only — the real
+            // deletion semantics (convert references to bare names) run in Swift
+            // before the generic instance delete.
+
+            // One row per partnership "stint" (duplicates between the same two
+            // people are allowed — e.g. married, divorced, remarried). is_married
+            // and the freetext start/end are stored once here, so both partners'
+            // views are guaranteed consistent. Each side keeps its own position
+            // in its own partner list (a_order_index / b_order_index). Row ids
+            // are STABLE across edits (UPDATE in place, never delete+reinsert)
+            // because person_query's children_with rows anchor SRS state to them.
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS person_partnership (
+                    id INTEGER PRIMARY KEY,
+                    a_id INTEGER NOT NULL
+                        REFERENCES instance_id_type_id(instance_id) ON DELETE CASCADE,
+                    b_id INTEGER
+                        REFERENCES instance_id_type_id(instance_id) ON DELETE CASCADE,
+                    b_bare TEXT,
+                    is_married INTEGER NOT NULL DEFAULT 0,
+                    start_text TEXT NOT NULL DEFAULT '',
+                    end_text TEXT NOT NULL DEFAULT '',
+                    a_order_index INTEGER NOT NULL DEFAULT 0,
+                    b_order_index INTEGER,
+                    CHECK ((b_id IS NULL) != (b_bare IS NULL)),
+                    CHECK (b_id IS NULL OR b_id != a_id),
+                    CHECK ((b_id IS NULL) = (b_order_index IS NULL))
+                ) STRICT
+                """)
+            try db.execute(sql: """
+                CREATE INDEX IF NOT EXISTS idx_person_partnership_a ON person_partnership(a_id)
+                """)
+            try db.execute(sql: """
+                CREATE INDEX IF NOT EXISTS idx_person_partnership_b ON person_partnership(b_id)
+                """)
+
+            // A child of a partnership: ONE row per grouped child, so the
+            // children's order is shared between both parents by construction.
+            // An instance child can be grouped at most once globally (one
+            // biological mother + father).
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS person_partnership_child (
+                    id INTEGER PRIMARY KEY,
+                    partnership_id INTEGER NOT NULL
+                        REFERENCES person_partnership(id) ON DELETE CASCADE,
+                    child_id INTEGER
+                        REFERENCES instance_id_type_id(instance_id) ON DELETE CASCADE,
+                    child_bare TEXT,
+                    order_index INTEGER NOT NULL DEFAULT 0,
+                    CHECK ((child_id IS NULL) != (child_bare IS NULL))
+                ) STRICT
+                """)
+            try db.execute(sql: """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_person_partnership_child_unique
+                    ON person_partnership_child(child_id) WHERE child_id IS NOT NULL
+                """)
+            try db.execute(sql: """
+                CREATE INDEX IF NOT EXISTS idx_person_partnership_child_partnership
+                    ON person_partnership_child(partnership_id)
+                """)
+
+            // The child-side canonical slots: 0-or-1 mother/father/adoptive_mother/
+            // adoptive_father per child (DB-enforced by UNIQUE(child_id, role)).
+            // Grouping-implied biological parents are MATERIALIZED here by the
+            // save routine, so "who is C's mother" is always one indexed lookup.
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS person_parent (
+                    id INTEGER PRIMARY KEY,
+                    child_id INTEGER NOT NULL
+                        REFERENCES instance_id_type_id(instance_id) ON DELETE CASCADE,
+                    role TEXT NOT NULL
+                        CHECK (role IN ('mother','father','adoptive_mother','adoptive_father')),
+                    parent_id INTEGER
+                        REFERENCES instance_id_type_id(instance_id) ON DELETE CASCADE,
+                    parent_bare TEXT,
+                    CHECK ((parent_id IS NULL) != (parent_bare IS NULL)),
+                    CHECK (parent_id IS NULL OR parent_id != child_id),
+                    UNIQUE (child_id, role)
+                ) STRICT
+                """)
+            try db.execute(sql: """
+                CREATE INDEX IF NOT EXISTS idx_person_parent_parent ON person_parent(parent_id)
+                """)
+
+            // Parent-side list of UNGROUPED children (not associated with any
+            // partner): holds their order plus bare-name children. For instance
+            // children this is a maintained projection of person_parent
+            // (invariant: a person_direct_child row exists iff the child's
+            // matching person_parent row names this parent and the child is not
+            // grouped under any of this parent's partnerships).
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS person_direct_child (
+                    id INTEGER PRIMARY KEY,
+                    parent_id INTEGER NOT NULL
+                        REFERENCES instance_id_type_id(instance_id) ON DELETE CASCADE,
+                    child_id INTEGER
+                        REFERENCES instance_id_type_id(instance_id) ON DELETE CASCADE,
+                    child_bare TEXT,
+                    order_index INTEGER NOT NULL DEFAULT 0,
+                    CHECK ((child_id IS NULL) != (child_bare IS NULL)),
+                    CHECK (child_id IS NULL OR child_id != parent_id)
+                ) STRICT
+                """)
+            try db.execute(sql: """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_person_direct_child_unique
+                    ON person_direct_child(parent_id, child_id) WHERE child_id IS NOT NULL
+                """)
+            try db.execute(sql: """
+                CREATE INDEX IF NOT EXISTS idx_person_direct_child_parent
+                    ON person_direct_child(parent_id)
+                """)
+            try db.execute(sql: """
+                CREATE INDEX IF NOT EXISTS idx_person_direct_child_child
+                    ON person_direct_child(child_id)
+                """)
+
+            // Built-in Person relationship queries (Mother/Father/Parents/
+            // Adoptive Mother/Adoptive Father/Children/Children with {partner}/
+            // Full Siblings). A row's existence == that query being enabled for
+            // that instance (mirrors pointmap_query). partnership_id is non-NULL
+            // exactly for kind = 'children_with' (one row per partner entry, per
+            // side). The kind set is a closed Swift enum (PersonQueryKind) — no
+            // CHECK constraint, since SQLite CHECKs can't be altered later.
+            // Must be created after person_partnership (FK target).
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS person_query (
+                    id INTEGER PRIMARY KEY,
+                    instance_id INTEGER NOT NULL
+                        REFERENCES instance_id_type_id(instance_id) ON DELETE CASCADE,
+                    kind TEXT NOT NULL,
+                    partnership_id INTEGER
+                        REFERENCES person_partnership(id) ON DELETE CASCADE,
+                    interval INTEGER NOT NULL DEFAULT 0,
+                    last_answered_timestamp INTEGER DEFAULT NULL,
+                    query_state INTEGER NOT NULL DEFAULT 0
+                ) STRICT
+                """)
+            // SQLite UNIQUE treats NULLs as distinct, so a single
+            // UNIQUE(instance_id, kind, partnership_id) would allow duplicate
+            // standalone rows; two partial unique indexes cover both shapes
+            // (INSERT OR IGNORE respects partial unique indexes).
+            try db.execute(sql: """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_person_query_unique_standalone
+                    ON person_query(instance_id, kind) WHERE partnership_id IS NULL
+                """)
+            try db.execute(sql: """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_person_query_unique_partner
+                    ON person_query(instance_id, kind, partnership_id) WHERE partnership_id IS NOT NULL
+                """)
+            try db.execute(sql: """
+                CREATE INDEX IF NOT EXISTS idx_person_query_instance ON person_query(instance_id)
+                """)
+            try db.execute(sql: """
+                CREATE INDEX IF NOT EXISTS idx_person_query_partnership ON person_query(partnership_id)
+                """)
+
             // Seed the built-in PointMap type (idempotent)
             let existingPointMapTypeID = try Int64.fetchOne(
                 db,
@@ -346,6 +509,8 @@ extension AppDatabase {
                     arguments: [BOUNDARYMAP_TYPE_NAME, ""]
                 )
             }
+
+            try seedPersonType(db: db)
 
             if isNewDatabase {
                 try db.execute(
@@ -579,6 +744,89 @@ extension AppDatabase {
         if !names.contains("field_type") {
             try db.execute(sql: "ALTER TABLE field ADD COLUMN field_type TEXT NOT NULL DEFAULT 'text'")
         }
+    }
+
+    // Adds the field.is_protected column (built-in Person fields that can't be
+    // renamed or deleted) to databases created before the Person type existed.
+    // Idempotent. Existing fields default to unprotected.
+    private static func migrateFieldProtectedColumn(db: Database) throws {
+        let info = try Row.fetchAll(db, sql: "PRAGMA table_info(field)")
+        let names = Set(info.compactMap { $0["name"] as String? })
+        if !names.contains("is_protected") {
+            try db.execute(sql: "ALTER TABLE field ADD COLUMN is_protected INTEGER NOT NULL DEFAULT 0")
+        }
+    }
+
+    // Seeds the built-in Person type (idempotent, PointMap pattern): the type
+    // row, its fields — deletable Name/Description plus protected
+    // Sex/WhenBorn/WhenDied — the dynamic type{N} table, and one premade
+    // (ordinary, deletable) "Name" query type. Runs on every launch; no-ops
+    // once the type exists.
+    private static func seedPersonType(db: Database) throws {
+        let existingPersonTypeID = try Int64.fetchOne(
+            db,
+            sql: """
+                SELECT id FROM "type" WHERE name = ? AND is_builtin = 1
+                """,
+            arguments: [PERSON_TYPE_NAME]
+        )
+        guard existingPersonTypeID == nil else { return }
+
+        try db.execute(
+            sql: """
+                INSERT INTO "type" (name, css, is_builtin)
+                VALUES (?, ?, 1)
+                """,
+            arguments: [PERSON_TYPE_NAME, ""]
+        )
+        let personTypeID = db.lastInsertedRowID
+
+        try db.execute(
+            sql: """
+                INSERT INTO field (type_id, name, field_index, field_display_index, field_type, is_protected)
+                VALUES
+                    (?, 'Name',        1, 1, 'text', 0),
+                    (?, 'Sex',         2, 2, 'sex',  1),
+                    (?, 'WhenBorn',    3, 3, 'text', 1),
+                    (?, 'WhenDied',    4, 4, 'text', 1),
+                    (?, 'Description', 5, 5, 'text', 0)
+                """,
+            arguments: [personTypeID, personTypeID, personTypeID, personTypeID, personTypeID]
+        )
+
+        // Sex is required with default Male; the NOT NULL DEFAULT guarantees a
+        // value even for rows written before a caller knew about the field.
+        try db.execute(sql: """
+            CREATE TABLE "type\(personTypeID)" (
+                id INTEGER PRIMARY KEY,
+                field1 TEXT,
+                field2 TEXT NOT NULL DEFAULT 'Male',
+                field3 TEXT,
+                field4 TEXT,
+                field5 TEXT,
+                FOREIGN KEY (id) REFERENCES instance_id_type_id(instance_id) ON DELETE CASCADE
+            ) STRICT
+            """)
+
+        try db.execute(
+            sql: """
+                INSERT INTO query_type (type_id, name, question_html, answer_html)
+                VALUES (?, ?, ?, ?)
+                """,
+            arguments: [
+                personTypeID,
+                "Name",
+                "<div class=\"Name\">{{Name}}</div>",
+                uniteQuestionAndAnswerWithDefaultSeparator(
+                    questionHTML: "{{#QuestionContent}}",
+                    answerHTML: """
+                    <div class="Description">{{Description}}</div>
+                    <div class="WhenBorn">{{WhenBorn}}</div>
+                    <div class="WhenDied">{{WhenDied}}</div>
+                    """
+                )
+            ]
+        )
     }
 
     // Adds the field.is_primary column to databases created before it existed.
