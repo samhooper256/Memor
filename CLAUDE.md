@@ -19,10 +19,13 @@ Memor/
   QueryPreviewWindowView.swift      Query preview WKWebView window
   TypesPageView.swift               Types list view + TypeRowView
   Database/
-    AppDatabase+Schema.swift        createSchema (run every launch) + idempotent migration helpers; canonical table/index definitions
-    AppDatabase+StackCounts.swift   Stacks-tab refresh: staticTruthValue expression pruning + batched per-type/per-map color-count SQL (refreshStacksPageData / refreshStackQueryCounts)
+    AppDatabase+Schema.swift        createSchema (run every launch) + idempotent migration helpers + purgeNodeMachinery (one-time destructive Node removal); canonical table/index definitions; Person seed
+    AppDatabase+StackCounts.swift   Stacks-tab refresh: staticTruthValue expression pruning + batched per-type/per-map/per-person color-count SQL (refreshStacksPageData / refreshStackQueryCounts)
+    AppDatabase+Person.swift        Person relationship engine: fetchPersonEditorData, savePersonInstance (diff → conflict collection → propagation), deletePersonRelations (convert-to-bare), fetchPersonCandidates, reset-flag accessors
+    AppDatabase+PersonQueries.swift Built-in Person queries: enablement, SRS apply/revert, makePersonStudyQuery (the single computed-HTML seam), personQueryJoinFrom + the search/stacks/study fetchers
   Models/
     DatabaseModels.swift            All plain-data structs/enums returned by AppDatabase
+    PersonModels.swift              Person types: PersonRef (instance-or-bare-name), slot drafts, PersonQueryKind, PersonSaveError conflicts, the save change set
   Pages/
     StacksPageView.swift            Stacks sidebar + detail pages, stack cards
     InstancesPageView.swift         Instances sidebar + type-instances table + toast + key commands
@@ -35,8 +38,9 @@ Memor/
     InstanceEditorWindowView.swift  Core editor body shared by Add/Edit instance windows (InstanceEditorMode enum lives here)
     InstanceEditorDraft.swift       Per-tab ObservableObject holding all in-progress instance state (isDirty/isPristine/tabTitle); Add-mode drafts live on AddInstanceWindowState so tabs survive window close (in-memory only, never persisted)
     AddInstanceTabBar.swift         Add Instance tab strip (chips + X + "+") and the window-scoped ⌘1–⌘9/⌘W key monitor (non-customizable)
-    InstanceFieldEditor.swift       Per-field editor cell, InstanceTextView (NSViewRepresentable), AddInstanceFieldFocusController
-    NodeLinkFieldEditor.swift       Node-instance link-field editor: target chips + search popover (uses fetchNodeCandidates)
+    InstanceFieldEditor.swift       Per-field editor cell (text/boolean/sex), InstanceTextView (NSViewRepresentable), AddInstanceFieldFocusController
+    PersonSlotsEditor.swift         Person editor's Relationships panel: parent slots, partner cards, synced Children box, person picker popover with bare-name entry
+    PersonQueryChecklist.swift      Built-in Person query checkboxes (per kind + per partner) with enabled-but-empty warnings, preview, and reset
     HyperlinkSearch.swift           ⌘K hyperlink-search popup: controller, state, panel, text field, popup view
     CollectionSelector.swift        Collections panel search field + checklist row
     TypePicker.swift                Change-type popup (controller + popup state + popup view)
@@ -51,6 +55,7 @@ Memor/
     ShortcutLabel.swift             Renders "Title (⌘R)" labels that update live
   Shared/
     SRS.swift                       Starter delays, interval formatting, color/bucket helpers
+    FlowLayout.swift                Wrapping chip layout (used by the Person editor)
     ToastView.swift                 ToastMessage, ToastStyle, ToastView (used by InstanceEditor)
     WindowKeyCommandHandler.swift   Background NSViewRepresentable wiring ⌘Return/⌘S/⌘B/⌘I/⌘O/⌘J/⌘L/⌘T/Esc
     PlainTextEditor.swift           NSTextView wrapper for plain-text fields
@@ -73,20 +78,34 @@ memor-mcp/
 
 ## Domain Model
 
-There are three classes of type, discriminated by `type.kind` ('object' | 'node') plus the built-in Map types (identified by name + `is_builtin`):
-- **Object types** (`kind='object'`) — the open, default class: text fields + user query types.
-- **Node types** (`kind='node'`) — an open class where each instance can link ("edge") to zero-or-more instances of the same type. Node types reuse all Object machinery (text fields in `type{N}`, `query_type`/`query`, HTML rendering, per-type CSS, per-instance enabled query types, Max Interval) and add link fields.
-- **Map types** (`PointMap`, `BoundaryMap`) — the closed, built-in class with bespoke editors/tables (`kind='object'`, identified by name + `is_builtin`).
+There are three classes of type (no `type.kind` column — built-ins are identified by name + `is_builtin`):
+- **Object types** — the open, default class: text/boolean fields + user query types.
+- **Person** — a single built-in, non-deleteable, partially-editable type for genealogy (see the Person section below). Its fields live in the normal `field`/`type{N}` pipeline, so search/templating/user query types work unchanged; its relationships live in bespoke tables.
+- **Map types** (`PointMap`, `BoundaryMap`) — the closed, built-in class with bespoke editors/tables.
 
-- **Type** (`type` table) - User-defined data type with named fields, CSS, and `kind`
-- **Field** (`field` table) - Named text field on a type, with `field_index`, `field_display_index`, and `is_primary`. For Node types the primary field is kept at BOTH `is_primary=1` and `field_display_index=1` so all display-value SQL (keyed on `display_index=1`) works unchanged.
-- **LinkField** (`link_field` table) - Node-only edge field: `name`, `is_parent` (stored metadata only), `min_count`, `max_count` (NULL = unlimited), `link_field_index`. Creating one auto-creates an undeleteable link `query_type` (only its question is editable; the answer is computed from the instance's links at render time).
-- **NodeLink** (`node_link` table) - A directed edge `(source_instance_id, link_field_id, target_instance_id, order_index)`. Cascades clean up on instance- or link-field deletion.
-- **Instance** (`instance_id_type_id` + `type{N}` tables) - Concrete object of a type. Each type has its own dynamic table `type{typeID}` with columns `field{fieldID}` (text fields only)
-- **QueryType** (`query_type` table) - Defines a question template (question_html + answer_html) for a type. `link_field_id` is non-NULL for auto-generated Node link query types.
+- **Type** (`type` table) - User-defined data type with named fields and CSS
+- **Field** (`field` table) - Named field on a type (`field_type` 'text' | 'boolean' | 'sex'), with `field_index`, `field_display_index`, `is_primary`, and `is_protected` (built-in Person fields: no rename/delete). The seed-only `sex` kind stores the literal string "Male"/"Female" (normalized, default Male) so `{{Sex}}` renders as-is.
+- **Instance** (`instance_id_type_id` + `type{N}` tables) - Concrete object of a type. Each type has its own dynamic table `type{typeID}` with columns `field{field_index}`
+- **QueryType** (`query_type` table) - Defines a question template (question_html + answer_html) for a type. Person's built-in relationship queries are NOT query_type rows (they live in `person_query`).
 - **Query** (`query` table) - A flashcard prompt for a specific instance+query_type pair. Tracks `interval`, `last_answered_timestamp`, `was_last_answer_correct`
 - **Collection** (`collection` + `instance_id_collection_id` tables) - Named group of instances (cross-type, many-to-many)
 - **Stack** (`stack` table) - Named set of queries defined by a `search` string
+
+## The Person type
+
+Seeded idempotently in `createSchema` (`name='Person' AND is_builtin=1`). Default fields: Name, Description (ordinary, deletable) + protected Sex/WhenBorn/WhenDied. The premade "Name" query type is an ordinary deletable `query_type` row. Person appears in the Types page (openable, not deletable/renameable) with a partially-editable detail page.
+
+**Relationship slots** (instance editor "Relationships" panel; every entry is another Person instance or a *bare name* — free text with no reciprocity):
+- `Mother`/`Father`/`AdoptiveMother`/`AdoptiveFather`: 0-or-1 each (DB-enforced by `UNIQUE(child_id, role)` on `person_parent`). Adoptive slots never affect other instances; adoptive sexes are enforced (AdoptiveMother must be Female).
+- `Partners`: ordered per side; `person_partnership` stores is_married/start/end ONCE per stint (both partners' views agree by construction; duplicate stints allowed; row ids are STABLE — edits UPDATE in place because `children_with` SRS anchors to them).
+- Children of a couple: one `person_partnership_child` row per child = shared order across both parents. A grouped child's mother/father are MATERIALIZED into `person_parent` by the save routine (bare partner → role opposite the instance partner's sex). Same-sex couples cannot have children.
+- Ungrouped children: `person_direct_child` (parent-side order + bare children; a maintained projection of `person_parent` for instance children). The editor's Children box shows grouped + ungrouped; removal syncs both directions.
+
+**Consistency engine** (`savePersonInstance`, one transaction): diffs the drafted slots, collects EVERY contradiction read-only (occupied 0-or-1 slot with a different value, sex/role mismatch, same-sex children, child-side edits of grouping-derived parents, sex changes flipping occupied roles), and throws `PersonSaveError` — surfaced as a BLOCKING NSAlert (UI) or structured tool error (MCP) with nothing written. Consistent changes propagate automatically (fills, list appends, role flips, {person, bare} slot swaps). Deleting a Person converts references on other people to bare names (delete confirmations warn via `hasPersonConnections`). Sex edits must go through `savePersonInstance` — never write the sex column generically (MCP `update_instance` routes Person instances through it).
+
+**Built-in relationship queries** (`person_query`: row existence = enabled, DISABLED by default): mother, father, parents, adoptive_mother, adoptive_father, children, children_with (one per partnership, per side), full_siblings. Non-deleteable, fixed question templates; answers are computed from relationships in `makePersonStudyQuery` — the ONLY HTML seam, feeding Study, Query Preview, and MCP `render_query` (`StudyQuery.kind` stays `.standard` with `personQueryKind`/`personPartnershipID`; ids are `p:instance:kind:partnership`). Full Siblings match both parents (ids / exact bare strings) and include the person as `.person-self`. The editor checklist warns (never blocks) on enabled-but-empty answers, except Full Siblings.
+
+**Reset-on-connection-change**: the Person Type Detail checkbox (globals key `person_reset_queries_on_connection_change`, default off). When on, every save's change set resets the affected ENABLED built-in queries (over-approximating full-sibling ripples) and the green toast reports the count.
 
 ## Database
 
@@ -96,13 +115,13 @@ There are three classes of type, discriminated by `type.kind` ('object' | 'node'
 - Dynamic per-type tables: `type{typeID}` with columns `field{fieldID}`
 - Global settings in `globals` table (global_query_html, global_query_css, stacks_last_updated_timestamp)
 - Security-scoped bookmarks for image file access (`image_file` table)
-- **Migrations.** `AppDatabase.init` runs `createSchema` on every launch. `createSchema` creates tables with `CREATE TABLE IF NOT EXISTS` and calls idempotent migration helpers (e.g. `migrateNodeTypeColumns`, `migrateQueryStateColumn`, `migrateReverseQueryColumns`, `migrateQueryMaxIntervalColumn`) that add new columns guarded by `PRAGMA table_info` checks, so existing databases upgrade in place on launch without data loss. To evolve the schema, update `createSchema` and add/extend an idempotent migration helper for any new column (new tables just use `CREATE TABLE IF NOT EXISTS`).
+- **Migrations.** `AppDatabase.init` first runs `purgeNodeMachinery` (one-time destructive removal of the retired Node-type era: node tables/columns and kind='node' data; structurally idempotent, runs outside createSchema's transaction because it needs `PRAGMA foreign_keys = OFF` for a `query_type` rebuild), then `createSchema` on every launch. `createSchema` creates tables with `CREATE TABLE IF NOT EXISTS` and calls idempotent migration helpers (e.g. `migrateFieldPrimaryColumn`, `migrateFieldProtectedColumn`, `migrateQueryStateColumn`, `migrateQueryMaxIntervalColumn`) that add new columns guarded by `PRAGMA table_info` checks, so existing databases upgrade in place on launch without data loss. To evolve the schema, update `createSchema` and add/extend an idempotent migration helper for any new column (new tables just use `CREATE TABLE IF NOT EXISTS`).
 
 ## Search Query Language
 
 The unified "Search" window (and the ⌘K hyperlink popup) has three modes, each with its own language flavor, all parsed by `parseSearchExpression` with feature flags:
 - **Instances** (`searchInstances`): instances of every type, incl. PointMap/BoundaryMap instances.
-- **Queries** (`searchQueries`): individual studyable queries — standard object/node queries plus PointMap and BoundaryMap **Forward/Reverse** queries (one result per enabled direction, via `pointMapDirectionalFrom`/`boundaryMapDirectionalFrom`). **Invariant: the Queries language is exactly the Stacks language** — a Stack's search text in Queries mode returns exactly that Stack's studied queries (both consume the same parser + condition builders).
+- **Queries** (`searchQueries`): individual studyable queries — standard object queries, Person built-in relationship queries (merged into the Person type's section, named "Mother"/"Children with Alice"/…), plus PointMap and BoundaryMap **Forward/Reverse** queries (one result per enabled direction, via `pointMapDirectionalFrom`/`boundaryMapDirectionalFrom`). **Invariant: the Queries language is exactly the Stacks language** — a Stack's search text in Queries mode returns exactly that Stack's studied queries (both consume the same parser + condition builders). **Person lockstep rule**: the four person scan surfaces (searchQueries, computeQueryCountGroups, fetchStackDueDayCounts, fetchStudyQueryBuckets/selectNextStudyQuery) must all use `personQueryJoinFrom` + `makeQuerySearchConditions(srsAlias: "pq")` + `staticTruthValue(typeName: PERSON_TYPE_NAME, newIsAlwaysFalse: false)`; never inline a divergent FROM or predicate.
 - **Points & Boundaries** (`searchMapElements`): PointMap points and BoundaryMap boundaries themselves (one row per point/boundary). Uses a restricted grammar (`parseMapElementSearchQuery`, flag `allowsTypeCollectionId: false`): only quotes, parens, OR/NOT, `literal:`, and plain strings.
 
 Components:
@@ -111,8 +130,8 @@ Components:
 - `collection:name` or `col:name` - instance in named collection
 - `type:name` - instance of named type
 - `id:number` - the single instance with this ID
-- `:noqueries` - **instance search only** - instances with no query types enabled. Enforced by the `allowsNoQueries` flag threaded through `parseSearchExpression`.
-- `:new` - **query search only** - queries that are new (`interval = 0`). Enforced by the `allowsNew` flag.
+- `:noqueries` - **instance search only** - instances with no queries enabled (Person built-in queries count). Enforced by the `allowsNoQueries` flag threaded through `parseSearchExpression`.
+- `:new` - **query search only** - queries that are new (`interval = 0`). Matches standard and Person built-in queries; map queries never match (their condition builders compile `:new` to constant false). Enforced by the `allowsNew` flag.
 - Components can use `or(...)` for OR logic
 - Double quotes for spaces inside components: `"literal:hi there"`
 - Empty query matches all
@@ -164,7 +183,7 @@ navigates to the linked instance).
   bindings.
 - The handler scans **all of the instance's stored field values** (`StudyQuery.fieldValuesByName`),
   not the currently-rendered HTML, so every link on the instance works even if it isn't
-  visible on the showing query. Node link-field auto-generated answer links are out of scope
+  visible on the showing query. Person built-in query answer links are out of scope
   (they aren't stored in a text field and can't carry `data-shortcut`).
 - If two+ links on the instance share the same shortcut, pressing that key shows a system
   `NSAlert` instead of navigating.
@@ -225,16 +244,15 @@ Claude Desktop  ──stdio JSON-RPC──▶  memor-mcp  ──HTTP /mcp──�
 - **Stdio helper** (`memor-mcp/main.swift`): a separate command-line tool target. The build embeds the binary in `Memor.app/Contents/MacOS/` via a Copy Files build phase. Claude Desktop's `claude_desktop_config.json` points `"command"` at `/Applications/Memor.app/Contents/MacOS/memor-mcp`.
 - **Sandbox**: requires `com.apple.security.network.server` in [Memor.entitlements](Memor.entitlements). The listener binds loopback only.
 
-### Tool surface (~37 tools in `MemorMCPTools.swift`)
+### Tool surface (~36 tools in `MemorMCPTools.swift`)
 
-- **Types**: `list_types`, `get_type` (read-only — schema management is intentionally NOT exposed).
-- **Instances**: `create_instance` / `create_instances` (per-item batch results), `update_instance`, `delete_instance`, `get_instance` (field values, per-query SRS status, node links; map-shaped payload for map instances), `search_instances` (limit + optional full field values). Field values can be keyed by field name or field ID; Node instances accept a `links` map.
-- **Nodes**: `update_node_links` (set/add/remove one link field's targets), `search_node_candidates`.
+- **Types**: `list_types`, `get_type` (read-only — schema management is intentionally NOT exposed; Person exposes `is_person`, `builtin_query_kinds`, per-field `is_protected`).
+- **Instances**: `create_instance` / `create_instances` (per-item batch results), `update_instance`, `delete_instance`, `get_instance` (field values, per-query SRS status; Person adds `relations` + `builtin_queries`; map-shaped payload for map instances), `search_instances` (limit + optional full field values). Field values can be keyed by field name or field ID.
+- **Person**: `update_person_relations` — full-state slot editing through `savePersonInstance` (identical propagation + contradiction blocking as the UI; conflicts return a structured `contradictions` error with nothing written). `update_instance` on a Person routes its field writes through the same engine (sex changes propagate or block). `delete_instance` converts references to bare names.
 - **Maps**: `create_pointmap_instance`, `update_pointmap_instance`, `add_pointmap_point`, `update_pointmap_point`, `delete_pointmap_point`, `create_boundarymap_instance`, `update_boundarymap_instance`, `list_boundary_sets`, `list_boundaries`.
-- **SRS maintenance**: `reset_due_dates` (by search or pairs), `set_queries_enabled`, `set_max_interval`. Auto-studying (`applyStudyResponse` etc.) is intentionally NOT exposed.
+- **SRS maintenance**: `reset_due_dates` (by search or pairs; pair items accept `{instance_id, person_kind, partnership_id?}`), `set_queries_enabled` (same person items), `set_max_interval` (Person built-ins have no max interval). Auto-studying (`applyStudyResponse` etc.) is intentionally NOT exposed.
 - **Collections**: list/get/create/delete/rename + add/remove instance(s).
-- **Queries/Stacks**: `search_queries` (limit; `is_reverse` for map queries), `render_query` (final question/answer HTML, or map payload), `describe_search_syntax`, `list_stacks` (optional color counts), `create_stack`, `update_stack`, `delete_stack`.
-- **`update_instance` / `update_node_links` must pass the FULL merged links map** to `AppDatabase.updateInstance` — it rewrites all node links from what it's given, so passing only the changed fields would wipe the rest. The MCP layer merges with `fetchInstanceEditorData`'s current links before every write.
+- **Queries/Stacks**: `search_queries` (limit; `is_reverse` for map queries; `person_kind`/`partnership_id` for Person built-ins), `render_query` (final question/answer HTML — pass `person_kind` (+ `partnership_id`) for Person built-ins — or map payload), `describe_search_syntax`, `list_stacks` (optional color counts), `create_stack`, `update_stack`, `delete_stack`.
 
 ### Non-obvious gotchas (do not "simplify" these away)
 

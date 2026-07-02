@@ -81,13 +81,13 @@ private let sharedSearchHelpComponents: [SearchHelpComponent] = [
 // Instance-only component.
 private let noQueriesSearchHelpComponent = SearchHelpComponent(
     segments: [(":noqueries", searchOperatorColor)],
-    description: "Match only instances that have no query types enabled."
+    description: "Match only instances that have no queries enabled (a Person's built-in relationship queries count as queries here)."
 )
 
 // Query-only component.
 private let newSearchHelpComponent = SearchHelpComponent(
     segments: [(":new", searchOperatorColor)],
-    description: "Match only queries that are new (never studied)."
+    description: "Match only queries that are new (never studied). Matches standard queries and Person built-in relationship queries; map queries never match."
 )
 
 private let instanceSearchHelpComponents: [SearchHelpComponent] =
