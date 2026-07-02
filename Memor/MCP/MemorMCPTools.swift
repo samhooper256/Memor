@@ -86,6 +86,10 @@ enum MemorMCPTools {
                 appDatabase: appDatabase
             ))
 
+        // Person
+        case "update_person_relations":
+            return try updatePersonRelations(arguments: arguments, appDatabase: appDatabase)
+
         // PointMap
         case "create_pointmap_instance":
             return try jsonResult(createPointMapInstance(
@@ -244,6 +248,8 @@ enum MemorMCPTools {
             return try jsonResult(renderQuery(
                 instanceID: try arguments.requireInt64("instance_id"),
                 queryTypeID: try arguments.optionalInt64("query_type_id"),
+                personKindRaw: try arguments.optionalString("person_kind"),
+                personPartnershipID: try arguments.optionalInt64("partnership_id"),
                 appDatabase: appDatabase
             ))
         case "describe_search_syntax":
@@ -299,9 +305,11 @@ enum MemorMCPTools {
             isBuiltin: type.isBuiltin,
             isPointMap: type.name == POINTMAP_TYPE_NAME,
             isBoundaryMap: type.name == BOUNDARYMAP_TYPE_NAME,
+            isPerson: type.isPerson,
             instanceCount: type.instanceCount,
             fields: fields.map(FieldDTO.init),
-            queryTypes: queryTypes.map(QueryTypeDTO.init)
+            queryTypes: queryTypes.map(QueryTypeDTO.init),
+            builtinQueryKinds: type.isPerson ? PersonQueryKind.allCases.map(\.rawValue) : nil
         )
     }
 
@@ -334,6 +342,9 @@ enum MemorMCPTools {
             byName: fieldValuesByName,
             appDatabase: appDatabase
         )
+        if type.isPerson {
+            try validatePersonSexValues(typeID: typeID, fieldValues: fieldValues, appDatabase: appDatabase)
+        }
         let instanceID = try appDatabase.makeInstance(
             forTypeID: typeID,
             fieldValuesByFieldID: fieldValues,
@@ -473,6 +484,18 @@ enum MemorMCPTools {
             )
         }
 
+        var relations: PersonRelationsDTO? = nil
+        var builtinQueries: [PersonBuiltinQueryDTO]? = nil
+        if type.isPerson {
+            let personData = try appDatabase.fetchPersonEditorData(instanceID: instanceID)
+            relations = PersonRelationsDTO(
+                relations: personData.relations,
+                displayNames: personData.displayNamesByInstanceID
+            )
+            builtinQueries = try appDatabase.fetchPersonBuiltinQueryInfos(instanceID: instanceID)
+                .map(PersonBuiltinQueryDTO.init)
+        }
+
         return InstanceDetailDTO(
             instanceID: data.instanceID,
             typeID: data.typeID,
@@ -480,7 +503,9 @@ enum MemorMCPTools {
             maxInterval: data.maxInterval,
             fields: fieldRows,
             enabledQueryTypeIds: Array(data.enabledQueryTypeIDs).sorted(),
-            queries: queries
+            queries: queries,
+            relations: relations,
+            builtinQueries: builtinQueries
         )
     }
 
@@ -528,6 +553,168 @@ enum MemorMCPTools {
                 totalCount: totalCount,
                 truncated: instances.count < totalCount,
                 instances: instances
+            )
+        }
+    }
+
+    // MARK: - Person tools
+
+    /// Rejects Person sex values the normalizer would otherwise silently
+    /// coerce (anything but male/female, case-insensitive).
+    private static func validatePersonSexValues(
+        typeID: Int64,
+        fieldValues: [Int64: String],
+        appDatabase: AppDatabase
+    ) throws {
+        let sexFieldIDs = try appDatabase.fetchFields(forTypeID: typeID)
+            .filter { $0.fieldType == .sex }
+            .map(\.id)
+        for fieldID in sexFieldIDs {
+            guard let raw = fieldValues[fieldID] else { continue }
+            let v = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if !v.isEmpty && v != "male" && v != "female" {
+                throw MemorMCPToolError(message: "Sex must be \"Male\" or \"Female\" (got \"\(raw)\").")
+            }
+        }
+    }
+
+    /// Parses a slot value: {"instance_id": n} | {"name": "..."} | null.
+    private static func parsePersonRef(_ value: Value, argumentLabel: String) throws -> PersonRef? {
+        if value.isNull { return nil }
+        if let obj = value.objectValue {
+            if let idValue = obj["instance_id"], let id = idValue.intValue {
+                return .instance(Int64(id))
+            }
+            if let nameValue = obj["name"], let name = nameValue.stringValue {
+                return .bare(name)
+            }
+        }
+        throw MemorMCPToolError(message: "`\(argumentLabel)` must be {\"instance_id\": n}, {\"name\": \"...\"}, or null.")
+    }
+
+    /// Parses a child entry: an integer instance id, a bare-name string, or the
+    /// object form used by slots.
+    private static func parsePersonChildRef(_ value: Value, argumentLabel: String) throws -> PersonRef {
+        if let id = value.intValue { return .instance(Int64(id)) }
+        if let name = value.stringValue { return .bare(name) }
+        if let obj = value.objectValue {
+            if let idValue = obj["instance_id"], let id = idValue.intValue { return .instance(Int64(id)) }
+            if let nameValue = obj["name"], let name = nameValue.stringValue { return .bare(name) }
+        }
+        throw MemorMCPToolError(message: "Every entry in `\(argumentLabel)` must be an instance id, a name string, or {\"instance_id\"}/{\"name\"}.")
+    }
+
+    /// Full-state relationship editor: a present key replaces that slot; an
+    /// absent key keeps it. A present `partnerships` array is the COMPLETE list
+    /// (omitted existing ids are removed; items without partnership_id create).
+    /// Runs the same save routine as the UI, so propagation and contradiction
+    /// blocking behave identically; conflicts come back as a structured error.
+    private static func updatePersonRelations(
+        arguments: [String: Value],
+        appDatabase: AppDatabase
+    ) throws -> CallTool.Result {
+        let instanceID = try arguments.requireInt64("instance_id")
+        let current = try appDatabase.fetchPersonEditorData(instanceID: instanceID)
+        var relations = current.relations
+
+        if let value = arguments["mother"] {
+            relations.mother = try parsePersonRef(value, argumentLabel: "mother")
+        }
+        if let value = arguments["father"] {
+            relations.father = try parsePersonRef(value, argumentLabel: "father")
+        }
+        if let value = arguments["adoptive_mother"] {
+            relations.adoptiveMother = try parsePersonRef(value, argumentLabel: "adoptive_mother")
+        }
+        if let value = arguments["adoptive_father"] {
+            relations.adoptiveFather = try parsePersonRef(value, argumentLabel: "adoptive_father")
+        }
+
+        if let items = try arguments.optionalObjectArray("partnerships") {
+            var newPartners: [PersonPartnerDraft] = []
+            for (index, item) in items.enumerated() {
+                let label = "partnerships[\(index)]"
+                let partnershipID = try item.optionalInt64("partnership_id")
+                let existing = partnershipID.flatMap { id in
+                    current.relations.partners.first { $0.partnershipID == id }
+                }
+                if partnershipID != nil && existing == nil {
+                    throw MemorMCPToolError(message: "\(label): partnership_id \(partnershipID!) does not belong to instance \(instanceID).")
+                }
+                var partner: PersonRef
+                if let value = item["partner"] {
+                    guard let parsed = try parsePersonRef(value, argumentLabel: "\(label).partner") else {
+                        throw MemorMCPToolError(message: "\(label).partner cannot be null.")
+                    }
+                    partner = parsed
+                } else if let existing {
+                    partner = existing.partner
+                } else {
+                    throw MemorMCPToolError(message: "\(label): new partnerships require `partner`.")
+                }
+                var children: [PersonChildDraft]
+                if let childValues = item["children"]?.arrayValue {
+                    children = try childValues.map {
+                        PersonChildDraft(rowID: nil, child: try parsePersonChildRef($0, argumentLabel: "\(label).children"))
+                    }
+                } else {
+                    children = existing?.children ?? []
+                }
+                newPartners.append(PersonPartnerDraft(
+                    partnershipID: partnershipID,
+                    partner: partner,
+                    isMarried: try item.optionalBool("is_married") ?? existing?.isMarried ?? false,
+                    startText: try item.optionalString("start") ?? existing?.startText ?? "",
+                    endText: try item.optionalString("end") ?? existing?.endText ?? "",
+                    children: children,
+                    isChildrenQueryEnabled: try item.optionalBool("children_query_enabled")
+                        ?? existing?.isChildrenQueryEnabled ?? false
+                ))
+            }
+            relations.partners = newPartners
+        }
+
+        if let childValues = arguments["ungrouped_children"]?.arrayValue {
+            relations.ungroupedChildren = try childValues.map {
+                PersonChildDraft(rowID: nil, child: try parsePersonChildRef($0, argumentLabel: "ungrouped_children"))
+            }
+        }
+
+        let enabledStandaloneKinds = Set(
+            current.builtinQueries.filter { $0.enabled && $0.partnershipID == nil }.map(\.kind)
+        )
+
+        do {
+            let result = try appDatabase.savePersonInstance(
+                instanceID: instanceID,
+                fieldValuesByFieldID: current.fieldValuesByFieldID,
+                queryTypeIDs: current.enabledQueryTypeIDs,
+                relations: relations,
+                builtinEnabledKinds: enabledStandaloneKinds
+            )
+            postDatabaseChange()
+            let updated = try appDatabase.fetchPersonEditorData(instanceID: instanceID)
+            return try jsonResult(UpdatePersonRelationsResultDTO(
+                instanceId: result.instanceID,
+                resetQueryCount: result.resetQueryCount,
+                relations: PersonRelationsDTO(
+                    relations: updated.relations,
+                    displayNames: updated.displayNamesByInstanceID
+                )
+            ))
+        } catch let error as PersonSaveError {
+            let conflicts = error.conflicts.map { conflict in
+                PersonConflictDTO(
+                    instanceId: conflict.instanceID,
+                    displayName: conflict.displayName,
+                    message: conflict.kind.description
+                )
+            }
+            let data = try encoder.encode(["contradictions": conflicts])
+            let text = String(data: data, encoding: .utf8) ?? "{}"
+            return CallTool.Result(
+                content: [.text(text: "The change contradicts existing relationship data; nothing was saved. \(text)", annotations: nil, _meta: nil)],
+                isError: true
             )
         }
     }
@@ -981,9 +1168,40 @@ enum MemorMCPTools {
     private static func renderQuery(
         instanceID: Int64,
         queryTypeID: Int64?,
+        personKindRaw: String?,
+        personPartnershipID: Int64?,
         appDatabase: AppDatabase
     ) throws -> RenderedQueryDTO {
         let query: StudyQuery
+        if let personKindRaw {
+            guard let kind = PersonQueryKind(rawValue: personKindRaw) else {
+                let valid = PersonQueryKind.allCases.map(\.rawValue).joined(separator: ", ")
+                throw MemorMCPToolError(message: "Unknown person_kind `\(personKindRaw)`. Valid kinds: \(valid).")
+            }
+            if (kind == .childrenWith) != (personPartnershipID != nil) {
+                throw MemorMCPToolError(message: "partnership_id is required exactly for person_kind `children_with`.")
+            }
+            // Built-in Person queries are HTML-rendered like standard queries.
+            query = try appDatabase.fetchPersonQueryPreview(
+                instanceID: instanceID,
+                kind: kind,
+                partnershipID: personPartnershipID
+            )
+            return RenderedQueryDTO(
+                kind: "person",
+                instanceID: query.instanceID,
+                typeName: query.typeName,
+                queryTypeID: 0,
+                queryTypeName: query.queryTypeName,
+                questionHTML: try buildRenderedQuestionHTML(appDatabase: appDatabase, query: query),
+                answerHTML: try buildRenderedAnswerHTML(appDatabase: appDatabase, query: query),
+                instanceTitle: nil,
+                point: nil,
+                showAllPointsInQuestion: nil,
+                boundary: nil,
+                showAllBoundariesInQuestion: nil
+            )
+        }
         if let queryTypeID {
             query = try appDatabase.fetchQueryPreview(instanceID: instanceID, queryTypeID: queryTypeID)
         } else {
@@ -1077,10 +1295,17 @@ enum MemorMCPTools {
         - Double quotes wrap a component containing spaces: "literal:hi there".
 
         Instance search only:
-        - :noqueries — match only instances that have no query types enabled.
+        - :noqueries — match only instances that have no queries enabled (a Person's \
+        built-in relationship queries count as queries here).
 
         Query search only:
-        - :new — match only queries that are new (never studied).
+        - :new — match only queries that are new (never studied). Matches standard \
+        queries and Person built-in relationship queries; map queries never match :new.
+
+        Person built-in relationship queries (Mother, Father, Parents, Adoptive Mother, \
+        Adoptive Father, Children, Children with {partner}, Full Siblings) appear in \
+        query search alongside the Person type's user-defined queries; their rows carry \
+        person_kind (+ partnership_id for children_with) and query_type_id 0.
 
         Examples:
         - type:Term col:Math — Term instances in the Math collection (or, in query search, their queries).
@@ -1115,8 +1340,32 @@ enum MemorMCPTools {
         case (let search?, nil):
             try appDatabase.resetQueryDueDates(query: search)
         case (nil, let items?):
-            let pairs = try parseQueryPairs(items, argumentLabel: "queries")
-            try appDatabase.resetQueryDueDates(instanceIDAndQueryTypeIDPairs: pairs)
+            var personTargets: [QueryTarget] = []
+            var standardItems: [[String: Value]] = []
+            for (index, item) in items.enumerated() {
+                if let kindRaw = try item.optionalString("person_kind") {
+                    guard let kind = PersonQueryKind(rawValue: kindRaw) else {
+                        throw MemorMCPToolError(message: "queries[\(index)]: unknown person_kind `\(kindRaw)`.")
+                    }
+                    personTargets.append(QueryTarget(
+                        instanceID: try item.requireInt64("instance_id"),
+                        queryTypeID: 0,
+                        isReverse: false,
+                        kind: .person,
+                        personKind: kind,
+                        personPartnershipID: try item.optionalInt64("partnership_id")
+                    ))
+                } else {
+                    standardItems.append(item)
+                }
+            }
+            if !personTargets.isEmpty {
+                try appDatabase.resetQueryDueDates(targets: personTargets)
+            }
+            if !standardItems.isEmpty {
+                let pairs = try parseQueryPairs(standardItems, argumentLabel: "queries")
+                try appDatabase.resetQueryDueDates(instanceIDAndQueryTypeIDPairs: pairs)
+            }
         default:
             throw MemorMCPToolError(message: "Provide exactly one of `search` or `queries`.")
         }
@@ -1129,7 +1378,45 @@ enum MemorMCPTools {
         queryItems: [[String: Value]],
         appDatabase: AppDatabase
     ) throws -> OkDTO {
-        let pairs = try parseQueryPairs(queryItems, argumentLabel: "queries")
+        // Items with `person_kind` target built-in Person queries; the rest are
+        // ordinary {instance_id, query_type_id} pairs.
+        var personItems: [(instanceID: Int64, kind: PersonQueryKind, partnershipID: Int64?)] = []
+        var standardItems: [[String: Value]] = []
+        for (index, item) in queryItems.enumerated() {
+            if let kindRaw = try item.optionalString("person_kind") {
+                guard let kind = PersonQueryKind(rawValue: kindRaw) else {
+                    let valid = PersonQueryKind.allCases.map(\.rawValue).joined(separator: ", ")
+                    throw MemorMCPToolError(message: "queries[\(index)]: unknown person_kind `\(kindRaw)`. Valid kinds: \(valid).")
+                }
+                let instanceID = try item.requireInt64("instance_id")
+                let partnershipID = try item.optionalInt64("partnership_id")
+                if (kind == .childrenWith) != (partnershipID != nil) {
+                    throw MemorMCPToolError(message: "queries[\(index)]: partnership_id is required exactly for person_kind `children_with`.")
+                }
+                personItems.append((instanceID, kind, partnershipID))
+            } else {
+                standardItems.append(item)
+            }
+        }
+        for item in personItems {
+            // fetchPersonEditorData validates the instance is a Person; the
+            // built-in query list validates the partnership belongs to it.
+            let infos = try appDatabase.fetchPersonBuiltinQueryInfos(instanceID: item.instanceID)
+            guard infos.contains(where: { $0.kind == item.kind && $0.partnershipID == item.partnershipID }) else {
+                throw MemorMCPToolError(message: "Instance \(item.instanceID) has no built-in query \(item.kind.rawValue)\(item.partnershipID.map { " for partnership \($0)" } ?? "").")
+            }
+            try appDatabase.setPersonQueryEnabled(
+                instanceID: item.instanceID,
+                kind: item.kind,
+                partnershipID: item.partnershipID,
+                enabled: enabled
+            )
+        }
+        if standardItems.isEmpty {
+            postDatabaseChange()
+            return OkDTO()
+        }
+        let pairs = try parseQueryPairs(standardItems, argumentLabel: "queries")
         if enabled {
             // setQueryEnabled(true, ...) blindly inserts a query row, so validate
             // each pair first: reject map instances (their queries are keyed by
@@ -1369,7 +1656,7 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "delete_instance",
-                description: "Delete an instance by ID. This removes the instance from all collections and deletes its queries.",
+                description: "Delete an instance by ID. This removes the instance from all collections and deletes its queries. Deleting a Person converts every reference to them on other people (partner entries, parent slots, children) into a bare-name entry, preserving the family structure.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object(["instance_id": int64Number]),
@@ -1378,7 +1665,7 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "get_instance",
-                description: "Get an instance's full details: type, field values, per-query-type status (enabled, SRS interval in seconds, state, last answered), and max_interval. For PointMap/BoundaryMap instances, returns the map payload instead (kind, title, map settings, and points/attached boundaries with per-direction enabled flags).",
+                description: "Get an instance's full details: type, field values, per-query-type status (enabled, SRS interval in seconds, state, last answered), and max_interval. Person instances additionally return `relations` (mother/father/adoptive slots, ordered partnerships with is_married/start/end/children, ungrouped children; entries are {instance_id, display_value} or {name} for bare names) and `builtin_queries` (each built-in relationship query's kind, partnership_id, enablement, and SRS state). For PointMap/BoundaryMap instances, returns the map payload instead (kind, title, map settings, and points/attached boundaries with per-direction enabled flags).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object(["instance_id": int64Number]),
@@ -1396,6 +1683,31 @@ enum MemorMCPTools {
                         "include_field_values": boolValue
                     ]),
                     "required": .array([.string("query")])
+                ])
+            ),
+
+            Tool(
+                name: "update_person_relations",
+                description: "Edit a Person instance's relationship slots with the same propagation and contradiction rules as the app: changes automatically update the other affected Person instances, and a change that contradicts existing data on another instance (an occupied mother/father slot, a sex/role mismatch, same-sex shared children) fails with a structured `contradictions` list and writes nothing. A present key replaces that slot; an absent key keeps it. mother/father/adoptive_mother/adoptive_father each take {\"instance_id\": n} (another Person), {\"name\": \"...\"} (a bare-name placeholder), or null (clear). `partnerships`, when present, is the COMPLETE ordered list: items with partnership_id keep/edit that partnership (absent sub-keys keep current values; SRS state survives), items without partnership_id create one, and omitted existing ids are REMOVED (their children fall back to the ungrouped list). Each partnership item: partner (as above; required for new), is_married, start, end (freetext), children (ordered array of instance ids and/or name strings; not allowed for same-sex couples), children_query_enabled. `ungrouped_children`, when present, replaces the ordered list of children not associated with any partner (adding an instance child fills their mother/father slot; removing one clears it). Returns the new full relations plus reset_query_count (non-zero when the Person type's reset-on-connection-change option is on).",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "instance_id": int64Number,
+                        "mother": .object(["description": .string("{\"instance_id\": n} | {\"name\": \"...\"} | null")]),
+                        "father": .object(["description": .string("{\"instance_id\": n} | {\"name\": \"...\"} | null")]),
+                        "adoptive_mother": .object(["description": .string("{\"instance_id\": n} | {\"name\": \"...\"} | null")]),
+                        "adoptive_father": .object(["description": .string("{\"instance_id\": n} | {\"name\": \"...\"} | null")]),
+                        "partnerships": .object([
+                            "type": .string("array"),
+                            "description": .string("Complete ordered partner list; see the tool description for item shape."),
+                            "items": .object(["type": .string("object")])
+                        ]),
+                        "ungrouped_children": .object([
+                            "type": .string("array"),
+                            "description": .string("Ordered children without an associated partner: instance ids and/or name strings.")
+                        ])
+                    ]),
+                    "required": .array([.string("instance_id")])
                 ])
             ),
 
@@ -1704,7 +2016,7 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "set_queries_enabled",
-                description: "Enable or disable queries given as {instance_id, query_type_id} pairs. Disabling deletes the query row — its SRS progress is permanently lost (for map instances, query_type_id is a point/attachment ID and both directions are disabled). Enabling creates the query as new and works on Object instances only; to enable map queries use update_pointmap_point or update_boundarymap_instance.",
+                description: "Enable or disable queries. Each item is either {instance_id, query_type_id} (standard queries) or {instance_id, person_kind, partnership_id?} for a Person's built-in relationship queries (person_kind: mother/father/parents/adoptive_mother/adoptive_father/children/children_with/full_siblings; partnership_id required exactly for children_with — discover ids via get_instance). Disabling deletes the query row — its SRS progress is permanently lost (for map instances, query_type_id is a point/attachment ID and both directions are disabled). Enabling creates the query as new; to enable map queries use update_pointmap_point or update_boundarymap_instance.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -1726,7 +2038,7 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "set_max_interval",
-                description: "Cap the SRS interval for all of an Object instance's queries, in seconds (e.g. 604800 = 7 days). Pass null (or omit max_interval) to remove the cap.",
+                description: "Cap the SRS interval for all of an Object instance's queries, in seconds (e.g. 604800 = 7 days). Pass null (or omit max_interval) to remove the cap. Person built-in relationship queries have no max interval; on a Person instance this affects only its standard (user-defined) queries.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -1738,12 +2050,14 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "render_query",
-                description: "Render a flashcard exactly as the user will see it. For Object-type queries, returns the final question_html and answer_html with field values substituted, the global template applied, and CSS inlined. For PointMap/BoundaryMap instances, pass a point/attachment ID as query_type_id and the result describes the map card (highlighted point or boundary) instead of HTML. Omit query_type_id to render the instance's first query.",
+                description: "Render a flashcard exactly as the user will see it. For Object-type queries, returns the final question_html and answer_html with field values substituted, the global template applied, and CSS inlined. For a Person's built-in relationship queries, pass person_kind (and partnership_id for children_with) instead of query_type_id — the result is HTML like a standard query, with the answer computed from the current relationships. For PointMap/BoundaryMap instances, pass a point/attachment ID as query_type_id and the result describes the map card (highlighted point or boundary) instead of HTML. Omit query_type_id to render the instance's first query.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
                         "instance_id": int64Number,
-                        "query_type_id": int64Number
+                        "query_type_id": int64Number,
+                        "person_kind": stringValue,
+                        "partnership_id": int64Number
                     ]),
                     "required": .array([.string("instance_id")])
                 ])
@@ -1813,6 +2127,7 @@ private struct TypeSummaryDTO: Encodable {
     let isBuiltin: Bool
     let isPointMap: Bool
     let isBoundaryMap: Bool
+    let isPerson: Bool
     let instanceCount: Int
 
     init(_ type: FlashcardType) {
@@ -1822,6 +2137,7 @@ private struct TypeSummaryDTO: Encodable {
         isBuiltin = type.isBuiltin
         isPointMap = type.name == POINTMAP_TYPE_NAME
         isBoundaryMap = type.name == BOUNDARYMAP_TYPE_NAME
+        isPerson = type.isPerson
         instanceCount = type.instanceCount
     }
 }
@@ -1831,12 +2147,14 @@ private struct FieldDTO: Encodable {
     let name: String
     let fieldDisplayIndex: Int
     let fieldType: String
+    let isProtected: Bool
 
     init(_ field: TypeField) {
         id = field.id
         name = field.name
         fieldDisplayIndex = field.fieldDisplayIndex
         fieldType = field.fieldType.rawValue
+        isProtected = field.isProtected
     }
 }
 
@@ -1857,9 +2175,12 @@ private struct TypeDetailDTO: Encodable {
     let isBuiltin: Bool
     let isPointMap: Bool
     let isBoundaryMap: Bool
+    let isPerson: Bool
     let instanceCount: Int
     let fields: [FieldDTO]
     let queryTypes: [QueryTypeDTO]
+    // Person only: the built-in relationship query kinds (enabled per instance).
+    let builtinQueryKinds: [String]?
 }
 
 private struct CreatedInstanceDTO: Encodable {
@@ -1969,6 +2290,104 @@ private struct InstanceDetailDTO: Encodable {
     // Named `Ids` (not `IDs`) so snake-case encoding yields enabled_query_type_ids.
     let enabledQueryTypeIds: [Int64]
     let queries: [InstanceQueryInfoDTO]
+    // Person instances only.
+    let relations: PersonRelationsDTO?
+    let builtinQueries: [PersonBuiltinQueryDTO]?
+}
+
+// MARK: Person DTOs
+
+/// A slot entry: an instance ({instance_id, display_value}) or a bare name ({name}).
+private struct PersonRefDTO: Encodable {
+    let instanceId: Int64?
+    let displayValue: String?
+    let name: String?
+
+    init(_ ref: PersonRef, displayNames: [Int64: String]) {
+        switch ref {
+        case .instance(let id):
+            instanceId = id
+            displayValue = displayNames[id] ?? ""
+            name = nil
+        case .bare(let bareName):
+            instanceId = nil
+            displayValue = nil
+            name = bareName
+        }
+    }
+}
+
+private struct PersonPartnershipDTO: Encodable {
+    let partnershipId: Int64?
+    let partner: PersonRefDTO
+    let isMarried: Bool
+    let start: String
+    let end: String
+    let children: [PersonRefDTO]
+    let childrenQueryEnabled: Bool
+}
+
+private struct PersonRelationsDTO: Encodable {
+    let mother: PersonRefDTO?
+    let father: PersonRefDTO?
+    let adoptiveMother: PersonRefDTO?
+    let adoptiveFather: PersonRefDTO?
+    let partnerships: [PersonPartnershipDTO]
+    let ungroupedChildren: [PersonRefDTO]
+
+    init(relations: PersonRelationsDraft, displayNames: [Int64: String]) {
+        mother = relations.mother.map { PersonRefDTO($0, displayNames: displayNames) }
+        father = relations.father.map { PersonRefDTO($0, displayNames: displayNames) }
+        adoptiveMother = relations.adoptiveMother.map { PersonRefDTO($0, displayNames: displayNames) }
+        adoptiveFather = relations.adoptiveFather.map { PersonRefDTO($0, displayNames: displayNames) }
+        partnerships = relations.partners.map { partner in
+            PersonPartnershipDTO(
+                partnershipId: partner.partnershipID,
+                partner: PersonRefDTO(partner.partner, displayNames: displayNames),
+                isMarried: partner.isMarried,
+                start: partner.startText,
+                end: partner.endText,
+                children: partner.children.map { PersonRefDTO($0.child, displayNames: displayNames) },
+                childrenQueryEnabled: partner.isChildrenQueryEnabled
+            )
+        }
+        ungroupedChildren = relations.ungroupedChildren.map {
+            PersonRefDTO($0.child, displayNames: displayNames)
+        }
+    }
+}
+
+private struct PersonBuiltinQueryDTO: Encodable {
+    let kind: String
+    let partnershipId: Int64?
+    let displayName: String
+    let enabled: Bool
+    let interval: Int64?
+    let queryState: Int?
+    let lastAnsweredTimestamp: Int64?
+
+    init(_ info: PersonBuiltinQueryInfo) {
+        kind = info.kind.rawValue
+        partnershipId = info.partnershipID
+        displayName = info.displayName
+        enabled = info.enabled
+        interval = info.interval
+        queryState = info.queryState?.rawValue
+        lastAnsweredTimestamp = info.lastAnsweredTimestamp
+    }
+}
+
+private struct UpdatePersonRelationsResultDTO: Encodable {
+    let ok = true
+    let instanceId: Int64
+    let resetQueryCount: Int
+    let relations: PersonRelationsDTO
+}
+
+private struct PersonConflictDTO: Encodable {
+    let instanceId: Int64?
+    let displayName: String
+    let message: String
 }
 
 private struct PointMapPointDTO: Encodable {
@@ -2110,6 +2529,9 @@ private struct QuerySearchResultDTO: Encodable {
     let queryTypeName: String
     // Map queries only: distinguishes a point/boundary's reverse card.
     let isReverse: Bool
+    // Built-in Person queries only (query_type_id is 0 for them).
+    let personKind: String?
+    let partnershipId: Int64?
 
     init(_ r: QuerySearchResult) {
         instanceID = r.instanceID
@@ -2117,6 +2539,8 @@ private struct QuerySearchResultDTO: Encodable {
         displayValue = r.displayValue
         queryTypeName = r.queryTypeName
         isReverse = r.isReverse
+        personKind = r.personKind?.rawValue
+        partnershipId = r.personPartnershipID
     }
 }
 
