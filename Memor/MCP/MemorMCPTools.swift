@@ -47,13 +47,11 @@ enum MemorMCPTools {
             let fieldValuesByID = try arguments.optionalInt64KeyedStringMap("field_values_by_field_id")
             let fieldValuesByName = try arguments.optionalStringKeyedStringMap("field_values_by_field_name")
             let queryTypeIDs = try arguments.optionalInt64Array("query_type_ids") ?? []
-            let rawLinks = try arguments.optionalValueObject("links")
             let created = try createInstanceCore(
                 typeID: typeID,
                 fieldValuesByID: fieldValuesByID,
                 fieldValuesByName: fieldValuesByName,
                 queryTypeIDs: Set(queryTypeIDs),
-                rawLinks: rawLinks,
                 appDatabase: appDatabase
             )
             postDatabaseChange()
@@ -66,13 +64,11 @@ enum MemorMCPTools {
             let fieldValuesByID = try arguments.optionalInt64KeyedStringMap("field_values_by_field_id")
             let fieldValuesByName = try arguments.optionalStringKeyedStringMap("field_values_by_field_name")
             let queryTypeIDs = try arguments.optionalInt64Array("query_type_ids").map(Set.init)
-            let rawLinks = try arguments.optionalValueObject("links")
             return try jsonResult(updateInstance(
                 instanceID: instanceID,
                 fieldValuesByID: fieldValuesByID,
                 fieldValuesByName: fieldValuesByName,
                 queryTypeIDs: queryTypeIDs,
-                rawLinks: rawLinks,
                 appDatabase: appDatabase
             ))
         case "delete_instance":
@@ -87,37 +83,6 @@ enum MemorMCPTools {
                 query: query,
                 limit: Int(try arguments.optionalInt64("limit") ?? 50),
                 includeFieldValues: try arguments.optionalBool("include_field_values") ?? false,
-                appDatabase: appDatabase
-            ))
-
-        // Nodes
-        case "update_node_links":
-            let instanceID = try arguments.requireInt64("instance_id")
-            let linkFieldKey: String
-            if let value = arguments["link_field"], let intKey = value.intValue {
-                linkFieldKey = String(intKey)
-            } else {
-                linkFieldKey = try arguments.requireString("link_field")
-            }
-            let setTargetIDs = try arguments.optionalInt64Array("set_target_ids")
-            let addTargetIDs = try arguments.optionalInt64Array("add_target_ids")
-            let removeTargetIDs = try arguments.optionalInt64Array("remove_target_ids")
-            return try jsonResult(updateNodeLinks(
-                instanceID: instanceID,
-                linkFieldKey: linkFieldKey,
-                setTargetIDs: setTargetIDs,
-                addTargetIDs: addTargetIDs,
-                removeTargetIDs: removeTargetIDs,
-                appDatabase: appDatabase
-            ))
-        case "search_node_candidates":
-            let typeID = try arguments.requireInt64("type_id")
-            let query = try arguments.optionalString("query") ?? ""
-            let excludingInstanceID = try arguments.optionalInt64("excluding_instance_id")
-            return try jsonResult(searchNodeCandidates(
-                typeID: typeID,
-                query: query,
-                excludingInstanceID: excludingInstanceID,
                 appDatabase: appDatabase
             ))
 
@@ -334,7 +299,6 @@ enum MemorMCPTools {
             isBuiltin: type.isBuiltin,
             isPointMap: type.name == POINTMAP_TYPE_NAME,
             isBoundaryMap: type.name == BOUNDARYMAP_TYPE_NAME,
-            isNode: type.isNode,
             instanceCount: type.instanceCount,
             fields: fields.map(FieldDTO.init),
             queryTypes: queryTypes.map(QueryTypeDTO.init)
@@ -350,7 +314,6 @@ enum MemorMCPTools {
         fieldValuesByID: [Int64: String]?,
         fieldValuesByName: [String: String]?,
         queryTypeIDs: Set<Int64>,
-        rawLinks: [String: Value]?,
         appDatabase: AppDatabase
     ) throws -> CreatedInstanceDTO {
         guard let type = try appDatabase.fetchType(typeID: typeID) else {
@@ -365,26 +328,17 @@ enum MemorMCPTools {
         if fieldValuesByID == nil && fieldValuesByName == nil {
             throw MemorMCPToolError(message: "Provide at least one of `field_values_by_field_id` or `field_values_by_field_name`.")
         }
-        if rawLinks != nil && !type.isNode {
-            throw MemorMCPToolError(message: "`links` is only valid for Node types; type \(typeID) (\(type.name)) is not a Node type.")
-        }
         let fieldValues = try resolveFieldValues(
             typeID: typeID,
             byID: fieldValuesByID,
             byName: fieldValuesByName,
             appDatabase: appDatabase
         )
-        var links: [Int64: [Int64]] = [:]
-        if type.isNode {
-            let linkFields = try appDatabase.fetchLinkFields(forTypeID: typeID)
-            links = try resolveLinks(rawLinks: rawLinks ?? [:], linkFields: linkFields)
-            try validateLinkCounts(linkFields: linkFields, links: links)
-        }
         let instanceID = try appDatabase.makeInstance(
             forTypeID: typeID,
             fieldValuesByFieldID: fieldValues,
             queryTypeIDs: queryTypeIDs,
-            linksByLinkFieldID: links
+            linksByLinkFieldID: [:]
         )
         return CreatedInstanceDTO(instanceID: instanceID, typeID: typeID)
     }
@@ -405,13 +359,11 @@ enum MemorMCPTools {
                 let fieldValuesByID = try item.optionalInt64KeyedStringMap("field_values_by_field_id")
                 let fieldValuesByName = try item.optionalStringKeyedStringMap("field_values_by_field_name")
                 let queryTypeIDs = Set(try item.optionalInt64Array("query_type_ids") ?? [])
-                let rawLinks = try item.optionalValueObject("links")
                 let created = try createInstanceCore(
                     typeID: typeID,
                     fieldValuesByID: fieldValuesByID,
                     fieldValuesByName: fieldValuesByName,
                     queryTypeIDs: queryTypeIDs,
-                    rawLinks: rawLinks,
                     appDatabase: appDatabase
                 )
                 anySucceeded = true
@@ -443,7 +395,6 @@ enum MemorMCPTools {
         fieldValuesByID: [Int64: String]?,
         fieldValuesByName: [String: String]?,
         queryTypeIDs: Set<Int64>?,
-        rawLinks: [String: Value]?,
         appDatabase: AppDatabase
     ) throws -> OkDTO {
         // Map instances have no field table, so detect them before
@@ -455,12 +406,6 @@ enum MemorMCPTools {
             throw MemorMCPToolError(message: "Use update_boundarymap_instance to edit BoundaryMap instances.")
         }
         let current = try appDatabase.fetchInstanceEditorData(instanceID: instanceID)
-        guard let type = try appDatabase.fetchType(typeID: current.typeID) else {
-            throw MemorMCPToolError(message: "Type not found: \(current.typeID).")
-        }
-        if rawLinks != nil && !type.isNode {
-            throw MemorMCPToolError(message: "`links` is only valid for Node types; instance \(instanceID) is not a Node instance.")
-        }
 
         var mergedFieldValues = current.fieldValuesByFieldID
         if fieldValuesByID != nil || fieldValuesByName != nil {
@@ -474,22 +419,11 @@ enum MemorMCPTools {
         }
         let mergedQueryTypeIDs = queryTypeIDs ?? current.enabledQueryTypeIDs
 
-        // AppDatabase.updateInstance rewrites ALL of a node instance's links from
-        // the map it's given, so always pass the full merged map — passing only
-        // the changed fields (or [:]) would silently wipe the others.
-        var mergedLinks = current.linkTargetsByLinkFieldID
-        if type.isNode, let rawLinks {
-            let linkFields = try appDatabase.fetchLinkFields(forTypeID: current.typeID)
-            let updates = try resolveLinks(rawLinks: rawLinks, linkFields: linkFields)
-            mergedLinks.merge(updates) { _, new in new }
-            try validateLinkCounts(linkFields: linkFields, links: mergedLinks, onlyLinkFieldIDs: Set(updates.keys))
-        }
-
         try appDatabase.updateInstance(
             instanceID: instanceID,
             fieldValuesByFieldID: mergedFieldValues,
             queryTypeIDs: mergedQueryTypeIDs,
-            linksByLinkFieldID: mergedLinks
+            linksByLinkFieldID: [:]
         )
         postDatabaseChange()
         return OkDTO()
@@ -534,7 +468,6 @@ enum MemorMCPTools {
             return InstanceQueryInfoDTO(
                 queryTypeID: queryType.id,
                 name: queryType.name,
-                isLinkQuery: queryType.isLinkQuery,
                 enabled: data.enabledQueryTypeIDs.contains(queryType.id),
                 interval: srs?.interval,
                 queryState: srs?.queryState.rawValue,
@@ -542,33 +475,14 @@ enum MemorMCPTools {
             )
         }
 
-        var links: [NodeLinkFieldDTO]? = nil
-        if type.isNode {
-            let linkFields = try appDatabase.fetchLinkFields(forTypeID: data.typeID)
-            links = linkFields.map { linkField in
-                let targetIDs = data.linkTargetsByLinkFieldID[linkField.id] ?? []
-                return NodeLinkFieldDTO(
-                    linkFieldID: linkField.id,
-                    name: linkField.name,
-                    minCount: linkField.minCount,
-                    maxCount: linkField.maxCount,
-                    targets: targetIDs.map { targetID in
-                        NodeLinkTargetDTO(id: targetID, displayValue: data.linkedNodeSummaries[targetID] ?? "")
-                    }
-                )
-            }
-        }
-
         return InstanceDetailDTO(
             instanceID: data.instanceID,
             typeID: data.typeID,
             typeName: type.name,
-            isNode: type.isNode,
             maxInterval: data.maxInterval,
             fields: fieldRows,
             enabledQueryTypeIds: Array(data.enabledQueryTypeIDs).sorted(),
-            queries: queries,
-            links: links
+            queries: queries
         )
     }
 
@@ -618,97 +532,6 @@ enum MemorMCPTools {
                 instances: instances
             )
         }
-    }
-
-    // MARK: - Node tools
-
-    private static func updateNodeLinks(
-        instanceID: Int64,
-        linkFieldKey: String,
-        setTargetIDs: [Int64]?,
-        addTargetIDs: [Int64]?,
-        removeTargetIDs: [Int64]?,
-        appDatabase: AppDatabase
-    ) throws -> NodeLinkFieldDTO {
-        if setTargetIDs != nil && (addTargetIDs != nil || removeTargetIDs != nil) {
-            throw MemorMCPToolError(message: "Provide either `set_target_ids` or `add_target_ids`/`remove_target_ids`, not both.")
-        }
-        if setTargetIDs == nil && addTargetIDs == nil && removeTargetIDs == nil {
-            throw MemorMCPToolError(message: "Provide `set_target_ids`, or `add_target_ids` and/or `remove_target_ids`.")
-        }
-
-        let current = try appDatabase.fetchInstanceEditorData(instanceID: instanceID)
-        guard let type = try appDatabase.fetchType(typeID: current.typeID), type.isNode else {
-            throw MemorMCPToolError(message: "Instance \(instanceID) is not a Node instance.")
-        }
-        let linkFields = try appDatabase.fetchLinkFields(forTypeID: current.typeID)
-        let linkField = try resolveLinkField(key: linkFieldKey, in: linkFields)
-
-        var targets = current.linkTargetsByLinkFieldID[linkField.id] ?? []
-        if let setTargetIDs {
-            var seen: Set<Int64> = []
-            targets = setTargetIDs.filter { seen.insert($0).inserted }
-        } else {
-            if let removeTargetIDs {
-                let removeSet = Set(removeTargetIDs)
-                targets.removeAll { removeSet.contains($0) }
-            }
-            if let addTargetIDs {
-                for targetID in addTargetIDs where !targets.contains(targetID) {
-                    targets.append(targetID)
-                }
-            }
-        }
-        try validateLinkCounts(
-            linkFields: linkFields,
-            links: [linkField.id: targets],
-            onlyLinkFieldIDs: [linkField.id]
-        )
-
-        // AppDatabase.updateInstance rewrites ALL links, so pass the full map
-        // with just this field changed.
-        var mergedLinks = current.linkTargetsByLinkFieldID
-        mergedLinks[linkField.id] = targets
-        try appDatabase.updateInstance(
-            instanceID: instanceID,
-            fieldValuesByFieldID: current.fieldValuesByFieldID,
-            queryTypeIDs: current.enabledQueryTypeIDs,
-            linksByLinkFieldID: mergedLinks
-        )
-        postDatabaseChange()
-
-        // Re-fetch so the returned targets carry display summaries.
-        let updated = try appDatabase.fetchInstanceEditorData(instanceID: instanceID)
-        let resultTargetIDs = updated.linkTargetsByLinkFieldID[linkField.id] ?? []
-        return NodeLinkFieldDTO(
-            linkFieldID: linkField.id,
-            name: linkField.name,
-            minCount: linkField.minCount,
-            maxCount: linkField.maxCount,
-            targets: resultTargetIDs.map { targetID in
-                NodeLinkTargetDTO(id: targetID, displayValue: updated.linkedNodeSummaries[targetID] ?? "")
-            }
-        )
-    }
-
-    private static func searchNodeCandidates(
-        typeID: Int64,
-        query: String,
-        excludingInstanceID: Int64?,
-        appDatabase: AppDatabase
-    ) throws -> [NodeLinkTargetDTO] {
-        guard let type = try appDatabase.fetchType(typeID: typeID) else {
-            throw MemorMCPToolError(message: "Type not found: \(typeID).")
-        }
-        guard type.isNode else {
-            throw MemorMCPToolError(message: "Type \(typeID) (\(type.name)) is not a Node type.")
-        }
-        let candidates = try appDatabase.fetchNodeCandidates(
-            forTypeID: typeID,
-            matching: query,
-            excludingInstanceID: excludingInstanceID
-        )
-        return candidates.map { NodeLinkTargetDTO(id: $0.id, displayValue: $0.displayValue) }
     }
 
     // MARK: - PointMap tools
@@ -1440,71 +1263,6 @@ enum MemorMCPTools {
         return resolved
     }
 
-    /// Decodes a `links` argument — keys are link-field IDs (as numeric strings)
-    /// or link-field names, values are arrays of target instance IDs — into an
-    /// ID-keyed map. Target order is preserved; duplicates are dropped.
-    private static func resolveLinks(
-        rawLinks: [String: Value],
-        linkFields: [LinkField]
-    ) throws -> [Int64: [Int64]] {
-        var resolved: [Int64: [Int64]] = [:]
-        for (key, value) in rawLinks {
-            let linkField = try resolveLinkField(key: key, in: linkFields)
-            guard let array = value.arrayValue else {
-                throw MemorMCPToolError(message: "Value for link field `\(key)` in `links` must be an array of target instance IDs.")
-            }
-            let targetIDs = try array.map { elem -> Int64 in
-                if let i = elem.intValue { return Int64(i) }
-                if let s = elem.stringValue, let i = Int64(s) { return i }
-                throw MemorMCPToolError(message: "Every target for link field `\(key)` in `links` must be an integer instance ID.")
-            }
-            var seen: Set<Int64> = []
-            resolved[linkField.id] = targetIDs.filter { seen.insert($0).inserted }
-        }
-        return resolved
-    }
-
-    /// Resolves a link field from an ID (numeric string) or a name (exact
-    /// match first, then unique case-insensitive).
-    private static func resolveLinkField(key: String, in linkFields: [LinkField]) throws -> LinkField {
-        if let id = Int64(key) {
-            guard let match = linkFields.first(where: { $0.id == id }) else {
-                throw MemorMCPToolError(message: "No link field with id \(id) on this type.")
-            }
-            return match
-        }
-        if let exact = linkFields.first(where: { $0.name == key }) {
-            return exact
-        }
-        let caseInsensitive = linkFields.filter { $0.name.caseInsensitiveCompare(key) == .orderedSame }
-        if caseInsensitive.count == 1 {
-            return caseInsensitive[0]
-        }
-        let available = linkFields.map { "\($0.name) (id \($0.id))" }.joined(separator: ", ")
-        throw MemorMCPToolError(message: "Unknown link field `\(key)`. Available link fields: \(available).")
-    }
-
-    /// Validates link-target counts against each link field's min/max. When
-    /// `onlyLinkFieldIDs` is non-nil, only those fields are checked (used by
-    /// updates, where untouched fields keep their current — possibly
-    /// pre-existing-invalid — targets).
-    private static func validateLinkCounts(
-        linkFields: [LinkField],
-        links: [Int64: [Int64]],
-        onlyLinkFieldIDs: Set<Int64>? = nil
-    ) throws {
-        for linkField in linkFields {
-            if let onlyLinkFieldIDs, !onlyLinkFieldIDs.contains(linkField.id) { continue }
-            let count = links[linkField.id]?.count ?? 0
-            if count < linkField.minCount {
-                throw MemorMCPToolError(message: "Link field `\(linkField.name)` (id \(linkField.id)) requires at least \(linkField.minCount) target(s); got \(count).")
-            }
-            if let maxCount = linkField.maxCount, count > maxCount {
-                throw MemorMCPToolError(message: "Link field `\(linkField.name)` (id \(linkField.id)) allows at most \(maxCount) target(s); got \(count).")
-            }
-        }
-    }
-
     private static func toolErrorMessage(from error: Error) -> String {
         if let toolError = error as? MemorMCPToolError {
             return toolError.message
@@ -1544,12 +1302,6 @@ enum MemorMCPTools {
             "description": .string("Object whose keys are field names and whose values are strings."),
             "additionalProperties": .object(["type": .string("string")])
         ])
-        let linksMap: Value = .object([
-            "type": .string("object"),
-            "description": .string("Node types only. Object whose keys are link-field IDs (as strings) or link-field names, and whose values are arrays of target instance IDs (same-type instances, ordered)."),
-            "additionalProperties": int64Array
-        ])
-
         return [
             Tool(
                 name: "list_types",
@@ -1568,15 +1320,14 @@ enum MemorMCPTools {
 
             Tool(
                 name: "create_instance",
-                description: "Create a new instance of an Object or Node type (use create_pointmap_instance / create_boundarymap_instance for map types). Provide field values via field_values_by_field_name (field names to string values) and/or field_values_by_field_id (field IDs as strings to string values); at least one is required. query_type_ids is an optional array of enabled query type IDs. For Node types, `links` optionally sets each link field's targets (key = link-field name or ID; value = array of same-type instance IDs); link-field min/max counts are enforced.",
+                description: "Create a new instance of an Object type (use create_pointmap_instance / create_boundarymap_instance for map types). Provide field values via field_values_by_field_name (field names to string values) and/or field_values_by_field_id (field IDs as strings to string values); at least one is required. query_type_ids is an optional array of enabled query type IDs.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
                         "type_id": int64Number,
                         "field_values_by_field_id": stringKeyedStringMap,
                         "field_values_by_field_name": nameKeyedStringMap,
-                        "query_type_ids": int64Array,
-                        "links": linksMap
+                        "query_type_ids": int64Array
                     ]),
                     "required": .array([.string("type_id")])
                 ])
@@ -1595,8 +1346,7 @@ enum MemorMCPTools {
                                     "type_id": int64Number,
                                     "field_values_by_field_id": stringKeyedStringMap,
                                     "field_values_by_field_name": nameKeyedStringMap,
-                                    "query_type_ids": int64Array,
-                                    "links": linksMap
+                                    "query_type_ids": int64Array
                                 ]),
                                 "required": .array([.string("type_id")])
                             ])
@@ -1607,15 +1357,14 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "update_instance",
-                description: "Update an existing Object or Node instance (use the pointmap/boundarymap tools for map instances). Provide only what you want to change: omitted fields keep their existing values, an omitted query_type_ids keeps the existing set, and for Node instances `links` replaces only the link fields it names (omitted link fields keep their current targets).",
+                description: "Update an existing Object instance (use the pointmap/boundarymap tools for map instances). Provide only what you want to change: omitted fields keep their existing values and an omitted query_type_ids keeps the existing set.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
                         "instance_id": int64Number,
                         "field_values_by_field_id": stringKeyedStringMap,
                         "field_values_by_field_name": nameKeyedStringMap,
-                        "query_type_ids": int64Array,
-                        "links": linksMap
+                        "query_type_ids": int64Array
                     ]),
                     "required": .array([.string("instance_id")])
                 ])
@@ -1631,7 +1380,7 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "get_instance",
-                description: "Get an instance's full details: type, field values, per-query-type status (enabled, SRS interval in seconds, state, last answered), max_interval, and for Node instances each link field's targets. For PointMap/BoundaryMap instances, returns the map payload instead (kind, title, map settings, and points/attached boundaries with per-direction enabled flags).",
+                description: "Get an instance's full details: type, field values, per-query-type status (enabled, SRS interval in seconds, state, last answered), and max_interval. For PointMap/BoundaryMap instances, returns the map payload instead (kind, title, map settings, and points/attached boundaries with per-direction enabled flags).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object(["instance_id": int64Number]),
@@ -1640,7 +1389,7 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "search_instances",
-                description: "Search instances using Memor's instance search language: space-separated components combined with AND (literal:text, type:name, collection:name / col:name (or col:ID by collection ID), id:number, :noqueries, OR, NOT, parentheses, double quotes for spaces; empty string matches all) — call describe_search_syntax for full documentation. Results are grouped by type with per-type total_count/truncated; at most `limit` instances are returned overall (default 50). Set include_field_values to also return each instance's full field values (Object/Node instances only).",
+                description: "Search instances using Memor's instance search language: space-separated components combined with AND (literal:text, type:name, collection:name / col:name (or col:ID by collection ID), id:number, :noqueries, OR, NOT, parentheses, double quotes for spaces; empty string matches all) — call describe_search_syntax for full documentation. Results are grouped by type with per-type total_count/truncated; at most `limit` instances are returned overall (default 50). Set include_field_values to also return each instance's full field values (Object instances only).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -1649,35 +1398,6 @@ enum MemorMCPTools {
                         "include_field_values": boolValue
                     ]),
                     "required": .array([.string("query")])
-                ])
-            ),
-
-            Tool(
-                name: "update_node_links",
-                description: "Edit one link field's targets on a Node instance. Provide either set_target_ids (full ordered replacement) or add_target_ids/remove_target_ids (incremental); other link fields are untouched. link_field is the link field's name or ID. Targets must be instances of the same Node type (no self-links); the field's min/max target counts are enforced. Returns the field's resulting targets with display values.",
-                inputSchema: .object([
-                    "type": .string("object"),
-                    "properties": .object([
-                        "instance_id": int64Number,
-                        "link_field": stringValue,
-                        "set_target_ids": int64Array,
-                        "add_target_ids": int64Array,
-                        "remove_target_ids": int64Array
-                    ]),
-                    "required": .array([.string("instance_id"), .string("link_field")])
-                ])
-            ),
-            Tool(
-                name: "search_node_candidates",
-                description: "Search instances of a Node type to find link targets. Matches against the type's primary field only; empty query lists all. Returns at most 100 results (id + display_value). excluding_instance_id omits one instance, e.g. the instance being linked from (self-links are not allowed).",
-                inputSchema: .object([
-                    "type": .string("object"),
-                    "properties": .object([
-                        "type_id": int64Number,
-                        "query": stringValue,
-                        "excluding_instance_id": int64Number
-                    ]),
-                    "required": .array([.string("type_id")])
                 ])
             ),
 
@@ -1986,7 +1706,7 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "set_queries_enabled",
-                description: "Enable or disable queries given as {instance_id, query_type_id} pairs. Disabling deletes the query row — its SRS progress is permanently lost (for map instances, query_type_id is a point/attachment ID and both directions are disabled). Enabling creates the query as new and works on Object/Node instances only; to enable map queries use update_pointmap_point or update_boundarymap_instance.",
+                description: "Enable or disable queries given as {instance_id, query_type_id} pairs. Disabling deletes the query row — its SRS progress is permanently lost (for map instances, query_type_id is a point/attachment ID and both directions are disabled). Enabling creates the query as new and works on Object instances only; to enable map queries use update_pointmap_point or update_boundarymap_instance.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -2008,7 +1728,7 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "set_max_interval",
-                description: "Cap the SRS interval for all of an Object/Node instance's queries, in seconds (e.g. 604800 = 7 days). Pass null (or omit max_interval) to remove the cap.",
+                description: "Cap the SRS interval for all of an Object instance's queries, in seconds (e.g. 604800 = 7 days). Pass null (or omit max_interval) to remove the cap.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -2020,7 +1740,7 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "render_query",
-                description: "Render a flashcard exactly as the user will see it. For Object/Node queries, returns the final question_html and answer_html with field values substituted, the global template applied, and CSS inlined. For PointMap/BoundaryMap instances, pass a point/attachment ID as query_type_id and the result describes the map card (highlighted point or boundary) instead of HTML. Omit query_type_id to render the instance's first query.",
+                description: "Render a flashcard exactly as the user will see it. For Object-type queries, returns the final question_html and answer_html with field values substituted, the global template applied, and CSS inlined. For PointMap/BoundaryMap instances, pass a point/attachment ID as query_type_id and the result describes the map card (highlighted point or boundary) instead of HTML. Omit query_type_id to render the instance's first query.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -2095,7 +1815,6 @@ private struct TypeSummaryDTO: Encodable {
     let isBuiltin: Bool
     let isPointMap: Bool
     let isBoundaryMap: Bool
-    let isNode: Bool
     let instanceCount: Int
 
     init(_ type: FlashcardType) {
@@ -2105,7 +1824,6 @@ private struct TypeSummaryDTO: Encodable {
         isBuiltin = type.isBuiltin
         isPointMap = type.name == POINTMAP_TYPE_NAME
         isBoundaryMap = type.name == BOUNDARYMAP_TYPE_NAME
-        isNode = type.isNode
         instanceCount = type.instanceCount
     }
 }
@@ -2141,7 +1859,6 @@ private struct TypeDetailDTO: Encodable {
     let isBuiltin: Bool
     let isPointMap: Bool
     let isBoundaryMap: Bool
-    let isNode: Bool
     let instanceCount: Int
     let fields: [FieldDTO]
     let queryTypes: [QueryTypeDTO]
@@ -2213,7 +1930,7 @@ private struct RenderedQueryDTO: Encodable {
     let typeName: String
     let queryTypeID: Int64
     let queryTypeName: String
-    // Standard (object/node) queries only.
+    // Standard (object-type) queries only.
     let questionHTML: String?
     let answerHTML: String?
     // Map queries only.
@@ -2237,7 +1954,6 @@ private struct InstanceFieldValueDTO: Encodable {
 private struct InstanceQueryInfoDTO: Encodable {
     let queryTypeID: Int64
     let name: String
-    let isLinkQuery: Bool
     let enabled: Bool
     // SRS state; nil when the query is disabled. interval is in seconds
     // (0 = new/blue). queryState is the raw SRS state machine value (0-2).
@@ -2246,31 +1962,15 @@ private struct InstanceQueryInfoDTO: Encodable {
     let lastAnsweredTimestamp: Int64?
 }
 
-private struct NodeLinkTargetDTO: Encodable {
-    let id: Int64
-    let displayValue: String
-}
-
-private struct NodeLinkFieldDTO: Encodable {
-    let linkFieldID: Int64
-    let name: String
-    let minCount: Int
-    let maxCount: Int?
-    let targets: [NodeLinkTargetDTO]
-}
-
 private struct InstanceDetailDTO: Encodable {
     let instanceID: Int64
     let typeID: Int64
     let typeName: String
-    let isNode: Bool
     let maxInterval: Int64?
     let fields: [InstanceFieldValueDTO]
     // Named `Ids` (not `IDs`) so snake-case encoding yields enabled_query_type_ids.
     let enabledQueryTypeIds: [Int64]
     let queries: [InstanceQueryInfoDTO]
-    // Node instances only.
-    let links: [NodeLinkFieldDTO]?
 }
 
 private struct PointMapPointDTO: Encodable {
