@@ -1342,6 +1342,23 @@ struct AppDatabase {
             )
             let isBoundaryMap = (typeID == boundaryMapTypeID)
 
+            // Deleting a Person first converts every reference to them on other
+            // people into a bare-name entry (preserving structure + SRS), and —
+            // when the reset-on-connection-change option is on — resets the
+            // affected enabled queries.
+            let personTypeID = try? Self.fetchPersonTypeID(db: db)
+            if typeID == personTypeID {
+                let changes = try Self.deletePersonRelations(db: db, instanceID: instanceID)
+                let resetFlag = try String.fetchOne(
+                    db,
+                    sql: "SELECT value FROM globals WHERE name = ?",
+                    arguments: [PERSON_RESET_QUERIES_GLOBAL_KEY]
+                ) == "1"
+                if resetFlag {
+                    try Self.resetPersonQueriesForRelationshipChanges(db: db, changes: changes)
+                }
+            }
+
             try db.execute(
                 sql: """
                     DELETE FROM instance_id_collection_id
@@ -4405,7 +4422,7 @@ struct AppDatabase {
     // In-memory equivalent of the "primary field" ordering used in SQL
     // (is_primary DESC, field_display_index ASC, id). The first element of a list
     // sorted with this is the type's primary/display field.
-    static func primaryFieldOrdering(_ a: TypeField, _ b: TypeField) -> Bool {
+    nonisolated static func primaryFieldOrdering(_ a: TypeField, _ b: TypeField) -> Bool {
         if a.isPrimary != b.isPrimary { return a.isPrimary }
         if a.fieldDisplayIndex != b.fieldDisplayIndex { return a.fieldDisplayIndex < b.fieldDisplayIndex }
         return a.id < b.id
@@ -4452,7 +4469,7 @@ struct AppDatabase {
     }
 
     // An instance's display value: its primary/first display field's raw text.
-    static func fetchInstanceDisplayValue(db: Database, instanceID: Int64) throws -> String {
+    nonisolated static func fetchInstanceDisplayValue(db: Database, instanceID: Int64) throws -> String {
         guard let typeID = try Int64.fetchOne(
             db,
             sql: "SELECT type_id FROM instance_id_type_id WHERE instance_id = ?",

@@ -17,7 +17,7 @@ nonisolated let PERSON_RESET_QUERIES_GLOBAL_KEY = "person_reset_queries_on_conne
 /// name (free text for someone the user didn't make an instance for). Bare
 /// names anchor to the one instance side of a relationship and carry no
 /// reciprocity or consistency obligations.
-enum PersonRef: Hashable {
+nonisolated enum PersonRef: Hashable {
     case instance(Int64)
     case bare(String)
 
@@ -34,7 +34,7 @@ enum PersonRef: Hashable {
 
 /// The four 0-or-1 parent slots on a Person. Raw values match the
 /// person_parent.role column.
-enum PersonParentRole: String, Hashable, CaseIterable {
+nonisolated enum PersonParentRole: String, Hashable, CaseIterable {
     case mother
     case father
     case adoptiveMother = "adoptive_mother"
@@ -53,7 +53,7 @@ enum PersonParentRole: String, Hashable, CaseIterable {
 /// One child entry in a partner card or the ungrouped Children list.
 /// `rowID` is the person_partnership_child / person_direct_child row id
 /// (nil = newly added in the editor).
-struct PersonChildDraft: Hashable {
+nonisolated struct PersonChildDraft: Hashable {
     var rowID: Int64?
     var child: PersonRef
 }
@@ -61,7 +61,7 @@ struct PersonChildDraft: Hashable {
 /// One partner entry in a Person's Partners slot. `partnershipID` is the
 /// stable person_partnership row id (nil = newly added); existing rows are
 /// UPDATEd in place on save so their `children_with` SRS state survives edits.
-struct PersonPartnerDraft: Hashable {
+nonisolated struct PersonPartnerDraft: Hashable {
     var partnershipID: Int64?
     var partner: PersonRef
     var isMarried: Bool = false
@@ -73,7 +73,7 @@ struct PersonPartnerDraft: Hashable {
 }
 
 /// The full slot state of one Person, as edited (and as fetched).
-struct PersonRelationsDraft: Hashable {
+nonisolated struct PersonRelationsDraft: Hashable {
     var mother: PersonRef?
     var father: PersonRef?
     var adoptiveMother: PersonRef?
@@ -85,7 +85,7 @@ struct PersonRelationsDraft: Hashable {
 /// The built-in, non-deleteable relationship query kinds on a Person instance.
 /// Raw values match the person_query.kind column. `childrenWith` rows
 /// additionally carry a partnership id (one query per partner entry).
-enum PersonQueryKind: String, Codable, Hashable, CaseIterable {
+nonisolated enum PersonQueryKind: String, Codable, Hashable, CaseIterable {
     case mother
     case father
     case parents
@@ -117,7 +117,7 @@ enum PersonQueryKind: String, Codable, Hashable, CaseIterable {
 
 /// One built-in query's enablement + SRS state for an instance (enabled rows
 /// plus disabled placeholders with nil SRS fields).
-struct PersonBuiltinQueryInfo: Hashable {
+nonisolated struct PersonBuiltinQueryInfo: Hashable {
     let kind: PersonQueryKind
     let partnershipID: Int64?
     let displayName: String
@@ -128,7 +128,7 @@ struct PersonBuiltinQueryInfo: Hashable {
 }
 
 /// Everything the Person instance editor needs to load one instance.
-struct PersonEditorData {
+nonisolated struct PersonEditorData {
     let instanceID: Int64
     let typeID: Int64
     let fieldValuesByFieldID: [Int64: String]
@@ -147,7 +147,7 @@ struct PersonEditorData {
 // MARK: - Contradictions
 
 /// Why a save was blocked, per affected instance.
-enum PersonConflictKind: Hashable {
+nonisolated enum PersonConflictKind: Hashable {
     /// Another instance's 0-or-1 slot is occupied by a different value.
     case slotOccupied(slot: PersonParentRole, existingDescription: String, attemptedDescription: String)
     /// An instance was placed in a sexed role its Sex contradicts.
@@ -176,7 +176,7 @@ enum PersonConflictKind: Hashable {
     }
 }
 
-struct PersonSaveConflict: Hashable {
+nonisolated struct PersonSaveConflict: Hashable {
     /// The affected instance (nil when the conflict is about the edited person).
     let instanceID: Int64?
     let displayName: String
@@ -186,14 +186,14 @@ struct PersonSaveConflict: Hashable {
 /// Thrown by savePersonInstance when the edit contradicts other instances'
 /// data. Nothing is written. The editor presents one bullet per conflict in a
 /// blocking alert.
-struct PersonSaveError: Error {
+nonisolated struct PersonSaveError: Error {
     let conflicts: [PersonSaveConflict]
 }
 
 // MARK: - Change set (consumed by reset-on-connection-change)
 
 /// One relationship fact whose rendered answer may have changed on `instanceID`.
-enum PersonRelationKind: Hashable {
+nonisolated enum PersonRelationKind: Hashable {
     case mother
     case father
     case parents
@@ -204,12 +204,12 @@ enum PersonRelationKind: Hashable {
     case fullSiblings
 }
 
-struct PersonRelationChange: Hashable {
+nonisolated struct PersonRelationChange: Hashable {
     let instanceID: Int64
     let kind: PersonRelationKind
 }
 
-struct PersonSaveResult {
+nonisolated struct PersonSaveResult {
     let instanceID: Int64
     /// Enabled queries reset because the per-type reset option was on (0 when off).
     let resetQueryCount: Int
