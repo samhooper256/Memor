@@ -63,6 +63,10 @@ struct TypeDetailPageView: View {
     @State private var queryTypePendingDeletion: QueryType?
     @State private var hasAutoPresentedRenamePopover = false
 
+    // Person only
+    @State private var personResetOnConnectionChange = false
+    @State private var isPersonResetInfoPopoverPresented = false
+
     private var selectedQueryType: QueryType? {
         guard let selectedQueryTypeID else { return nil }
         return queryTypes.first(where: { $0.id == selectedQueryTypeID })
@@ -75,9 +79,12 @@ struct TypeDetailPageView: View {
     }
 
     var body: some View {
-        if type.isBuiltin {
+        if type.isBuiltin && !type.isPerson {
             builtinTypeBody
         } else {
+            // Person is built-in but partially editable: user fields and query
+            // types are fully editable, the protected fields and the type name
+            // are locked, and Person-specific sections appear below the fields.
             editableTypeBody
         }
     }
@@ -120,6 +127,13 @@ struct TypeDetailPageView: View {
                         .font(.largeTitle)
                         .fontWeight(.semibold)
 
+                    if type.isPerson {
+                        Text("(built-in)")
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if !type.isPerson {
                     Button {
                         renamedTypeName = displayedTypeName.isEmpty ? type.name : displayedTypeName
                         activeEditor = nil
@@ -167,6 +181,7 @@ struct TypeDetailPageView: View {
                                 isRenameTypeNameFocused = true
                             }
                         }
+                    }
                     }
                 }
 
@@ -276,6 +291,10 @@ struct TypeDetailPageView: View {
                     }
                     }
 
+                    if type.isPerson {
+                        personBuiltinQueriesSection
+                    }
+
                     Text("Query Types")
                         .font(.title3)
                         .fontWeight(.semibold)
@@ -352,6 +371,84 @@ struct TypeDetailPageView: View {
             activeEditor = nil
             NSApp.keyWindow?.makeFirstResponder(nil)
         }
+    }
+
+    private var personBuiltinQueriesSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Built-in Relationship Queries")
+                .font(.title3)
+                .fontWeight(.semibold)
+
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(personBuiltinQueryRows.enumerated()), id: \.offset) { index, row in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(row.0)
+                        Text(row.1)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+
+                    if index < personBuiltinQueryRows.count - 1 {
+                        Divider()
+                    }
+                }
+            }
+            .background(Color(NSColor.controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
+            }
+
+            Text("Enabled per person in the instance editor. Answers are computed from the person's relationships and rendered with this type's CSS.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 6) {
+                Toggle(
+                    "Reset affected queries when connections change",
+                    isOn: Binding(
+                        get: { personResetOnConnectionChange },
+                        set: { isOn in
+                            personResetOnConnectionChange = isOn
+                            try? appDatabase.setPersonResetQueriesOnConnectionChange(isOn)
+                        }
+                    )
+                )
+                .toggleStyle(.checkbox)
+
+                Button {
+                    isPersonResetInfoPopoverPresented = true
+                } label: {
+                    Image(systemName: "questionmark.circle")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .popover(isPresented: $isPersonResetInfoPopoverPresented, arrowEdge: .bottom) {
+                    Text("Whenever a Person's relationship to another Person instance changes, every enabled built-in query that asks about that relationship — on this person or anyone the change propagates to — is reset to new. A green toast reports how many queries were reset after each save.")
+                        .font(.callout)
+                        .frame(width: 320, alignment: .leading)
+                        .padding(12)
+                }
+                .help("What does this do?")
+            }
+        }
+    }
+
+    private var personBuiltinQueryRows: [(String, String)] {
+        [
+            ("Mother", "Who is this person's mother?"),
+            ("Father", "Who is this person's father?"),
+            ("Parents", "Who are this person's parents?"),
+            ("Adoptive Mother", "Who is this person's adoptive mother?"),
+            ("Adoptive Father", "Who is this person's adoptive father?"),
+            ("Children", "Who are this person's children, grouped by partner?"),
+            ("Children with {partner}", "One query per listed partner."),
+            ("Full Siblings", "Who shares both parents with this person?"),
+        ]
     }
 
     private var queryTypesToolbar: some View {
@@ -567,6 +664,9 @@ struct TypeDetailPageView: View {
             isSyncingEditorState = false
             fields = try appDatabase.fetchFieldsForDisplay(forTypeID: type.id)
             queryTypes = try appDatabase.fetchQueryTypes(forTypeID: type.id)
+            if type.isPerson {
+                personResetOnConnectionChange = (try? appDatabase.fetchPersonResetQueriesOnConnectionChange()) ?? false
+            }
             selectedQueryTypeID = displayedQueryTypes.first?.id
             syncSelectedQueryTypeEditorState(selectedQueryTypeID: selectedQueryTypeID)
             refreshPreviewCanvas()
@@ -1020,6 +1120,22 @@ private struct FieldsSectionView: View {
         }
     }
 
+    private func fieldKindIconName(_ field: TypeField) -> String {
+        switch field.fieldType {
+        case .boolean: return "checkmark.square"
+        case .sex: return "person.fill"
+        case .text: return "textformat"
+        }
+    }
+
+    private func fieldKindHelp(_ field: TypeField) -> String {
+        switch field.fieldType {
+        case .boolean: return "Boolean field"
+        case .sex: return "Sex field (built-in)"
+        case .text: return "Text field"
+        }
+    }
+
     @ViewBuilder
     private func fieldRow(_ field: TypeField) -> some View {
         HStack(spacing: 12) {
@@ -1027,27 +1143,33 @@ private struct FieldsSectionView: View {
                 .foregroundStyle(.secondary)
                 .font(.caption)
 
-            Image(systemName: field.fieldType == .boolean ? "checkmark.square" : "textformat")
+            Image(systemName: fieldKindIconName(field))
                 .foregroundStyle(.secondary)
-                .help(field.fieldType == .boolean ? "Boolean field" : "Text field")
+                .help(fieldKindHelp(field))
 
             Text(field.name)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            Button {
-                onEditField(field)
-            } label: {
-                Image(systemName: "pencil")
-            }
-            .buttonStyle(.plain)
+            if field.isProtected {
+                Image(systemName: "lock.fill")
+                    .foregroundStyle(.secondary)
+                    .help("Built-in field — can't be renamed or deleted")
+            } else {
+                Button {
+                    onEditField(field)
+                } label: {
+                    Image(systemName: "pencil")
+                }
+                .buttonStyle(.plain)
 
-            Button {
-                onDeleteField(field)
-            } label: {
-                Image(systemName: "trash")
-                    .foregroundStyle(.red)
+                Button {
+                    onDeleteField(field)
+                } label: {
+                    Image(systemName: "trash")
+                        .foregroundStyle(.red)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)

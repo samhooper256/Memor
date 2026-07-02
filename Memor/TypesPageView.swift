@@ -205,7 +205,7 @@ struct TypesPageView: View {
                 onMoveUp: { moveHighlight(by: -1) },
                 onMoveDown: { moveHighlight(by: 1) },
                 onOpen: {
-                    if let type = highlightedType, !type.isBuiltin {
+                    if let type = highlightedType, type.isOpenableInDetail {
                         selectedType = type
                     }
                 }
@@ -304,9 +304,17 @@ extension FlashcardType {
     var kindIcon: (name: String, color: Color) {
         if isMapType {
             return ("map.fill", .yellow)
+        } else if isPerson {
+            return ("person.2.fill", .purple)
         } else {
             return ("doc.text.fill", .blue)
         }
+    }
+
+    /// Built-in types are not openable on the Types page — except Person,
+    /// whose detail page is partially editable.
+    var isOpenableInDetail: Bool {
+        !isBuiltin || isPerson
     }
 }
 
@@ -356,7 +364,7 @@ private struct TypeRowView: View {
         .background(Color(NSColor.controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .contentShape(Rectangle())
-        .pointerStyle(isHovered && !type.isBuiltin ? .link : .default)
+        .pointerStyle(isHovered && type.isOpenableInDetail ? .link : .default)
         .overlay {
             ZStack(alignment: .topTrailing) {
                 RoundedRectangle(cornerRadius: 14)
@@ -384,7 +392,7 @@ private struct TypeRowView: View {
             }
         }
         .onTapGesture {
-            guard !type.isBuiltin else { return }
+            guard type.isOpenableInDetail else { return }
             isHovered = false
             onOpen()
         }
