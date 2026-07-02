@@ -127,7 +127,15 @@ struct QueryPreviewWindowView: View {
     private func loadPreview() {
         do {
             let baseQuery: StudyQuery
-            if let typeID = windowState.requestedTypeID,
+            if let personKind = windowState.requestedPersonKind,
+               let instanceID = windowState.requestedInstanceID {
+                // Built-in Person relationship query: computed HTML.
+                baseQuery = try appDatabase.fetchPersonQueryPreview(
+                    instanceID: instanceID,
+                    kind: personKind,
+                    partnershipID: windowState.requestedPersonPartnershipID
+                )
+            } else if let typeID = windowState.requestedTypeID,
                let queryTypeID = windowState.requestedQueryTypeID {
                 // Draft preview from the Add Instance window: no instance row yet.
                 baseQuery = try appDatabase.fetchQueryTypePreview(

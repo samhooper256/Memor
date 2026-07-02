@@ -316,6 +316,39 @@ struct InstanceBooleanFieldEditor: View {
     }
 }
 
+/// The built-in Person Sex field: a required Male/Female selector stored as
+/// the literal string "Male"/"Female" (an unset draft value reads as "Male",
+/// the default).
+struct InstanceSexFieldEditor: View {
+    let fieldName: String
+    @Binding var value: String
+
+    private var selection: Binding<String> {
+        Binding(
+            get: { value == "Female" ? "Female" : "Male" },
+            set: { value = $0 }
+        )
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(fieldName)
+                .font(.callout)
+
+            Picker("", selection: selection) {
+                Text("Male").tag("Male")
+                Text("Female").tag("Female")
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 160)
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 struct InstanceTextView: NSViewRepresentable {
     @Binding var text: String
     let focusController: AddInstanceFieldFocusController

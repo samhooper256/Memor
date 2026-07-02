@@ -131,6 +131,9 @@ final class QueryPreviewWindowState: ObservableObject {
     @Published private(set) var requestedTypeID: Int64?
     @Published private(set) var requestedQueryTypeID: Int64?
     @Published private(set) var requestedFieldValuesByName: [String: String]?
+    // Built-in Person relationship query previews (kind + optional partnership).
+    @Published private(set) var requestedPersonKind: PersonQueryKind?
+    @Published private(set) var requestedPersonPartnershipID: Int64?
     @Published private(set) var requestNonce = UUID()
 
     func requestOpen(
@@ -142,6 +145,8 @@ final class QueryPreviewWindowState: ObservableObject {
         requestedTypeID = nil
         requestedQueryTypeID = queryTypeID
         requestedFieldValuesByName = fieldValuesByName
+        requestedPersonKind = nil
+        requestedPersonPartnershipID = nil
         requestNonce = UUID()
     }
 
@@ -150,6 +155,19 @@ final class QueryPreviewWindowState: ObservableObject {
         requestedTypeID = nil
         requestedQueryTypeID = nil
         requestedFieldValuesByName = nil
+        requestedPersonKind = nil
+        requestedPersonPartnershipID = nil
+        requestNonce = UUID()
+    }
+
+    /// Preview one of a Person instance's built-in relationship queries.
+    func requestOpenPersonQuery(instanceID: Int64, kind: PersonQueryKind, partnershipID: Int64?) {
+        requestedInstanceID = instanceID
+        requestedTypeID = nil
+        requestedQueryTypeID = nil
+        requestedFieldValuesByName = nil
+        requestedPersonKind = kind
+        requestedPersonPartnershipID = partnershipID
         requestNonce = UUID()
     }
 
@@ -165,6 +183,8 @@ final class QueryPreviewWindowState: ObservableObject {
         requestedTypeID = typeID
         requestedQueryTypeID = queryTypeID
         requestedFieldValuesByName = fieldValuesByName
+        requestedPersonKind = nil
+        requestedPersonPartnershipID = nil
         requestNonce = UUID()
     }
 }

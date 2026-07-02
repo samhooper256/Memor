@@ -8,6 +8,7 @@
 import AppKit
 import Combine
 import CoreLocation
+import GRDB
 import MapKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -89,9 +90,13 @@ struct InstanceEditorWindowView: View {
         return selectedType.isBuiltin && selectedType.name == BOUNDARYMAP_TYPE_NAME
     }
 
-    /// A plain Object type: a real type that is not a built-in Map.
+    private var isPersonSelected: Bool {
+        selectedType?.isPerson ?? false
+    }
+
+    /// A plain Object type: a real type that is not a built-in Map or Person.
     private var isObjectTypeSelected: Bool {
-        selectedType != nil && !isPointMapSelected && !isBoundaryMapSelected
+        selectedType != nil && !isPointMapSelected && !isBoundaryMapSelected && !isPersonSelected
     }
 
     /// Mirrors the selected type's map-kind and name onto the draft so it can
@@ -99,6 +104,7 @@ struct InstanceEditorWindowView: View {
     private func syncDraftTypeFlags() {
         draft.selectedTypeIsPointMap = isPointMapSelected
         draft.selectedTypeIsBoundaryMap = isBoundaryMapSelected
+        draft.selectedTypeIsPerson = isPersonSelected
         draft.selectedTypeName = selectedType?.name
     }
 
@@ -110,8 +116,10 @@ struct InstanceEditorWindowView: View {
         if isBoundaryMapSelected {
             return !draft.boundaryMapTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
-        let hasFieldValue = draft.fieldValues.values.contains {
-            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasFieldValue = draft.fields.contains { field in
+            guard field.fieldType != .sex else { return false }
+            let value = draft.fieldValues[field.id] ?? ""
+            return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
         return hasFieldValue
     }
@@ -1463,6 +1471,10 @@ struct InstanceEditorWindowView: View {
                         fieldEditors
                     }
 
+                    if isPersonSelected {
+                        PersonSlotsEditor(appDatabase: appDatabase, draft: draft)
+                    }
+
                     if draft.selectedTypeID != nil {
                         collectionChecklistSection
                             .id("collectionsSection")
@@ -1513,12 +1525,26 @@ struct InstanceEditorWindowView: View {
                         Text("No types are available.")
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                    } else if draft.queryTypes.isEmpty {
+                    } else if draft.queryTypes.isEmpty && !isPersonSelected {
                         Text("This type has no query types.")
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     } else {
-                        queryTypeCheckboxList
+                        if !draft.queryTypes.isEmpty {
+                            queryTypeCheckboxList
+                        }
+                        if isPersonSelected {
+                            PersonQueryChecklist(
+                                draft: draft,
+                                mode: mode,
+                                onPreview: { kind, partnerEntryID in
+                                    openPersonQueryPreview(kind: kind, partnerEntryID: partnerEntryID)
+                                },
+                                onResetDueDate: { kind, partnerEntryID in
+                                    resetPersonQueryDueDate(kind: kind, partnerEntryID: partnerEntryID)
+                                }
+                            )
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -1536,7 +1562,12 @@ struct InstanceEditorWindowView: View {
     private var fieldEditors: some View {
         VStack(alignment: .leading, spacing: 12) {
             SwiftUI.ForEach(draft.fields) { field in
-                if field.fieldType == .boolean {
+                if field.fieldType == .sex {
+                    InstanceSexFieldEditor(
+                        fieldName: field.name,
+                        value: binding(for: field.id)
+                    )
+                } else if field.fieldType == .boolean {
                     InstanceBooleanFieldEditor(
                         fieldName: field.name,
                         value: binding(for: field.id),
@@ -1928,6 +1959,7 @@ struct InstanceEditorWindowView: View {
             draft.queryTypes = try appDatabase.fetchQueryTypes(forTypeID: typeID)
             draft.stickyFieldIDs = try appDatabase.fetchStickyFieldIDs(forTypeID: typeID)
             if didChangeType {
+                draft.resetPersonState()
                 let availableQueryTypeIDs = draft.queryTypes.map(\.id)
                 draft.selectedQueryTypeIDs = (try? appDatabase.resolveTypeQueryDefaultSelection(
                     forTypeID: typeID,
@@ -2039,6 +2071,11 @@ struct InstanceEditorWindowView: View {
             let editorData = try appDatabase.fetchInstanceEditorData(instanceID: instanceID)
             draft.fields = try appDatabase.fetchFieldsForDisplay(forTypeID: editorData.typeID)
             draft.queryTypes = try appDatabase.fetchQueryTypes(forTypeID: editorData.typeID)
+            if types.first(where: { $0.id == editorData.typeID })?.isPerson == true {
+                applyPersonEditorData(try appDatabase.fetchPersonEditorData(instanceID: instanceID))
+            } else {
+                draft.resetPersonState()
+            }
             draft.selectedTypeID = editorData.typeID
             draft.loadedTypeID = editorData.typeID
             draft.loadedInstanceID = instanceID
@@ -2085,6 +2122,11 @@ struct InstanceEditorWindowView: View {
 
         if isBoundaryMapSelected {
             await submitBoundaryMapInstance(typeID: selectedTypeID)
+            return
+        }
+
+        if isPersonSelected {
+            await submitPersonInstance(typeID: selectedTypeID)
             return
         }
 
@@ -2549,6 +2591,169 @@ struct InstanceEditorWindowView: View {
             }
         } catch {
             showToast(message: "Failed to delete instance.", style: .error)
+        }
+    }
+
+    /// Maps the draft's per-partner rows to the saved partnership ids so
+    /// preview/reset can target "Children with" queries. nil for unsaved cards.
+    private func personPartnershipID(forEntryID entryID: UUID?) -> Int64? {
+        guard let entryID else { return nil }
+        return draft.personPartners.first(where: { $0.id == entryID })?.partnershipID
+    }
+
+    private func openPersonQueryPreview(kind: PersonQueryKind, partnerEntryID: UUID?) {
+        guard mode == .edit, let loadedInstanceID = draft.loadedInstanceID else { return }
+        if kind == .childrenWith, personPartnershipID(forEntryID: partnerEntryID) == nil {
+            showToast(message: "Save this person before previewing a new partner's query.", style: .error)
+            return
+        }
+        queryPreviewWindowState.requestOpenPersonQuery(
+            instanceID: loadedInstanceID,
+            kind: kind,
+            partnershipID: personPartnershipID(forEntryID: partnerEntryID)
+        )
+        openWindow(id: "query-preview")
+    }
+
+    @MainActor
+    private func resetPersonQueryDueDate(kind: PersonQueryKind, partnerEntryID: UUID?) {
+        guard let loadedInstanceID = draft.loadedInstanceID else { return }
+        if kind == .childrenWith, personPartnershipID(forEntryID: partnerEntryID) == nil { return }
+        do {
+            try appDatabase.resetQueryDueDates(targets: [QueryTarget(
+                instanceID: loadedInstanceID,
+                queryTypeID: 0,
+                isReverse: false,
+                kind: .person,
+                personKind: kind,
+                personPartnershipID: personPartnershipID(forEntryID: partnerEntryID)
+            )])
+            if let partnerEntryID,
+               let index = draft.personPartners.firstIndex(where: { $0.id == partnerEntryID }) {
+                draft.personPartners[index].childrenQueryInterval = 0
+            } else {
+                draft.personQueryIntervalsByKind[kind] = 0
+            }
+        } catch {
+            showToast(message: "Failed to reset query due date.", style: .error)
+        }
+    }
+
+    @MainActor
+    private func applyPersonEditorData(_ data: PersonEditorData) {
+        draft.personMother = data.relations.mother
+        draft.personFather = data.relations.father
+        draft.personAdoptiveMother = data.relations.adoptiveMother
+        draft.personAdoptiveFather = data.relations.adoptiveFather
+        draft.personPartners = data.relations.partners.map { partner in
+            var entry = PersonPartnerDraftEntry(
+                partnershipID: partner.partnershipID,
+                partner: partner.partner,
+                isMarried: partner.isMarried,
+                startText: partner.startText,
+                endText: partner.endText,
+                children: partner.children.map { PersonChildEntry(rowID: $0.rowID, child: $0.child) },
+                isChildrenQueryEnabled: partner.isChildrenQueryEnabled
+            )
+            if partner.isChildrenQueryEnabled, let partnershipID = partner.partnershipID,
+               let info = try? appDatabase.fetchPersonBuiltinQueryInfos(instanceID: data.instanceID)
+                   .first(where: { $0.kind == .childrenWith && $0.partnershipID == partnershipID }) {
+                entry.childrenQueryInterval = info.interval
+            }
+            return entry
+        }
+        draft.personUngroupedChildren = data.relations.ungroupedChildren.map {
+            PersonChildEntry(rowID: $0.rowID, child: $0.child)
+        }
+        draft.personEnabledQueryKinds = Set(data.builtinQueries.filter(\.enabled).map(\.kind))
+        draft.personQueryIntervalsByKind = Dictionary(
+            uniqueKeysWithValues: data.builtinQueries.compactMap { info in
+                guard info.enabled, info.partnershipID == nil else { return nil }
+                return (info.kind, info.interval ?? 0)
+            }
+        )
+        draft.personDisplayNamesByID = data.displayNamesByInstanceID
+        draft.personSexesByID = data.sexesByInstanceID
+    }
+
+    @MainActor
+    private func submitPersonInstance(typeID: Int64) async {
+        let parsedMaxInterval: Int64? = Int64(draft.maxIntervalText)
+
+        do {
+            let result = try appDatabase.savePersonInstance(
+                instanceID: mode == .edit ? draft.loadedInstanceID : nil,
+                fieldValuesByFieldID: draft.fieldValues,
+                queryTypeIDs: draft.selectedQueryTypeIDs,
+                relations: draft.buildPersonRelationsDraft(),
+                builtinEnabledKinds: draft.personEnabledQueryKinds
+            )
+            if !draft.selectedCollectionIDs.isEmpty || mode == .edit {
+                try appDatabase.setInstanceCollections(
+                    instanceID: result.instanceID,
+                    collectionIDs: draft.selectedCollectionIDs
+                )
+            }
+            if parsedMaxInterval != nil || mode == .edit {
+                try appDatabase.setMaxInterval(
+                    forInstanceID: result.instanceID,
+                    maxInterval: parsedMaxInterval
+                )
+            }
+
+            let resetSuffix = result.resetQueryCount > 0
+                ? " \(result.resetQueryCount) \(result.resetQueryCount == 1 ? "query" : "queries") reset."
+                : ""
+
+            switch mode {
+            case .add:
+                onAddSaved?(typeID)
+                draft.fieldValues = Dictionary(
+                    uniqueKeysWithValues: draft.fields.map { field in
+                        let preserved = draft.stickyFieldIDs.contains(field.id) ? draft.fieldValues[field.id] ?? "" : ""
+                        return (field.id, preserved)
+                    }
+                )
+                draft.resetPersonState()
+                focusController.focusField(draft.fields.first?.id)
+                addScrollNonce = UUID()
+                showToast(message: "Person added successfully.\(resetSuffix)", style: .success)
+            case .edit:
+                onEditSaved?(result.instanceID)
+                if result.resetQueryCount > 0 {
+                    // Leave the toast on screen long enough to read the count.
+                    showToast(message: "Changes saved.\(resetSuffix)", style: .success)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+                        dismiss()
+                    }
+                } else {
+                    dismiss()
+                }
+            }
+        } catch let error as PersonSaveError {
+            presentPersonConflictAlert(error)
+        } catch {
+            let message = (error as? DatabaseError)?.message ?? "Failed to save."
+            showToast(message: message, style: .error)
+        }
+    }
+
+    /// The BLOCKING contradiction popup: one bullet per affected instance/field.
+    @MainActor
+    private func presentPersonConflictAlert(_ error: PersonSaveError) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Cannot save — contradictory relationships"
+        let bullets = error.conflicts.map { conflict in
+            let idSuffix = conflict.instanceID.map { " (ID \($0))" } ?? ""
+            return "• \(conflict.displayName)\(idSuffix): \(conflict.kind.description)"
+        }.joined(separator: "\n")
+        alert.informativeText = "Saving would contradict existing relationship data:\n\n\(bullets)\n\nNo changes were saved."
+        alert.addButton(withTitle: "OK")
+        if let window = NSApp.keyWindow {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
         }
     }
 

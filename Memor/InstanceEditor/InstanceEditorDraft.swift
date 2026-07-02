@@ -16,6 +16,29 @@ import Foundation
 import MapKit
 import SwiftUI
 
+/// One child entry in the Person editor (partner card or ungrouped list).
+/// `id` is draft-local identity for SwiftUI; `rowID` is the persisted row.
+struct PersonChildEntry: Identifiable, Hashable {
+    let id = UUID()
+    var rowID: Int64?
+    var child: PersonRef
+}
+
+/// One partner card in the Person editor. `partnershipID` is the stable
+/// person_partnership row id (nil until first save).
+struct PersonPartnerDraftEntry: Identifiable, Hashable {
+    let id = UUID()
+    var partnershipID: Int64?
+    var partner: PersonRef
+    var isMarried = false
+    var startText = ""
+    var endText = ""
+    var children: [PersonChildEntry] = []
+    var isChildrenQueryEnabled = false
+    /// Edit-mode SRS display for the "Children with" query (nil = never seen).
+    var childrenQueryInterval: Int64?
+}
+
 final class InstanceEditorDraft: ObservableObject, Identifiable {
     let id = UUID()
 
@@ -31,6 +54,7 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
 
     @Published var selectedTypeIsPointMap = false
     @Published var selectedTypeIsBoundaryMap = false
+    @Published var selectedTypeIsPerson = false
     @Published var selectedTypeName: String?
 
     // MARK: Core editing state
@@ -46,6 +70,73 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
     @Published var selectedCollectionIDs: Set<Int64> = []
     @Published var stickyFieldIDs: Set<Int64> = []
     @Published var maxIntervalText: String = ""
+
+    // MARK: Person relationship state
+
+    @Published var personMother: PersonRef?
+    @Published var personFather: PersonRef?
+    @Published var personAdoptiveMother: PersonRef?
+    @Published var personAdoptiveFather: PersonRef?
+    @Published var personPartners: [PersonPartnerDraftEntry] = []
+    @Published var personUngroupedChildren: [PersonChildEntry] = []
+    /// Enabled standalone built-in query kinds (childrenWith enablement lives
+    /// on each partner entry).
+    @Published var personEnabledQueryKinds: Set<PersonQueryKind> = []
+    /// Edit-mode SRS display for the standalone kinds (nil interval = never seen).
+    @Published var personQueryIntervalsByKind: [PersonQueryKind: Int64] = [:]
+    /// Display names + sexes for every instance referenced by the slots (chips,
+    /// same-sex child blocking). Grows as the picker adds people.
+    @Published var personDisplayNamesByID: [Int64: String] = [:]
+    @Published var personSexesByID: [Int64: String] = [:]
+
+    /// The draft's current Sex value ("Male" unless explicitly set to "Female").
+    var personSexValue: String {
+        guard let sexField = fields.first(where: { $0.fieldType == .sex }) else { return "Male" }
+        return fieldValues[sexField.id] == "Female" ? "Female" : "Male"
+    }
+
+    var hasAnyPersonRelationshipData: Bool {
+        personMother != nil || personFather != nil
+            || personAdoptiveMother != nil || personAdoptiveFather != nil
+            || !personPartners.isEmpty || !personUngroupedChildren.isEmpty
+    }
+
+    func resetPersonState() {
+        personMother = nil
+        personFather = nil
+        personAdoptiveMother = nil
+        personAdoptiveFather = nil
+        personPartners = []
+        personUngroupedChildren = []
+        personEnabledQueryKinds = []
+        personQueryIntervalsByKind = [:]
+        personDisplayNamesByID = [:]
+        personSexesByID = [:]
+    }
+
+    /// The relations payload for savePersonInstance.
+    func buildPersonRelationsDraft() -> PersonRelationsDraft {
+        PersonRelationsDraft(
+            mother: personMother,
+            father: personFather,
+            adoptiveMother: personAdoptiveMother,
+            adoptiveFather: personAdoptiveFather,
+            partners: personPartners.map { entry in
+                PersonPartnerDraft(
+                    partnershipID: entry.partnershipID,
+                    partner: entry.partner,
+                    isMarried: entry.isMarried,
+                    startText: entry.startText,
+                    endText: entry.endText,
+                    children: entry.children.map { PersonChildDraft(rowID: $0.rowID, child: $0.child) },
+                    isChildrenQueryEnabled: entry.isChildrenQueryEnabled
+                )
+            },
+            ungroupedChildren: personUngroupedChildren.map {
+                PersonChildDraft(rowID: $0.rowID, child: $0.child)
+            }
+        )
+    }
 
     // MARK: PointMap state
 
@@ -129,8 +220,14 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
         if selectedTypeIsBoundaryMap {
             return !boundaryMapNewAttachments.isEmpty
         }
+        if selectedTypeIsPerson, hasAnyPersonRelationshipData {
+            return true
+        }
         return fields.contains { field in
             guard !stickyFieldIDs.contains(field.id) else { return false }
+            // Sex always carries a value ("Male" by default); it never makes a
+            // draft dirty on its own.
+            guard field.fieldType != .sex else { return false }
             let value = fieldValues[field.id] ?? ""
             return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
@@ -143,6 +240,7 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
     var isPristine: Bool {
         guard !isDirty else { return false }
         return selectedCollectionIDs.isEmpty
+            && !hasAnyPersonRelationshipData
             && maxIntervalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && pointMapTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && pointMapDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
