@@ -429,6 +429,34 @@ enum MemorMCPTools {
         }
         let mergedQueryTypeIDs = queryTypeIDs ?? current.enabledQueryTypeIDs
 
+        // Person field edits must run through savePersonInstance: a Sex change
+        // flips the person's role on their children (or is blocked as a
+        // contradiction), which the generic field write would silently skip.
+        let type = try appDatabase.fetchType(typeID: current.typeID)
+        if type?.isPerson == true {
+            try validatePersonSexValues(typeID: current.typeID, fieldValues: mergedFieldValues, appDatabase: appDatabase)
+            let personData = try appDatabase.fetchPersonEditorData(instanceID: instanceID)
+            let enabledStandaloneKinds = Set(
+                personData.builtinQueries.filter { $0.enabled && $0.partnershipID == nil }.map(\.kind)
+            )
+            do {
+                _ = try appDatabase.savePersonInstance(
+                    instanceID: instanceID,
+                    fieldValuesByFieldID: mergedFieldValues,
+                    queryTypeIDs: mergedQueryTypeIDs,
+                    relations: personData.relations,
+                    builtinEnabledKinds: enabledStandaloneKinds
+                )
+            } catch let error as PersonSaveError {
+                let messages = error.conflicts
+                    .map { "\($0.displayName): \($0.kind.description)" }
+                    .joined(separator: "; ")
+                throw MemorMCPToolError(message: "The change contradicts existing relationship data; nothing was saved. \(messages)")
+            }
+            postDatabaseChange()
+            return OkDTO()
+        }
+
         try appDatabase.updateInstance(
             instanceID: instanceID,
             fieldValuesByFieldID: mergedFieldValues,
