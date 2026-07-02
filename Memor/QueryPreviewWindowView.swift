@@ -93,13 +93,34 @@ struct QueryPreviewWindowView: View {
                 historyStack = []
             }
             isInternalNavigation = false
-            // Load synchronously so the new query's state lands in the same update
-            // cycle as the request: deferring to a Task lets an intermediate render
-            // (and any further navigation) observe the previous query's state.
-            loadPreview()
+            if isPreviewWindowVisible() {
+                // Window already open: load synchronously so the new query's state
+                // lands in the same update cycle as the request — deferring to a
+                // Task lets an intermediate render (and any further navigation)
+                // observe the previous query's state.
+                loadPreview()
+            } else {
+                // Fresh open of a closed window: unmount the previous session's
+                // web view first, then load after the blank state applies, so the
+                // window can never appear showing the old query.
+                query = nil
+                renderedAnswerHTML = ""
+                errorMessage = nil
+                Task { loadPreview() }
+            }
         }
         .onExitCommand {
             dismiss()
+        }
+        .onDisappear {
+            // A Window scene preserves @State across close/reopen; without this
+            // the reopened window shows the previous session's query until the
+            // new one commits.
+            query = nil
+            renderedAnswerHTML = ""
+            errorMessage = nil
+            historyStack = []
+            isInternalNavigation = false
         }
     }
 
@@ -188,6 +209,13 @@ struct QueryPreviewWindowView: View {
             // content, so count it as open alongside visible windows.
             (window.isVisible || window.isMiniaturized)
                 && (window.identifier?.rawValue == "edit-instance" || window.title == "Edit Instance")
+        }
+    }
+
+    private func isPreviewWindowVisible() -> Bool {
+        NSApp.windows.contains { window in
+            (window.isVisible || window.isMiniaturized)
+                && (window.identifier?.rawValue == "query-preview" || window.title == "Query Preview")
         }
     }
 
