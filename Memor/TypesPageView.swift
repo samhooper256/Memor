@@ -267,7 +267,7 @@ struct TypesPageView: View {
         let trimmedName = newTypeName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
         do {
-            let newType = try appDatabase.createType(name: trimmedName, kind: .object)
+            let newType = try appDatabase.createType(name: trimmedName)
             types = try appDatabase.fetchTypes()
             isAddTypePopoverPresented = false
             selectedType = newType

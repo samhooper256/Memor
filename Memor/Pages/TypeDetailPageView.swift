@@ -635,8 +635,7 @@ struct TypeDetailPageView: View {
                     typeID: queryType.typeID,
                     name: queryType.name,
                     questionHTML: mode == .query ? html : queryType.questionHTML,
-                    answerHTML: mode == .answer ? html : queryType.answerHTML,
-                    linkFieldID: queryType.linkFieldID
+                    answerHTML: mode == .answer ? html : queryType.answerHTML
                 )
             }
             errorMessage = nil
@@ -692,8 +691,7 @@ struct TypeDetailPageView: View {
                     typeID: queryType.typeID,
                     name: trimmedQueryTypeName,
                     questionHTML: queryType.questionHTML,
-                    answerHTML: queryType.answerHTML,
-                    linkFieldID: queryType.linkFieldID
+                    answerHTML: queryType.answerHTML
                 )
             }
             isRenameQueryTypePopoverPresented = false

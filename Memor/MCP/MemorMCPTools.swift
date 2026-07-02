@@ -337,8 +337,7 @@ enum MemorMCPTools {
         let instanceID = try appDatabase.makeInstance(
             forTypeID: typeID,
             fieldValuesByFieldID: fieldValues,
-            queryTypeIDs: queryTypeIDs,
-            linksByLinkFieldID: [:]
+            queryTypeIDs: queryTypeIDs
         )
         return CreatedInstanceDTO(instanceID: instanceID, typeID: typeID)
     }
@@ -422,8 +421,7 @@ enum MemorMCPTools {
         try appDatabase.updateInstance(
             instanceID: instanceID,
             fieldValuesByFieldID: mergedFieldValues,
-            queryTypeIDs: mergedQueryTypeIDs,
-            linksByLinkFieldID: [:]
+            queryTypeIDs: mergedQueryTypeIDs
         )
         postDatabaseChange()
         return OkDTO()

@@ -132,8 +132,7 @@ struct QueryPreviewWindowView: View {
                 // Draft preview from the Add Instance window: no instance row yet.
                 baseQuery = try appDatabase.fetchQueryTypePreview(
                     typeID: typeID,
-                    queryTypeID: queryTypeID,
-                    linkTargetIDsByLinkFieldID: [:]
+                    queryTypeID: queryTypeID
                 )
             } else if let instanceID = windowState.requestedInstanceID {
                 baseQuery = if let queryTypeID = windowState.requestedQueryTypeID {

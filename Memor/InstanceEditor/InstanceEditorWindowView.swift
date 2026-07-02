@@ -2096,8 +2096,7 @@ struct InstanceEditorWindowView: View {
                 let instanceID = try appDatabase.makeInstance(
                     forTypeID: selectedTypeID,
                     fieldValuesByFieldID: draft.fieldValues,
-                    queryTypeIDs: draft.selectedQueryTypeIDs,
-                    linksByLinkFieldID: [:]
+                    queryTypeIDs: draft.selectedQueryTypeIDs
                 )
                 if !draft.selectedCollectionIDs.isEmpty {
                     try appDatabase.setInstanceCollections(
@@ -2126,8 +2125,7 @@ struct InstanceEditorWindowView: View {
                 try appDatabase.updateInstance(
                     instanceID: loadedInstanceID,
                     fieldValuesByFieldID: draft.fieldValues,
-                    queryTypeIDs: draft.selectedQueryTypeIDs,
-                    linksByLinkFieldID: [:]
+                    queryTypeIDs: draft.selectedQueryTypeIDs
                 )
                 try appDatabase.setInstanceCollections(
                     instanceID: loadedInstanceID,

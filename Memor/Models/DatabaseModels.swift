@@ -12,29 +12,13 @@ import GRDB
 nonisolated let POINTMAP_TYPE_NAME = "PointMap"
 nonisolated let BOUNDARYMAP_TYPE_NAME = "BoundaryMap"
 
-// Open classes of user-creatable type. (Map types are a separate, closed class
-// identified by name + is_builtin and are not represented here; they carry
-// kind == .object in the schema.)
-enum TypeKind: String, Codable, Hashable {
-    case object
-    case node
-
-    init(from decoder: Decoder) throws {
-        let raw = try decoder.singleValueContainer().decode(String.self)
-        self = TypeKind(rawValue: raw) ?? .object
-    }
-}
-
 struct FlashcardType: Identifiable, FetchableRecord, Decodable, Hashable {
     let id: Int64
     let name: String
     let description: String
     let css: String
     let isBuiltin: Bool
-    let kind: TypeKind
     let instanceCount: Int
-
-    var isNode: Bool { kind == .node }
 }
 
 // Per-instance marker size for a PointMap. Medium == the historical fixed size.
@@ -124,7 +108,7 @@ struct BoundaryMapInstanceWithBoundaries: Hashable {
     let attachments: [BoundaryMapAttachedBoundary]
 }
 
-// The kind of a field on an Object/Node type. `text` is a free-text field;
+// The kind of a field on an Object type. `text` is a free-text field;
 // `boolean` is a checkbox stored as the text "0"/"1" in the type{N} table.
 // A field's kind is fixed at creation time and cannot be changed afterward.
 enum FieldKind: String, Codable, Hashable {
@@ -176,59 +160,12 @@ struct TypeField: Identifiable, FetchableRecord, Decodable {
     }
 }
 
-// A link ("edge") field on a Node type. Targets are zero-or-more instances of
-// the same Node type. `maxCount == nil` means unlimited. `isParent` is stored
-// metadata only in v1.
-struct LinkField: Identifiable, FetchableRecord, Decodable, Hashable {
-    let id: Int64
-    let typeID: Int64
-    let name: String
-    let isParent: Bool
-    let minCount: Int
-    let maxCount: Int?
-    let linkFieldIndex: Int
-}
-
-// A candidate / selected target node shown in the instance editor's link picker
-// and as a chip. `displayValue` is the target's primary text-field value.
-struct NodeSummary: Identifiable, Hashable {
-    let id: Int64
-    let displayValue: String
-}
-
 struct QueryType: Identifiable, FetchableRecord, Decodable {
     let id: Int64
     let typeID: Int64
     let name: String
     let questionHTML: String
     let answerHTML: String
-    // Non-nil for auto-generated link query types (one per link field).
-    let linkFieldID: Int64?
-
-    var isLinkQuery: Bool { linkFieldID != nil }
-
-    init(id: Int64, typeID: Int64, name: String, questionHTML: String, answerHTML: String, linkFieldID: Int64? = nil) {
-        self.id = id
-        self.typeID = typeID
-        self.name = name
-        self.questionHTML = questionHTML
-        self.answerHTML = answerHTML
-        self.linkFieldID = linkFieldID
-    }
-
-    // Lenient: SELECTs that don't project linkFieldID default it to nil.
-    enum CodingKeys: String, CodingKey {
-        case id, typeID, name, questionHTML, answerHTML, linkFieldID
-    }
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decode(Int64.self, forKey: .id)
-        typeID = try c.decode(Int64.self, forKey: .typeID)
-        name = try c.decode(String.self, forKey: .name)
-        questionHTML = try c.decode(String.self, forKey: .questionHTML)
-        answerHTML = try c.decode(String.self, forKey: .answerHTML)
-        linkFieldID = (try? c.decodeIfPresent(Int64.self, forKey: .linkFieldID)) ?? nil
-    }
 }
 
 struct Collection: Identifiable, FetchableRecord, Decodable, Hashable {
@@ -363,10 +300,6 @@ struct InstanceEditorData: Hashable {
     let fieldValuesByFieldID: [Int64: String]
     let enabledQueryTypeIDs: Set<Int64>
     let maxInterval: Int64?
-    // Node types only: ordered target instance ids keyed by link field id, plus
-    // a display summary for each linked target so the editor can render chips.
-    var linkTargetsByLinkFieldID: [Int64: [Int64]] = [:]
-    var linkedNodeSummaries: [Int64: String] = [:]
 }
 
 // Per-query SRS state for one instance, used by the MCP get_instance tool.
@@ -504,9 +437,6 @@ struct StudyQuery: Identifiable, Hashable {
     // reverse card. Standard queries are always forward. Included in `id` so the
     // two directions are distinct cards for study selection, undo, and dedup.
     var isReverse: Bool = false
-    // Non-nil for Node-type link queries; the answer HTML is computed from the
-    // instance's links in this field at assembly time.
-    var linkFieldID: Int64? = nil
 
     var id: String { "\(instanceID):\(queryTypeID):\(isReverse ? "r" : "f")" }
 
@@ -528,8 +458,7 @@ struct StudyQuery: Identifiable, Hashable {
             kind: kind,
             pointMapPayload: pointMapPayload,
             boundaryMapPayload: boundaryMapPayload,
-            isReverse: isReverse,
-            linkFieldID: linkFieldID
+            isReverse: isReverse
         )
     }
 }

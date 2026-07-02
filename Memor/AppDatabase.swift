@@ -181,7 +181,6 @@ struct AppDatabase {
         let questionHTML: String
         let answerHTML: String
         let typeCSS: String
-        let linkFieldID: Int64?
     }
 
     private final class GlobalQueryHTMLCache {
@@ -476,12 +475,11 @@ struct AppDatabase {
                         COALESCE("type".description, '') AS description,
                         "type".css,
                         CASE WHEN COALESCE("type".is_builtin, 0) = 0 THEN 0 ELSE 1 END AS isBuiltin,
-                        COALESCE("type".kind, 'object') AS kind,
                         COUNT(instance_id_type_id.instance_id) AS instanceCount
                     FROM "type"
                     LEFT JOIN instance_id_type_id
                         ON instance_id_type_id.type_id = "type".id
-                    GROUP BY "type".id, "type".name, "type".description, "type".css, "type".is_builtin, "type".kind
+                    GROUP BY "type".id, "type".name, "type".description, "type".css, "type".is_builtin
                     ORDER BY name COLLATE NOCASE, id
                     """
             )
@@ -499,12 +497,11 @@ struct AppDatabase {
                         COALESCE("type".description, '') AS description,
                         "type".css,
                         CASE WHEN COALESCE("type".is_builtin, 0) = 0 THEN 0 ELSE 1 END AS isBuiltin,
-                        COALESCE("type".kind, 'object') AS kind,
                         COUNT(instance_id_type_id.instance_id) AS instanceCount
                     FROM "type"
                     LEFT JOIN instance_id_type_id
                         ON instance_id_type_id.type_id = "type".id
-                    GROUP BY "type".id, "type".name, "type".description, "type".css, "type".is_builtin, "type".kind
+                    GROUP BY "type".id, "type".name, "type".description, "type".css, "type".is_builtin
                     ORDER BY id
                     """
             )
@@ -522,13 +519,12 @@ struct AppDatabase {
                         COALESCE("type".description, '') AS description,
                         "type".css,
                         CASE WHEN COALESCE("type".is_builtin, 0) = 0 THEN 0 ELSE 1 END AS isBuiltin,
-                        COALESCE("type".kind, 'object') AS kind,
                         COUNT(instance_id_type_id.instance_id) AS instanceCount
                     FROM "type"
                     LEFT JOIN instance_id_type_id
                         ON instance_id_type_id.type_id = "type".id
                     WHERE "type".id = ?
-                    GROUP BY "type".id, "type".name, "type".description, "type".css, "type".is_builtin, "type".kind
+                    GROUP BY "type".id, "type".name, "type".description, "type".css, "type".is_builtin
                     """,
                 arguments: [typeID]
             )
@@ -2461,8 +2457,7 @@ struct AppDatabase {
                         type_id AS typeID,
                         name,
                         question_html AS questionHTML,
-                        answer_html AS answerHTML,
-                        link_field_id AS linkFieldID
+                        answer_html AS answerHTML
                     FROM query_type
                     WHERE type_id = ?
                     ORDER BY name COLLATE NOCASE, id
@@ -2531,8 +2526,7 @@ struct AppDatabase {
                         type_id AS typeID,
                         name,
                         question_html AS questionHTML,
-                        answer_html AS answerHTML,
-                        link_field_id AS linkFieldID
+                        answer_html AS answerHTML
                     FROM query_type
                     WHERE type_id = ?
                     ORDER BY name COLLATE NOCASE, id
@@ -2755,35 +2749,12 @@ struct AppDatabase {
             let maxIntervalValues = Set(maxIntervalRows.map { $0["max_interval"] as Int64? })
             let maxInterval: Int64? = maxIntervalValues.count == 1 ? maxIntervalValues.first ?? nil : nil
 
-            var linkTargetsByLinkFieldID: [Int64: [Int64]] = [:]
-            var linkedNodeSummaries: [Int64: String] = [:]
-            let linkRows = try Row.fetchAll(
-                db,
-                sql: """
-                    SELECT link_field_id AS linkFieldID, target_instance_id AS targetID
-                    FROM node_link
-                    WHERE source_instance_id = ?
-                    ORDER BY link_field_id, order_index, id
-                    """,
-                arguments: [instanceID]
-            )
-            for row in linkRows {
-                let linkFieldID = row["linkFieldID"] as Int64
-                let targetID = row["targetID"] as Int64
-                linkTargetsByLinkFieldID[linkFieldID, default: []].append(targetID)
-                if linkedNodeSummaries[targetID] == nil {
-                    linkedNodeSummaries[targetID] = try Self.fetchNodePrimaryValue(db: db, instanceID: targetID)
-                }
-            }
-
             return InstanceEditorData(
                 instanceID: instanceID,
                 typeID: typeID,
                 fieldValuesByFieldID: fieldValuesByFieldID,
                 enabledQueryTypeIDs: enabledQueryTypeIDs,
-                maxInterval: maxInterval,
-                linkTargetsByLinkFieldID: linkTargetsByLinkFieldID,
-                linkedNodeSummaries: linkedNodeSummaries
+                maxInterval: maxInterval
             )
         }
     }
@@ -2960,8 +2931,7 @@ struct AppDatabase {
                     query_type.name AS queryTypeName,
                     query_type.question_html AS questionHTML,
                     query_type.answer_html AS answerHTML,
-                    "type".css AS typeCSS,
-                    query_type.link_field_id AS linkFieldID
+                    "type".css AS typeCSS
                 FROM query_type
                 JOIN "type"
                     ON "type".id = query_type.type_id
@@ -2980,12 +2950,9 @@ struct AppDatabase {
     /// requiring a persisted instance. Used by the Add Instance window, where the
     /// "instance" being previewed doesn't exist in the database yet. Field values
     /// are left empty here and supplied by the caller via `StudyQuery.withFieldValues`.
-    /// For Node link queries the answer is computed from `linkTargetIDsByLinkFieldID`
-    /// (the link targets currently selected in the editor).
     func fetchQueryTypePreview(
         typeID: Int64,
-        queryTypeID: Int64,
-        linkTargetIDsByLinkFieldID: [Int64: [Int64]] = [:]
+        queryTypeID: Int64
     ) throws -> StudyQuery {
         try dbQueue.read { db in
             let typeInfos = try fetchInstanceSearchTypeInfos(db: db)
@@ -3006,8 +2973,7 @@ struct AppDatabase {
                         query_type.name AS queryTypeName,
                         query_type.question_html AS questionHTML,
                         query_type.answer_html AS answerHTML,
-                        "type".css AS typeCSS,
-                        query_type.link_field_id AS linkFieldID
+                        "type".css AS typeCSS
                     FROM query_type
                     JOIN "type"
                         ON "type".id = query_type.type_id
@@ -3017,19 +2983,6 @@ struct AppDatabase {
                 arguments: [queryTypeID, typeID]
             ) else {
                 throw DatabaseError(message: "Query type not found for type.")
-            }
-
-            // For Node link queries the answer is computed from the link targets
-            // currently selected in the editor, then wrapped exactly like a standard
-            // answer so the global template and question reference resolve normally.
-            var answerHTML = queryRow.answerHTML
-            if let linkFieldID = queryRow.linkFieldID {
-                let targetIDs = linkTargetIDsByLinkFieldID[linkFieldID] ?? []
-                let body = try Self.computeLinkQueryAnswerBody(db: db, targetInstanceIDs: targetIDs)
-                answerHTML = uniteQuestionAndAnswerWithDefaultSeparator(
-                    questionHTML: "{{#QuestionContent}}",
-                    answerHTML: body
-                )
             }
 
             // Carry the type's boolean field names so the draft preview renders
@@ -3051,16 +3004,15 @@ struct AppDatabase {
                 typeName: typeInfo.typeName,
                 queryTypeName: queryRow.queryTypeName,
                 questionHTML: queryRow.questionHTML,
-                answerHTML: answerHTML,
+                answerHTML: queryRow.answerHTML,
                 typeCSS: queryRow.typeCSS,
                 fieldValuesByName: [:],
-                booleanFieldNames: booleanFieldNames,
-                linkFieldID: queryRow.linkFieldID
+                booleanFieldNames: booleanFieldNames
             )
         }
     }
 
-    func createType(name: String, kind: TypeKind) throws -> FlashcardType {
+    func createType(name: String) throws -> FlashcardType {
         try dbQueue.write { db in
             let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmedName.isEmpty else {
@@ -3076,56 +3028,32 @@ struct AppDatabase {
 
             try db.execute(
                 sql: """
-                    INSERT INTO "type" (name, css, kind)
-                    VALUES (?, ?, ?)
+                    INSERT INTO "type" (name, css)
+                    VALUES (?, ?)
                     """,
-                arguments: [trimmedName, "", kind.rawValue]
+                arguments: [trimmedName, ""]
             )
             let typeID = db.lastInsertedRowID
 
-            switch kind {
-            case .object:
-                try db.execute(
-                    sql: """
-                        INSERT INTO field (type_id, name, field_index, field_display_index)
-                        VALUES (?, ?, ?, ?), (?, ?, ?, ?)
-                        """,
-                    arguments: [typeID, "Front", 1, 1, typeID, "Back", 2, 2]
-                )
-                try db.execute(
-                    sql: """
-                        CREATE TABLE "type\(typeID)" (
-                            id INTEGER PRIMARY KEY,
-                            field1 TEXT,
-                            field2 TEXT,
-                            FOREIGN KEY (id) REFERENCES instance_id_type_id(instance_id) ON DELETE CASCADE
-                        ) STRICT
-                        """
-                )
-            case .node:
-                // Seed one primary text field. A Node type's primary field is kept
-                // at both is_primary = 1 and field_display_index = 1, so every
-                // display-value SELECT (which keys off display_index = 1) works
-                // unchanged for Node types.
-                try db.execute(
-                    sql: """
-                        INSERT INTO field (type_id, name, field_index, field_display_index, is_primary)
-                        VALUES (?, ?, ?, ?, 1)
-                        """,
-                    arguments: [typeID, "Front", 1, 1]
-                )
-                try db.execute(
-                    sql: """
-                        CREATE TABLE "type\(typeID)" (
-                            id INTEGER PRIMARY KEY,
-                            field1 TEXT,
-                            FOREIGN KEY (id) REFERENCES instance_id_type_id(instance_id) ON DELETE CASCADE
-                        ) STRICT
-                        """
-                )
-            }
+            try db.execute(
+                sql: """
+                    INSERT INTO field (type_id, name, field_index, field_display_index)
+                    VALUES (?, ?, ?, ?), (?, ?, ?, ?)
+                    """,
+                arguments: [typeID, "Front", 1, 1, typeID, "Back", 2, 2]
+            )
+            try db.execute(
+                sql: """
+                    CREATE TABLE "type\(typeID)" (
+                        id INTEGER PRIMARY KEY,
+                        field1 TEXT,
+                        field2 TEXT,
+                        FOREIGN KEY (id) REFERENCES instance_id_type_id(instance_id) ON DELETE CASCADE
+                    ) STRICT
+                    """
+            )
 
-            return FlashcardType(id: typeID, name: trimmedName, description: "", css: "", isBuiltin: false, kind: kind, instanceCount: 0)
+            return FlashcardType(id: typeID, name: trimmedName, description: "", css: "", isBuiltin: false, instanceCount: 0)
         }
     }
 
@@ -3192,8 +3120,7 @@ struct AppDatabase {
                         type_id AS typeID,
                         name,
                         question_html AS questionHTML,
-                        answer_html AS answerHTML,
-                        link_field_id AS linkFieldID
+                        answer_html AS answerHTML
                     FROM query_type
                     WHERE id = ?
                     """,
@@ -3265,8 +3192,7 @@ struct AppDatabase {
     func makeInstance(
         forTypeID typeID: Int64,
         fieldValuesByFieldID: [Int64: String],
-        queryTypeIDs: Set<Int64>,
-        linksByLinkFieldID: [Int64: [Int64]] = [:]
+        queryTypeIDs: Set<Int64>
     ) throws -> Int64 {
         try dbQueue.write { db in
             try db.execute(
@@ -3323,60 +3249,7 @@ struct AppDatabase {
                 )
             }
 
-            try Self.writeNodeLinks(db: db, sourceInstanceID: instanceID, typeID: typeID, linksByLinkFieldID: linksByLinkFieldID)
-
             return instanceID
-        }
-    }
-
-    // Replaces all outgoing edges for a node instance. Validates that every link
-    // field belongs to the instance's type and that every target is an instance
-    // of the same type (and not the instance itself).
-    private static func writeNodeLinks(
-        db: Database,
-        sourceInstanceID: Int64,
-        typeID: Int64,
-        linksByLinkFieldID: [Int64: [Int64]]
-    ) throws {
-        try db.execute(
-            sql: "DELETE FROM node_link WHERE source_instance_id = ?",
-            arguments: [sourceInstanceID]
-        )
-
-        guard !linksByLinkFieldID.isEmpty else { return }
-
-        let validLinkFieldIDs = try Set(Int64.fetchAll(
-            db,
-            sql: "SELECT id FROM link_field WHERE type_id = ?",
-            arguments: [typeID]
-        ))
-
-        for (linkFieldID, targetIDs) in linksByLinkFieldID {
-            guard validLinkFieldIDs.contains(linkFieldID) else {
-                throw DatabaseError(message: "Unknown link field for this type.")
-            }
-            var orderIndex = 0
-            for targetID in targetIDs {
-                guard targetID != sourceInstanceID else {
-                    throw DatabaseError(message: "A node cannot link to itself.")
-                }
-                let targetTypeID = try Int64.fetchOne(
-                    db,
-                    sql: "SELECT type_id FROM instance_id_type_id WHERE instance_id = ?",
-                    arguments: [targetID]
-                )
-                guard targetTypeID == typeID else {
-                    throw DatabaseError(message: "Link targets must be instances of the same type.")
-                }
-                try db.execute(
-                    sql: """
-                        INSERT INTO node_link (source_instance_id, link_field_id, target_instance_id, order_index)
-                        VALUES (?, ?, ?, ?)
-                        """,
-                    arguments: [sourceInstanceID, linkFieldID, targetID, orderIndex]
-                )
-                orderIndex += 1
-            }
         }
     }
 
@@ -3392,8 +3265,7 @@ struct AppDatabase {
     func updateInstance(
         instanceID: Int64,
         fieldValuesByFieldID: [Int64: String],
-        queryTypeIDs: Set<Int64>,
-        linksByLinkFieldID: [Int64: [Int64]] = [:]
+        queryTypeIDs: Set<Int64>
     ) throws {
         try dbQueue.write { db in
             guard let typeID = try Int64.fetchOne(
@@ -3478,7 +3350,6 @@ struct AppDatabase {
                 )
             }
 
-            try Self.writeNodeLinks(db: db, sourceInstanceID: instanceID, typeID: typeID, linksByLinkFieldID: linksByLinkFieldID)
         }
     }
 
@@ -3512,11 +3383,10 @@ struct AppDatabase {
     /// Converts every instance in `instanceIDs` (all currently of `sourceTypeID`) to
     /// `destTypeID`, preserving each instance's ID. Field values are migrated according to
     /// `fieldMapping` (destFieldID -> sourceFieldID?, nil = leave blank). The converted
-    /// instances get exactly `enabledDestQueryTypeIDs` enabled (SRS state reset). All node
-    /// links touching the converted instances (incoming and outgoing) are removed. When
+    /// instances get exactly `enabledDestQueryTypeIDs` enabled (SRS state reset). When
     /// `removeFromCollections` is true the instances are removed from all collections.
     ///
-    /// Supports Object->Object, Object->Node, and Node->Node conversions only.
+    /// Supports Object->Object conversions only.
     func changeInstanceType(
         instanceIDs: [Int64],
         sourceTypeID: Int64,
@@ -3648,13 +3518,7 @@ struct AppDatabase {
                     )
                 }
 
-                // 7. Remove all node links touching this instance (incoming and outgoing).
-                try db.execute(
-                    sql: "DELETE FROM node_link WHERE source_instance_id = ? OR target_instance_id = ?",
-                    arguments: [instanceID, instanceID]
-                )
-
-                // 8. Optionally drop collection memberships.
+                // 7. Optionally drop collection memberships.
                 if removeFromCollections {
                     try db.execute(
                         sql: "DELETE FROM instance_id_collection_id WHERE instance_id = ?",
@@ -4503,7 +4367,7 @@ struct AppDatabase {
         }
     }
 
-    // MARK: - Node types: primary field, link fields, links
+    // MARK: - Primary / display fields
 
     // In-memory equivalent of the "primary field" ordering used in SQL
     // (is_primary DESC, field_display_index ASC, id). The first element of a list
@@ -4554,174 +4418,8 @@ struct AppDatabase {
         }
     }
 
-    func fetchLinkFields(forTypeID typeID: Int64) throws -> [LinkField] {
-        try dbQueue.read { db in
-            try Self.fetchLinkFields(db: db, typeID: typeID)
-        }
-    }
-
-    private static func fetchLinkFields(db: Database, typeID: Int64) throws -> [LinkField] {
-        try LinkField.fetchAll(
-            db,
-            sql: """
-                SELECT
-                    id,
-                    type_id AS typeID,
-                    name,
-                    is_parent AS isParent,
-                    min_count AS minCount,
-                    max_count AS maxCount,
-                    link_field_index AS linkFieldIndex
-                FROM link_field
-                WHERE type_id = ?
-                ORDER BY link_field_index, id
-                """,
-            arguments: [typeID]
-        )
-    }
-
-    func createLinkField(
-        forTypeID typeID: Int64,
-        name: String,
-        isParent: Bool,
-        minCount: Int,
-        maxCount: Int?
-    ) throws -> LinkField {
-        try dbQueue.write { db in
-            let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmedName.isEmpty else {
-                throw DatabaseError(message: "Link field name cannot be empty.")
-            }
-            if let maxCount, maxCount < minCount {
-                throw DatabaseError(message: "Maximum must be greater than or equal to minimum.")
-            }
-
-            let nextIndex = (try Int.fetchOne(
-                db,
-                sql: "SELECT MAX(link_field_index) FROM link_field WHERE type_id = ?",
-                arguments: [typeID]
-            ) ?? 0) + 1
-
-            try db.execute(
-                sql: """
-                    INSERT INTO link_field (type_id, name, is_parent, min_count, max_count, link_field_index)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                arguments: [typeID, trimmedName, isParent ? 1 : 0, minCount, maxCount, nextIndex]
-            )
-            let linkFieldID = db.lastInsertedRowID
-
-            // Generate the (once-only) default question HTML for this link field's
-            // auto query type, listing every text field in display order.
-            let textFields = try Self.fetchTextFieldsForDisplay(db: db, typeID: typeID)
-            let questionHTML = Self.defaultLinkQuestionHTML(
-                linkFieldName: trimmedName,
-                maxCount: maxCount,
-                textFields: textFields
-            )
-
-            try db.execute(
-                sql: """
-                    INSERT INTO query_type (type_id, name, question_html, answer_html, link_field_id)
-                    VALUES (?, ?, ?, '', ?)
-                    """,
-                arguments: [typeID, trimmedName, questionHTML, linkFieldID]
-            )
-
-            return LinkField(
-                id: linkFieldID,
-                typeID: typeID,
-                name: trimmedName,
-                isParent: isParent,
-                minCount: minCount,
-                maxCount: maxCount,
-                linkFieldIndex: nextIndex
-            )
-        }
-    }
-
-    func updateLinkField(
-        linkFieldID: Int64,
-        name: String,
-        isParent: Bool,
-        minCount: Int,
-        maxCount: Int?
-    ) throws {
-        try dbQueue.write { db in
-            let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmedName.isEmpty else {
-                throw DatabaseError(message: "Link field name cannot be empty.")
-            }
-            if let maxCount, maxCount < minCount {
-                throw DatabaseError(message: "Maximum must be greater than or equal to minimum.")
-            }
-
-            try db.execute(
-                sql: """
-                    UPDATE link_field
-                    SET name = ?, is_parent = ?, min_count = ?, max_count = ?
-                    WHERE id = ?
-                    """,
-                arguments: [trimmedName, isParent ? 1 : 0, minCount, maxCount, linkFieldID]
-            )
-
-            // Keep the auto query type's display name in sync (its question HTML is
-            // intentionally left as originally generated).
-            try db.execute(
-                sql: "UPDATE query_type SET name = ? WHERE link_field_id = ?",
-                arguments: [trimmedName, linkFieldID]
-            )
-        }
-    }
-
-    func deleteLinkField(linkFieldID: Int64) throws {
-        try dbQueue.write { db in
-            // Cascades remove the auto query_type (and its per-instance query rows)
-            // and all node_link edges for this field.
-            try db.execute(
-                sql: "DELETE FROM link_field WHERE id = ?",
-                arguments: [linkFieldID]
-            )
-        }
-    }
-
-    private static func fetchTextFieldsForDisplay(db: Database, typeID: Int64) throws -> [TypeField] {
-        try TypeField.fetchAll(
-            db,
-            sql: """
-                SELECT
-                    id,
-                    type_id AS typeID,
-                    name,
-                    field_index AS fieldIndex,
-                    field_display_index AS fieldDisplayIndex,
-                    COALESCE(is_primary, 0) AS isPrimary,
-                    field_type AS fieldType
-                FROM field
-                WHERE type_id = ? AND field_type = 'text'
-                ORDER BY field_display_index, id
-                """,
-            arguments: [typeID]
-        )
-    }
-
-    private static func defaultLinkQuestionHTML(
-        linkFieldName: String,
-        maxCount: Int?,
-        textFields: [TypeField]
-    ) -> String {
-        let isSingular = (maxCount == 1)
-        let verb = isSingular ? "is" : "are"
-        let renderedName = isSingular ? linkFieldName : linkFieldName + "s"
-        var lines = ["What \(verb) the \(renderedName) of:"]
-        for field in textFields {
-            lines.append("<div class=\"\(field.name)\">{{\(field.name)}}</div>")
-        }
-        return lines.joined(separator: "\n")
-    }
-
-    // Primary text-field value of a node instance (the display_index = 1 field).
-    private static func fetchNodePrimaryValue(db: Database, instanceID: Int64) throws -> String {
+    // An instance's display value: its primary/first display field's raw text.
+    static func fetchInstanceDisplayValue(db: Database, instanceID: Int64) throws -> String {
         guard let typeID = try Int64.fetchOne(
             db,
             sql: "SELECT type_id FROM instance_id_type_id WHERE instance_id = ?",
@@ -4742,80 +4440,6 @@ struct AppDatabase {
             arguments: [instanceID]
         )
         return value ?? ""
-    }
-
-    // The dynamically-computed answer body for a link query: the linked nodes'
-    // primary values, each wrapped in an id: hyperlink, joined by commas.
-    static func computeLinkQueryAnswerBody(db: Database, sourceInstanceID: Int64, linkFieldID: Int64) throws -> String {
-        let targetIDs = try Int64.fetchAll(
-            db,
-            sql: """
-                SELECT target_instance_id
-                FROM node_link
-                WHERE source_instance_id = ? AND link_field_id = ?
-                ORDER BY order_index, id
-                """,
-            arguments: [sourceInstanceID, linkFieldID]
-        )
-        return try computeLinkQueryAnswerBody(db: db, targetInstanceIDs: targetIDs)
-    }
-
-    static func computeLinkQueryAnswerBody(db: Database, targetInstanceIDs: [Int64]) throws -> String {
-        let links = try targetInstanceIDs.map { targetID -> String in
-            let value = try fetchNodePrimaryValue(db: db, instanceID: targetID)
-            return "<a href=\"id:\(targetID)\">\(value)</a>"
-        }
-        return links.joined(separator: ", ")
-    }
-
-    // Search instances of a node type for the link picker. `excludingInstanceID`
-    // omits the instance being edited (no self-links).
-    func fetchNodeCandidates(
-        forTypeID typeID: Int64,
-        matching query: String,
-        excludingInstanceID: Int64?
-    ) throws -> [NodeSummary] {
-        try dbQueue.read { db in
-            guard let fieldIndex = try Int.fetchOne(
-                db,
-                sql: "SELECT field_index FROM field WHERE type_id = ? ORDER BY is_primary DESC, field_display_index ASC, id LIMIT 1",
-                arguments: [typeID]
-            ) else {
-                return []
-            }
-
-            let displayColumn = "\"field\(fieldIndex)\""
-            let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-
-            var conditions: [String] = []
-            var arguments: [DatabaseValue] = []
-            if let excludingInstanceID {
-                conditions.append("id != ?")
-                arguments.append(excludingInstanceID.databaseValue)
-            }
-            if !trimmed.isEmpty {
-                conditions.append("\(displayColumn) LIKE ? ESCAPE '\\'")
-                let escaped = trimmed
-                    .replacingOccurrences(of: "\\", with: "\\\\")
-                    .replacingOccurrences(of: "%", with: "\\%")
-                    .replacingOccurrences(of: "_", with: "\\_")
-                arguments.append("%\(escaped)%".databaseValue)
-            }
-            let whereClause = conditions.isEmpty ? "" : "WHERE \(conditions.joined(separator: " AND "))"
-
-            let rows = try Row.fetchAll(
-                db,
-                sql: """
-                    SELECT id, COALESCE(\(displayColumn), '') AS displayValue
-                    FROM "type\(typeID)"
-                    \(whereClause)
-                    ORDER BY \(displayColumn) COLLATE NOCASE, id
-                    LIMIT 100
-                    """,
-                arguments: StatementArguments(arguments) ?? StatementArguments()
-            )
-            return rows.map { NodeSummary(id: $0["id"], displayValue: $0["displayValue"]) }
-        }
     }
 
     func renameType(typeID: Int64, to newName: String) throws {
@@ -4846,14 +4470,6 @@ struct AppDatabase {
 
     func deleteQueryType(queryTypeID: Int64) throws {
         try dbQueue.write { db in
-            let linkFieldID = try Int64.fetchOne(
-                db,
-                sql: "SELECT link_field_id FROM query_type WHERE id = ?",
-                arguments: [queryTypeID]
-            )
-            if linkFieldID != nil {
-                throw DatabaseError(message: "Auto-generated link query types cannot be deleted. Delete the link field instead.")
-            }
             try db.execute(
                 sql: """
                     DELETE FROM query_type
@@ -5278,8 +4894,7 @@ struct AppDatabase {
                     query_type.name AS queryTypeName,
                     query_type.question_html AS questionHTML,
                     query_type.answer_html AS answerHTML,
-                    "type".css AS typeCSS,
-                    query_type.link_field_id AS linkFieldID
+                    "type".css AS typeCSS
                 FROM \(tableName) AS \(tableAlias)
                 JOIN query
                     ON query.instance_id = \(tableAlias).id
@@ -5339,22 +4954,6 @@ struct AppDatabase {
         })
         let booleanFieldNames = Set(fields.filter { $0.fieldType == .boolean }.map(\.name))
 
-        // For Node link queries the answer is computed from the instance's links
-        // in that field, then wrapped exactly like a standard answer so the global
-        // template and question reference resolve normally.
-        var answerHTML = queryRow.answerHTML
-        if let linkFieldID = queryRow.linkFieldID {
-            let body = try Self.computeLinkQueryAnswerBody(
-                db: db,
-                sourceInstanceID: queryRow.instanceID,
-                linkFieldID: linkFieldID
-            )
-            answerHTML = uniteQuestionAndAnswerWithDefaultSeparator(
-                questionHTML: "{{#QuestionContent}}",
-                answerHTML: body
-            )
-        }
-
         return StudyQuery(
             instanceID: queryRow.instanceID,
             queryTypeID: queryRow.queryTypeID,
@@ -5365,11 +4964,10 @@ struct AppDatabase {
             typeName: typeInfo.typeName,
             queryTypeName: queryRow.queryTypeName,
             questionHTML: queryRow.questionHTML,
-            answerHTML: answerHTML,
+            answerHTML: queryRow.answerHTML,
             typeCSS: queryRow.typeCSS,
             fieldValuesByName: fieldValuesByName,
-            booleanFieldNames: booleanFieldNames,
-            linkFieldID: queryRow.linkFieldID
+            booleanFieldNames: booleanFieldNames
         )
     }
 
@@ -5405,8 +5003,7 @@ struct AppDatabase {
                     query_type.name AS queryTypeName,
                     query_type.question_html AS questionHTML,
                     query_type.answer_html AS answerHTML,
-                    "type".css AS typeCSS,
-                    query_type.link_field_id AS linkFieldID
+                    "type".css AS typeCSS
                 FROM \(tableName) AS \(tableAlias)
                 JOIN query
                     ON query.instance_id = \(tableAlias).id
