@@ -86,24 +86,24 @@ struct QueryPreviewWindowView: View {
         }
         .task {
             historyStack = []
-            await loadPreview()
+            loadPreview()
         }
         .onChange(of: windowState.requestNonce) { _, _ in
             if !isInternalNavigation {
                 historyStack = []
             }
             isInternalNavigation = false
-            Task {
-                await loadPreview()
-            }
+            // Load synchronously so the new query's state lands in the same update
+            // cycle as the request: deferring to a Task lets an intermediate render
+            // (and any further navigation) observe the previous query's state.
+            loadPreview()
         }
         .onExitCommand {
             dismiss()
         }
     }
 
-    @MainActor
-    private func loadPreview() async {
+    private func loadPreview() {
         do {
             let baseQuery: StudyQuery
             if let typeID = windowState.requestedTypeID,

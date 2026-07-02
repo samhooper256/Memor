@@ -235,6 +235,7 @@ final class QueryWebContainerView: NSView {
     private let webView: WKWebView
     private let imageSchemeHandler = LocalImageURLSchemeHandler()
     private let navigationDelegate = QueryWebNavigationDelegate()
+    private var lastLoadedHTML: String?
     var onInstanceLinkActivated: ((Int64) -> Void)? {
         didSet {
             navigationDelegate.onInstanceLinkActivated = onInstanceLinkActivated
@@ -261,6 +262,11 @@ final class QueryWebContainerView: NSView {
         webView.translatesAutoresizingMaskIntoConstraints = false
         webView.setValue(false, forKey: "drawsBackground")
         webView.navigationDelegate = navigationDelegate
+        navigationDelegate.onWebContentProcessTerminated = { [weak self] in
+            guard let self, let html = self.lastLoadedHTML else { return }
+            self.lastLoadedHTML = nil
+            self.loadHTML(html)
+        }
         addSubview(webView)
 
         NSLayoutConstraint.activate([
@@ -277,6 +283,11 @@ final class QueryWebContainerView: NSView {
     }
 
     func loadHTML(_ html: String) {
+        // SwiftUI calls updateNSView (and thus loadHTML) on every unrelated state
+        // change; reloading the same page would tear it down and re-commit it,
+        // flashing its images as they re-fetch through the local-image scheme handler.
+        guard html != lastLoadedHTML else { return }
+        lastLoadedHTML = html
         webView.loadHTMLString(rewriteLocalFileResourceURLs(in: html), baseURL: nil)
     }
 }
@@ -284,6 +295,13 @@ final class QueryWebContainerView: NSView {
 private final class QueryWebNavigationDelegate: NSObject, WKNavigationDelegate {
     var onInstanceLinkActivated: ((Int64) -> Void)?
     var onQueryLinkActivated: ((Int64, Int64) -> Void)?
+    var onWebContentProcessTerminated: (() -> Void)?
+
+    // If the web content process crashes, the container's dedup cache would
+    // otherwise suppress reloading the (now blank) page.
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        onWebContentProcessTerminated?()
+    }
 
     func webView(
         _ webView: WKWebView,
