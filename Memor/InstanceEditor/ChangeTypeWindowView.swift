@@ -4,8 +4,7 @@
 //
 //  "Change Type" window: converts one or more same-typed instances to a destination
 //  type with a user-defined field mapping, query-type selection, and collection
-//  handling — preserving each instance's ID. Supports Object->Object, Object->Node,
-//  and Node->Node conversions only.
+//  handling — preserving each instance's ID. Supports Object->Object conversions only.
 //
 
 import AppKit
@@ -84,12 +83,6 @@ struct ChangeTypeWindowView: View {
                         Divider()
                         destinationColumn
                             .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-
-                    if destType?.isNode == true {
-                        Text("The converted node instances will have no links.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
                     }
 
                     Divider()
@@ -302,8 +295,6 @@ struct ChangeTypeWindowView: View {
                         && !candidate.isBuiltin
                         && candidate.name != POINTMAP_TYPE_NAME
                         && candidate.name != BOUNDARYMAP_TYPE_NAME
-                        // Node sources may only convert to other node types.
-                        && (type?.kind != .node || candidate.kind == .node)
                 }
                 .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 
