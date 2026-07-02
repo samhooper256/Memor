@@ -447,8 +447,19 @@ struct StudyQuery: Identifiable, Hashable {
     // reverse card. Standard queries are always forward. Included in `id` so the
     // two directions are distinct cards for study selection, undo, and dedup.
     var isReverse: Bool = false
+    // Built-in Person relationship queries: non-nil kind identifies them (the
+    // question/answer HTML is computed from relationship data at assembly time;
+    // `kind` stays .standard so rendering flows through QueryHTMLView).
+    // personPartnershipID is set exactly for .childrenWith. queryTypeID is 0.
+    var personQueryKind: PersonQueryKind? = nil
+    var personPartnershipID: Int64? = nil
 
-    var id: String { "\(instanceID):\(queryTypeID):\(isReverse ? "r" : "f")" }
+    var id: String {
+        if let personQueryKind {
+            return "p:\(instanceID):\(personQueryKind.rawValue):\(personPartnershipID ?? 0)"
+        }
+        return "\(instanceID):\(queryTypeID):\(isReverse ? "r" : "f")"
+    }
 
     func withFieldValues(_ newFieldValuesByName: [String: String]) -> StudyQuery {
         StudyQuery(
@@ -468,7 +479,9 @@ struct StudyQuery: Identifiable, Hashable {
             kind: kind,
             pointMapPayload: pointMapPayload,
             boundaryMapPayload: boundaryMapPayload,
-            isReverse: isReverse
+            isReverse: isReverse,
+            personQueryKind: personQueryKind,
+            personPartnershipID: personPartnershipID
         )
     }
 }
