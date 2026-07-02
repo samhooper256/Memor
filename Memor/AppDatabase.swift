@@ -293,6 +293,9 @@ struct AppDatabase {
         }
 
         dbQueue = try DatabaseQueue(path: databasePath, configuration: configuration)
+        // One-time destructive removal of the retired Node-type machinery. Must
+        // run before createSchema and outside its transaction (see the function).
+        try Self.purgeNodeMachinery(in: dbQueue)
         try Self.createSchema(in: dbQueue, isNewDatabase: isNewDatabase)
         // Folder scopes must be started before file scopes, so stale per-file
         // bookmarks (which may live inside a granted folder) can be re-resolved

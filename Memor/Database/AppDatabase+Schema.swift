@@ -17,8 +17,7 @@ extension AppDatabase {
                     name TEXT,
                     description TEXT,
                     css TEXT,
-                    is_builtin INTEGER NOT NULL DEFAULT 0,
-                    kind TEXT NOT NULL DEFAULT 'object'
+                    is_builtin INTEGER NOT NULL DEFAULT 0
                 ) STRICT
                 """)
 
@@ -34,32 +33,17 @@ extension AppDatabase {
                 ) STRICT
                 """)
 
-            // Link fields belong to Node types only. Created before query_type so
-            // the query_type.link_field_id foreign key target exists.
-            try db.execute(sql: """
-                CREATE TABLE IF NOT EXISTS link_field (
-                    id INTEGER PRIMARY KEY,
-                    type_id INTEGER NOT NULL REFERENCES "type"(id) ON DELETE CASCADE,
-                    name TEXT NOT NULL,
-                    is_parent INTEGER NOT NULL DEFAULT 0,
-                    min_count INTEGER NOT NULL DEFAULT 0,
-                    max_count INTEGER,
-                    link_field_index INTEGER NOT NULL
-                ) STRICT
-                """)
-
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS query_type (
                     id INTEGER PRIMARY KEY,
                     type_id INTEGER NOT NULL REFERENCES "type"(id),
                     name TEXT,
                     question_html TEXT,
-                    answer_html TEXT,
-                    link_field_id INTEGER REFERENCES link_field(id) ON DELETE CASCADE
+                    answer_html TEXT
                 ) STRICT
                 """)
 
-            try migrateNodeTypeColumns(db: db)
+            try migrateFieldPrimaryColumn(db: db)
             try migrateTypeDescriptionColumn(db: db)
             try migrateFieldTypeColumn(db: db)
 
@@ -98,31 +82,6 @@ extension AppDatabase {
                     ON instance_id_collection_id(instance_id, collection_id)
                 """)
 
-            // Directed edges between instances of a Node type. Cascades clean up
-            // edges when either endpoint instance, or the link field, is deleted.
-            try db.execute(sql: """
-                CREATE TABLE IF NOT EXISTS node_link (
-                    id INTEGER PRIMARY KEY,
-                    source_instance_id INTEGER NOT NULL
-                        REFERENCES instance_id_type_id(instance_id) ON DELETE CASCADE,
-                    link_field_id INTEGER NOT NULL
-                        REFERENCES link_field(id) ON DELETE CASCADE,
-                    target_instance_id INTEGER NOT NULL
-                        REFERENCES instance_id_type_id(instance_id) ON DELETE CASCADE,
-                    order_index INTEGER NOT NULL DEFAULT 0
-                ) STRICT
-                """)
-
-            try db.execute(sql: """
-                CREATE INDEX IF NOT EXISTS idx_node_link_source
-                    ON node_link(source_instance_id, link_field_id)
-                """)
-
-            try db.execute(sql: """
-                CREATE INDEX IF NOT EXISTS idx_node_link_target
-                    ON node_link(target_instance_id)
-                """)
-            
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS query (
                     instance_id INTEGER REFERENCES instance_id_type_id(instance_id) ON DELETE CASCADE,
@@ -622,28 +581,140 @@ extension AppDatabase {
         }
     }
 
-    // Adds the Node-type columns (type.kind, field.is_primary,
-    // query_type.link_field_id) to databases created before Node types existed.
-    // Idempotent: each ALTER runs only when its column is absent, so this is a
-    // no-op on fresh installs. The link_field and node_link tables are created
-    // with CREATE TABLE IF NOT EXISTS in createSchema, so no migration is needed
-    // for them. Existing rows default to kind = 'object', is_primary = 0,
-    // link_field_id = NULL — i.e. ordinary Object types, unchanged.
-    private static func migrateNodeTypeColumns(db: Database) throws {
-        let typeInfo = try Row.fetchAll(db, sql: "PRAGMA table_info(\"type\")")
-        if !Set(typeInfo.compactMap { $0["name"] as String? }).contains("kind") {
-            try db.execute(sql: "ALTER TABLE \"type\" ADD COLUMN kind TEXT NOT NULL DEFAULT 'object'")
-        }
-
+    // Adds the field.is_primary column to databases created before it existed.
+    // Idempotent: the ALTER runs only when the column is absent, so this is a
+    // no-op on fresh installs. is_primary marks the field that supplies an
+    // instance's display value (falling back to display order when unset).
+    private static func migrateFieldPrimaryColumn(db: Database) throws {
         let fieldInfo = try Row.fetchAll(db, sql: "PRAGMA table_info(field)")
         if !Set(fieldInfo.compactMap { $0["name"] as String? }).contains("is_primary") {
             try db.execute(sql: "ALTER TABLE field ADD COLUMN is_primary INTEGER NOT NULL DEFAULT 0")
         }
+    }
 
-        let queryTypeInfo = try Row.fetchAll(db, sql: "PRAGMA table_info(query_type)")
-        if !Set(queryTypeInfo.compactMap { $0["name"] as String? }).contains("link_field_id") {
-            try db.execute(sql: "ALTER TABLE query_type ADD COLUMN link_field_id INTEGER REFERENCES link_field(id) ON DELETE CASCADE")
+    // MARK: - Node purge (one-time, destructive)
+
+    /// Destroys everything Node-related in a pre-existing database: all
+    /// `kind = 'node'` types (with their instances, fields, query types, and SRS
+    /// state), the `node_link` and `link_field` tables, `type.kind`, and
+    /// `query_type.link_field_id`. The Node feature was removed from the app.
+    ///
+    /// Must run BEFORE `createSchema` and outside its transaction:
+    /// `query_type.link_field_id` carries a foreign key, which makes plain
+    /// `DROP COLUMN` illegal, and `DROP TABLE query_type` with foreign keys ON
+    /// would fire the implicit-DELETE cascade and wipe every `query` row (all
+    /// SRS state). The only safe path is a rename/copy/drop rebuild under
+    /// `PRAGMA foreign_keys = OFF`, and that pragma cannot change inside a
+    /// transaction — hence `writeWithoutTransaction` with an explicit inner
+    /// transaction (a crash mid-purge rolls back and retries next launch).
+    ///
+    /// Idempotency is structural: every step is guarded by sqlite_master /
+    /// table_info checks, so fresh databases and already-purged databases no-op
+    /// before the pragma is touched.
+    static func purgeNodeMachinery(in dbQueue: DatabaseQueue) throws {
+        try dbQueue.writeWithoutTransaction { db in
+            let typeHasKind = try columnExists(db, table: "type", column: "kind")
+            let queryTypeHasLinkFieldID = try columnExists(db, table: "query_type", column: "link_field_id")
+            let hasNodeLinkTable = try tableExists(db, "node_link")
+            let hasLinkFieldTable = try tableExists(db, "link_field")
+            guard typeHasKind || queryTypeHasLinkFieldID || hasNodeLinkTable || hasLinkFieldTable else {
+                return
+            }
+
+            try db.execute(sql: "PRAGMA foreign_keys = OFF")
+            defer { try? db.execute(sql: "PRAGMA foreign_keys = ON") }
+
+            try db.inTransaction {
+                // 1. Destroy node types and everything hanging off them. Foreign
+                //    keys are OFF, so children are deleted explicitly, parents last.
+                if typeHasKind {
+                    let nodeTypeIDs = try Int64.fetchAll(
+                        db,
+                        sql: "SELECT id FROM \"type\" WHERE kind = 'node'"
+                    )
+                    if !nodeTypeIDs.isEmpty {
+                        let idList = nodeTypeIDs.map(String.init).joined(separator: ", ")
+                        try db.execute(sql: """
+                            DELETE FROM query WHERE query_type_id IN
+                                (SELECT id FROM query_type WHERE type_id IN (\(idList)))
+                            """)
+                        try db.execute(sql: """
+                            DELETE FROM query WHERE instance_id IN
+                                (SELECT instance_id FROM instance_id_type_id WHERE type_id IN (\(idList)))
+                            """)
+                        try db.execute(sql: """
+                            DELETE FROM instance_id_collection_id WHERE instance_id IN
+                                (SELECT instance_id FROM instance_id_type_id WHERE type_id IN (\(idList)))
+                            """)
+                        try db.execute(sql: "DELETE FROM instance_id_type_id WHERE type_id IN (\(idList))")
+                        if try tableExists(db, "type_query_default") {
+                            try db.execute(sql: "DELETE FROM type_query_default WHERE type_id IN (\(idList))")
+                        }
+                        try db.execute(sql: "DELETE FROM query_type WHERE type_id IN (\(idList))")
+                        try db.execute(sql: "DELETE FROM field WHERE type_id IN (\(idList))")
+                        if try tableExists(db, "sticky_field") {
+                            try db.execute(sql: "DELETE FROM sticky_field WHERE type_id IN (\(idList))")
+                        }
+                        if try tableExists(db, "pinned_collection") {
+                            try db.execute(sql: "DELETE FROM pinned_collection WHERE type_id IN (\(idList))")
+                        }
+                        for typeID in nodeTypeIDs {
+                            try db.execute(sql: "DROP TABLE IF EXISTS \"type\(typeID)\"")
+                        }
+                        try db.execute(sql: "DELETE FROM \"type\" WHERE id IN (\(idList))")
+                    }
+                }
+                try db.execute(sql: "DROP TABLE IF EXISTS node_link")
+
+                // 2. Rebuild query_type without link_field_id. The DROP does not
+                //    cascade into `query` (foreign keys OFF), and query's FK clause
+                //    references "query_type" by name, which the RENAME restores.
+                if queryTypeHasLinkFieldID {
+                    try db.execute(sql: """
+                        CREATE TABLE query_type_new (
+                            id INTEGER PRIMARY KEY,
+                            type_id INTEGER NOT NULL REFERENCES "type"(id),
+                            name TEXT,
+                            question_html TEXT,
+                            answer_html TEXT
+                        ) STRICT
+                        """)
+                    try db.execute(sql: """
+                        INSERT INTO query_type_new (id, type_id, name, question_html, answer_html)
+                        SELECT id, type_id, name, question_html, answer_html FROM query_type
+                        """)
+                    try db.execute(sql: "DROP TABLE query_type")
+                    try db.execute(sql: "ALTER TABLE query_type_new RENAME TO query_type")
+                }
+                try db.execute(sql: "DROP TABLE IF EXISTS link_field")
+
+                // 3. type.kind is a plain column (no index, CHECK, or FK), so a
+                //    straight DROP COLUMN is legal even on a STRICT table.
+                if typeHasKind {
+                    try db.execute(sql: "ALTER TABLE \"type\" DROP COLUMN kind")
+                }
+
+                // 4. Refuse to commit a purge that broke referential integrity.
+                let violations = try Row.fetchAll(db, sql: "PRAGMA foreign_key_check")
+                guard violations.isEmpty else {
+                    throw DatabaseError(message: "Node purge failed the foreign-key integrity check.")
+                }
+                return .commit
+            }
         }
+    }
+
+    private static func tableExists(_ db: Database, _ name: String) throws -> Bool {
+        try Int.fetchOne(
+            db,
+            sql: "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
+            arguments: [name]
+        ) ?? 0 > 0
+    }
+
+    private static func columnExists(_ db: Database, table: String, column: String) throws -> Bool {
+        let info = try Row.fetchAll(db, sql: "PRAGMA table_info(\"\(table)\")")
+        return Set(info.compactMap { $0["name"] as String? }).contains(column)
     }
 
     // Adds the nullable max_interval column to the query table for databases
