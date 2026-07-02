@@ -47,12 +47,6 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
     @Published var stickyFieldIDs: Set<Int64> = []
     @Published var maxIntervalText: String = ""
 
-    // MARK: Node-type link state
-
-    @Published var linkFields: [LinkField] = []
-    @Published var linkTargetsByLinkFieldID: [Int64: [Int64]] = [:]
-    @Published var nodeSummariesByID: [Int64: String] = [:]
-
     // MARK: PointMap state
 
     @Published var pointMapTitle: String = ""
@@ -149,7 +143,6 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
     var isPristine: Bool {
         guard !isDirty else { return false }
         return selectedCollectionIDs.isEmpty
-            && linkTargetsByLinkFieldID.values.allSatisfy(\.isEmpty)
             && maxIntervalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && pointMapTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && pointMapDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

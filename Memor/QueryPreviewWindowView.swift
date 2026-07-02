@@ -133,7 +133,7 @@ struct QueryPreviewWindowView: View {
                 baseQuery = try appDatabase.fetchQueryTypePreview(
                     typeID: typeID,
                     queryTypeID: queryTypeID,
-                    linkTargetIDsByLinkFieldID: windowState.requestedLinkTargetIDsByLinkFieldID ?? [:]
+                    linkTargetIDsByLinkFieldID: [:]
                 )
             } else if let instanceID = windowState.requestedInstanceID {
                 baseQuery = if let queryTypeID = windowState.requestedQueryTypeID {

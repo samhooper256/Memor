@@ -89,13 +89,9 @@ struct InstanceEditorWindowView: View {
         return selectedType.isBuiltin && selectedType.name == BOUNDARYMAP_TYPE_NAME
     }
 
-    private var isNodeTypeSelected: Bool {
-        selectedType?.isNode ?? false
-    }
-
-    /// A plain Object type: a real type that is neither a Node nor a built-in Map.
+    /// A plain Object type: a real type that is not a built-in Map.
     private var isObjectTypeSelected: Bool {
-        selectedType != nil && !isNodeTypeSelected && !isPointMapSelected && !isBoundaryMapSelected
+        selectedType != nil && !isPointMapSelected && !isBoundaryMapSelected
     }
 
     /// Mirrors the selected type's map-kind and name onto the draft so it can
@@ -104,15 +100,6 @@ struct InstanceEditorWindowView: View {
         draft.selectedTypeIsPointMap = isPointMapSelected
         draft.selectedTypeIsBoundaryMap = isBoundaryMapSelected
         draft.selectedTypeName = selectedType?.name
-    }
-
-    private var linkCountsAreValid: Bool {
-        for linkField in draft.linkFields {
-            let count = draft.linkTargetsByLinkFieldID[linkField.id]?.count ?? 0
-            if count < linkField.minCount { return false }
-            if let maxCount = linkField.maxCount, count > maxCount { return false }
-        }
-        return true
     }
 
     private var canSubmit: Bool {
@@ -125,9 +112,6 @@ struct InstanceEditorWindowView: View {
         }
         let hasFieldValue = draft.fieldValues.values.contains {
             !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
-        if isNodeTypeSelected {
-            return hasFieldValue && linkCountsAreValid
         }
         return hasFieldValue
     }
@@ -1479,17 +1463,6 @@ struct InstanceEditorWindowView: View {
                         fieldEditors
                     }
 
-                    if isNodeTypeSelected {
-                        NodeLinkFieldEditor(
-                            appDatabase: appDatabase,
-                            typeID: draft.selectedTypeID ?? 0,
-                            excludingInstanceID: draft.loadedInstanceID,
-                            linkFields: draft.linkFields,
-                            linkTargetsByLinkFieldID: $draft.linkTargetsByLinkFieldID,
-                            nodeSummariesByID: $draft.nodeSummariesByID
-                        )
-                    }
-
                     if draft.selectedTypeID != nil {
                         collectionChecklistSection
                             .id("collectionsSection")
@@ -1954,14 +1927,7 @@ struct InstanceEditorWindowView: View {
             draft.fields = try appDatabase.fetchFieldsForDisplay(forTypeID: typeID)
             draft.queryTypes = try appDatabase.fetchQueryTypes(forTypeID: typeID)
             draft.stickyFieldIDs = try appDatabase.fetchStickyFieldIDs(forTypeID: typeID)
-            if let selectedType = types.first(where: { $0.id == typeID }), selectedType.isNode {
-                draft.linkFields = try appDatabase.fetchLinkFields(forTypeID: typeID)
-            } else {
-                draft.linkFields = []
-            }
             if didChangeType {
-                draft.linkTargetsByLinkFieldID = [:]
-                draft.nodeSummariesByID = [:]
                 let availableQueryTypeIDs = draft.queryTypes.map(\.id)
                 draft.selectedQueryTypeIDs = (try? appDatabase.resolveTypeQueryDefaultSelection(
                     forTypeID: typeID,
@@ -2033,9 +1999,6 @@ struct InstanceEditorWindowView: View {
                 draft.loadedInstanceID = instanceID
                 draft.selectedQueryTypeIDs = []
                 draft.fieldValues = [:]
-                draft.linkFields = []
-                draft.linkTargetsByLinkFieldID = [:]
-                draft.nodeSummariesByID = [:]
                 draft.selectedCollectionIDs = try appDatabase.fetchCollectionIDs(forInstanceID: instanceID)
                 draft.stickyFieldIDs = []
                 collectionSearchQuery = ""
@@ -2062,9 +2025,6 @@ struct InstanceEditorWindowView: View {
                 draft.loadedInstanceID = instanceID
                 draft.selectedQueryTypeIDs = []
                 draft.fieldValues = [:]
-                draft.linkFields = []
-                draft.linkTargetsByLinkFieldID = [:]
-                draft.nodeSummariesByID = [:]
                 draft.selectedCollectionIDs = try appDatabase.fetchCollectionIDs(forInstanceID: instanceID)
                 draft.stickyFieldIDs = []
                 collectionSearchQuery = ""
@@ -2079,15 +2039,6 @@ struct InstanceEditorWindowView: View {
             let editorData = try appDatabase.fetchInstanceEditorData(instanceID: instanceID)
             draft.fields = try appDatabase.fetchFieldsForDisplay(forTypeID: editorData.typeID)
             draft.queryTypes = try appDatabase.fetchQueryTypes(forTypeID: editorData.typeID)
-            if types.first(where: { $0.id == editorData.typeID })?.isNode == true {
-                draft.linkFields = try appDatabase.fetchLinkFields(forTypeID: editorData.typeID)
-                draft.linkTargetsByLinkFieldID = editorData.linkTargetsByLinkFieldID
-                draft.nodeSummariesByID = editorData.linkedNodeSummaries
-            } else {
-                draft.linkFields = []
-                draft.linkTargetsByLinkFieldID = [:]
-                draft.nodeSummariesByID = [:]
-            }
             draft.selectedTypeID = editorData.typeID
             draft.loadedTypeID = editorData.typeID
             draft.loadedInstanceID = instanceID
@@ -2146,7 +2097,7 @@ struct InstanceEditorWindowView: View {
                     forTypeID: selectedTypeID,
                     fieldValuesByFieldID: draft.fieldValues,
                     queryTypeIDs: draft.selectedQueryTypeIDs,
-                    linksByLinkFieldID: isNodeTypeSelected ? draft.linkTargetsByLinkFieldID : [:]
+                    linksByLinkFieldID: [:]
                 )
                 if !draft.selectedCollectionIDs.isEmpty {
                     try appDatabase.setInstanceCollections(
@@ -2167,8 +2118,6 @@ struct InstanceEditorWindowView: View {
                         return (field.id, preserved)
                     }
                 )
-                // Links are not sticky; clear them for the next add.
-                draft.linkTargetsByLinkFieldID = [:]
                 focusController.focusField(draft.fields.first?.id)
                 addScrollNonce = UUID()
                 showToast(message: "Instance added successfully.", style: .success)
@@ -2178,7 +2127,7 @@ struct InstanceEditorWindowView: View {
                     instanceID: loadedInstanceID,
                     fieldValuesByFieldID: draft.fieldValues,
                     queryTypeIDs: draft.selectedQueryTypeIDs,
-                    linksByLinkFieldID: isNodeTypeSelected ? draft.linkTargetsByLinkFieldID : [:]
+                    linksByLinkFieldID: [:]
                 )
                 try appDatabase.setInstanceCollections(
                     instanceID: loadedInstanceID,
@@ -2414,9 +2363,9 @@ struct InstanceEditorWindowView: View {
     }
 
     /// Opens the Query Preview window for one query type, using the editor's live
-    /// field values (and, in Add mode, live link targets) so the preview reflects
-    /// what's currently typed. In Edit mode the preview is keyed on the persisted
-    /// instance; in Add mode it's a draft preview built from the type alone.
+    /// field values so the preview reflects what's currently typed. In Edit mode
+    /// the preview is keyed on the persisted instance; in Add mode it's a draft
+    /// preview built from the type alone.
     private func openPreview(queryTypeID: Int64) {
         switch mode {
         case .edit:
@@ -2431,8 +2380,7 @@ struct InstanceEditorWindowView: View {
             queryPreviewWindowState.requestOpenDraft(
                 typeID: selectedTypeID,
                 queryTypeID: queryTypeID,
-                fieldValuesByName: liveFieldValuesByName(),
-                linkTargetIDsByLinkFieldID: draft.linkTargetsByLinkFieldID
+                fieldValuesByName: liveFieldValuesByName()
             )
         }
         openWindow(id: "query-preview")

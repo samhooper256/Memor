@@ -131,7 +131,6 @@ final class QueryPreviewWindowState: ObservableObject {
     @Published private(set) var requestedTypeID: Int64?
     @Published private(set) var requestedQueryTypeID: Int64?
     @Published private(set) var requestedFieldValuesByName: [String: String]?
-    @Published private(set) var requestedLinkTargetIDsByLinkFieldID: [Int64: [Int64]]?
     @Published private(set) var requestNonce = UUID()
 
     func requestOpen(
@@ -143,7 +142,6 @@ final class QueryPreviewWindowState: ObservableObject {
         requestedTypeID = nil
         requestedQueryTypeID = queryTypeID
         requestedFieldValuesByName = fieldValuesByName
-        requestedLinkTargetIDsByLinkFieldID = nil
         requestNonce = UUID()
     }
 
@@ -152,24 +150,21 @@ final class QueryPreviewWindowState: ObservableObject {
         requestedTypeID = nil
         requestedQueryTypeID = nil
         requestedFieldValuesByName = nil
-        requestedLinkTargetIDsByLinkFieldID = nil
         requestNonce = UUID()
     }
 
     /// Preview a query for an unsaved instance being composed in the Add Instance
     /// window. The query is built from `typeID` + `queryTypeID` (no instance row),
-    /// with the editor's current field values and link targets supplied as overrides.
+    /// with the editor's current field values supplied as overrides.
     func requestOpenDraft(
         typeID: Int64,
         queryTypeID: Int64,
-        fieldValuesByName: [String: String],
-        linkTargetIDsByLinkFieldID: [Int64: [Int64]]
+        fieldValuesByName: [String: String]
     ) {
         requestedInstanceID = nil
         requestedTypeID = typeID
         requestedQueryTypeID = queryTypeID
         requestedFieldValuesByName = fieldValuesByName
-        requestedLinkTargetIDsByLinkFieldID = linkTargetIDsByLinkFieldID
         requestNonce = UUID()
     }
 }
