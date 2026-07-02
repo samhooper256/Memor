@@ -148,10 +148,7 @@ struct SearchQueryTextField: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.drawsBackground = false
         textView.isRichText = false
-        textView.isAutomaticTextReplacementEnabled = false
-        textView.isAutomaticQuoteSubstitutionEnabled = false
-        textView.isAutomaticSpellingCorrectionEnabled = false
-        textView.isContinuousSpellCheckingEnabled = false
+        textView.disableAutomaticSubstitutions()
         textView.isVerticallyResizable = false
         textView.isHorizontallyResizable = true
         textView.autoresizingMask = [.height]

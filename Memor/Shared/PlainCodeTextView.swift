@@ -91,11 +91,7 @@ struct PlainCodeTextView: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.drawsBackground = false
         textView.isRichText = false
-        textView.isAutomaticQuoteSubstitutionEnabled = false
-        textView.isAutomaticDashSubstitutionEnabled = false
-        textView.isAutomaticTextReplacementEnabled = false
-        textView.isAutomaticSpellingCorrectionEnabled = false
-        textView.isContinuousSpellCheckingEnabled = false
+        textView.disableAutomaticSubstitutions()
         textView.allowsUndo = true
         textView.isHorizontallyResizable = false
         textView.isVerticallyResizable = true

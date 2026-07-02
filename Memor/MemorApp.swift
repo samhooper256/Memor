@@ -38,6 +38,7 @@ struct MemorApp: App {
     private let mcpServer: MemorMCPServer
 
     init() {
+        registerSubstitutionKillDefaults()
         do {
             appDatabase = try AppDatabase()
         } catch {

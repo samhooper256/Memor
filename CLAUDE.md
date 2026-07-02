@@ -56,6 +56,7 @@ Memor/
     PlainTextEditor.swift           NSTextView wrapper for plain-text fields
     PlainCodeTextView.swift         Code editor NSTextView + FocusedEditor + query-type editor split view
     SearchHighlightingTextView.swift Search field + highlight rendering used across search windows
+    TextSubstitutions.swift         NSTextView.disableAutomaticSubstitutions() + launch-time defaults kill switch
     QueryHTMLView.swift             WKWebView wrapper for rendering query HTML (+ scheme handler)
     HTMLPreviewView.swift           Live-preview WebView for the Types page HTML/CSS editors
   Windows/
@@ -199,6 +200,7 @@ navigates to the linked instance).
 - Prefer `pointerStyle(...)` over NSCursor for hover effects
 - Escape key closes all secondary windows
 - Customizable keyboard shortcuts are routed through `ShortcutSettings` / `.shortcut(.action, settings:)` — don't hard-code `.keyboardShortcut(...)` for actions a user should be able to rebind.
+- **No macOS automatic text substitution, ever, in any editor** (no `...` → `…`, smart quotes/dashes, autocorrect). Every new NSTextView must call `disableAutomaticSubstitutions()` (Shared/TextSubstitutions.swift); NSTextField and SwiftUI TextField surfaces are covered by `registerSubstitutionKillDefaults()` in `MemorApp.init`, which writes the `NSAutomatic*Enabled` defaults false (a `set`, not `register` — the registration domain loses to NSGlobalDomain). Gotcha: `...` → `…` is smart DASHES (`isAutomaticDashSubstitutionEnabled`), not text replacement.
 
 ## Code Style
 

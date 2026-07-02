@@ -31,10 +31,7 @@ struct PlainTextEditor: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.drawsBackground = false
         textView.isRichText = false
-        textView.isAutomaticTextReplacementEnabled = false
-        textView.isAutomaticQuoteSubstitutionEnabled = false
-        textView.isAutomaticSpellingCorrectionEnabled = false
-        textView.isContinuousSpellCheckingEnabled = false
+        textView.disableAutomaticSubstitutions()
         textView.isHorizontallyResizable = false
         textView.isVerticallyResizable = true
         textView.autoresizingMask = [.width]
