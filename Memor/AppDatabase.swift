@@ -373,14 +373,22 @@ struct AppDatabase {
 
         try dbQueue.write { db in
             for update in staleBookmarkUpdates {
-                try db.execute(
-                    sql: """
-                        UPDATE image_file
-                        SET path = ?, bookmark_data = ?
-                        WHERE id = ?
-                        """,
-                    arguments: [update.path, update.bookmarkData, update.id]
-                )
+                do {
+                    try db.execute(
+                        sql: """
+                            UPDATE image_file
+                            SET path = ?, bookmark_data = ?
+                            WHERE id = ?
+                            """,
+                        arguments: [update.path, update.bookmarkData, update.id]
+                    )
+                } catch {
+                    // A rename on disk can make a stale bookmark resolve to a path
+                    // another row already holds, violating path's UNIQUE constraint.
+                    // Keep the old row rather than failing app launch; the stale
+                    // bookmark still resolves.
+                    print("Failed to refresh stale image file bookmark for \(update.path): \(error)")
+                }
             }
         }
     }
@@ -439,14 +447,20 @@ struct AppDatabase {
 
         try dbQueue.write { db in
             for update in staleBookmarkUpdates {
-                try db.execute(
-                    sql: """
-                        UPDATE image_folder
-                        SET path = ?, bookmark_data = ?
-                        WHERE id = ?
-                        """,
-                    arguments: [update.path, update.bookmarkData, update.id]
-                )
+                do {
+                    try db.execute(
+                        sql: """
+                            UPDATE image_folder
+                            SET path = ?, bookmark_data = ?
+                            WHERE id = ?
+                            """,
+                        arguments: [update.path, update.bookmarkData, update.id]
+                    )
+                } catch {
+                    // Same UNIQUE-collision hazard as image_file above; a failed
+                    // refresh must not abort launch.
+                    print("Failed to refresh stale image folder bookmark for \(update.path): \(error)")
+                }
             }
         }
     }
