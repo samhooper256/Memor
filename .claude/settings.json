@@ -10,6 +10,7 @@
       "Bash(head:*)",
       "Bash(sed:*)",
       "Bash(awk:*)",
+      "Bash(cut:*)",
       "Bash(cat:*)",
       "Bash(find:*)",
       "Bash(curl:*)",
