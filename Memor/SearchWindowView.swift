@@ -192,7 +192,10 @@ struct SearchWindowView: View {
 
     private var duplicatableInstanceIDs: Set<Int64> {
         var result: Set<Int64> = []
-        for section in instanceSections where section.typeName != POINTMAP_TYPE_NAME && section.typeName != BOUNDARYMAP_TYPE_NAME {
+        for section in instanceSections
+        where section.typeName != POINTMAP_TYPE_NAME
+            && section.typeName != BOUNDARYMAP_TYPE_NAME
+            && section.typeName != PERSON_TYPE_NAME {
             for instance in section.instances {
                 result.insert(instance.id)
             }
@@ -200,9 +203,9 @@ struct SearchWindowView: View {
         return result
     }
 
-    // When every selected instance belongs to a single convertible (non-map) type,
-    // returns that type plus the selected ids; otherwise nil. Drives the "Change Type"
-    // context-menu item (Object/Node sources only).
+    // When every selected instance belongs to a single convertible type (not a
+    // map, not Person — conversions never leave Person), returns that type plus
+    // the selected ids; otherwise nil. Drives the "Change Type" context-menu item.
     private func convertibleSelection(_ items: Set<Int64>) -> (typeID: Int64, typeName: String, ids: [Int64])? {
         guard !items.isEmpty else { return nil }
         var matchingSections: [InstanceSearchSection] = []
@@ -210,7 +213,9 @@ struct SearchWindowView: View {
             matchingSections.append(section)
         }
         guard matchingSections.count == 1, let section = matchingSections.first else { return nil }
-        guard section.typeName != POINTMAP_TYPE_NAME, section.typeName != BOUNDARYMAP_TYPE_NAME else { return nil }
+        guard section.typeName != POINTMAP_TYPE_NAME,
+              section.typeName != BOUNDARYMAP_TYPE_NAME,
+              section.typeName != PERSON_TYPE_NAME else { return nil }
         let ids = section.instances.map(\.id).filter { items.contains($0) }
         return (section.typeID, section.typeName, ids)
     }
@@ -219,7 +224,10 @@ struct SearchWindowView: View {
     // not PointMap/BoundaryMap instances (whose editor doesn't support duplication).
     private var duplicatableQueryInstanceIDs: Set<Int64> {
         var result: Set<Int64> = []
-        for section in querySections where section.typeName != POINTMAP_TYPE_NAME && section.typeName != BOUNDARYMAP_TYPE_NAME {
+        for section in querySections
+        where section.typeName != POINTMAP_TYPE_NAME
+            && section.typeName != BOUNDARYMAP_TYPE_NAME
+            && section.typeName != PERSON_TYPE_NAME {
             for query in section.queries {
                 result.insert(query.instanceID)
             }
@@ -788,19 +796,32 @@ struct SearchWindowView: View {
     private func collectQueryTargets(selecting ids: Set<String>?) -> [QueryTarget] {
         var targets: [QueryTarget] = []
         for section in querySections {
-            let kind: QueryTargetKind
+            let sectionKind: QueryTargetKind
             switch section.typeName {
-            case POINTMAP_TYPE_NAME: kind = .point
-            case BOUNDARYMAP_TYPE_NAME: kind = .boundary
-            default: kind = .standard
+            case POINTMAP_TYPE_NAME: sectionKind = .point
+            case BOUNDARYMAP_TYPE_NAME: sectionKind = .boundary
+            default: sectionKind = .standard
             }
             for query in section.queries where ids == nil || ids!.contains(query.id) {
-                targets.append(QueryTarget(
-                    instanceID: query.instanceID,
-                    queryTypeID: query.queryTypeID,
-                    isReverse: query.isReverse,
-                    kind: kind
-                ))
+                // The Person section mixes standard (user-defined) rows with
+                // built-in relationship rows, so the kind is per row.
+                if let personKind = query.personKind {
+                    targets.append(QueryTarget(
+                        instanceID: query.instanceID,
+                        queryTypeID: 0,
+                        isReverse: false,
+                        kind: .person,
+                        personKind: personKind,
+                        personPartnershipID: query.personPartnershipID
+                    ))
+                } else {
+                    targets.append(QueryTarget(
+                        instanceID: query.instanceID,
+                        queryTypeID: query.queryTypeID,
+                        isReverse: query.isReverse,
+                        kind: sectionKind
+                    ))
+                }
             }
         }
         return targets
