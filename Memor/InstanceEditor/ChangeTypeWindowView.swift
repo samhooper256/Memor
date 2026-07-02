@@ -4,7 +4,8 @@
 //
 //  "Change Type" window: converts one or more same-typed instances to a destination
 //  type with a user-defined field mapping, query-type selection, and collection
-//  handling — preserving each instance's ID. Supports Object->Object conversions only.
+//  handling — preserving each instance's ID. Supports Object->Object and
+//  Object->Person conversions (never away from Person or the map types).
 //
 
 import AppKit
@@ -83,6 +84,13 @@ struct ChangeTypeWindowView: View {
                         Divider()
                         destinationColumn
                             .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    if destType?.isPerson == true {
+                        Text("Converted instances will have no relationships. Built-in relationship queries start disabled and can be enabled per person in the instance editor.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     Divider()
@@ -208,14 +216,21 @@ struct ChangeTypeWindowView: View {
                             HStack(spacing: 8) {
                                 Text(field.name)
                                 Spacer(minLength: 8)
-                                Picker("", selection: mappingBinding(for: field.id)) {
-                                    Text("(none)").tag(Int64?.none)
-                                    ForEach(sourceFields) { sourceField in
-                                        Text(sourceField.name).tag(Optional(sourceField.id))
+                                if field.fieldType == .sex {
+                                    Text("Male (default)")
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 180, alignment: .leading)
+                                        .help("Sex can't be mapped during conversion; converted people start as Male.")
+                                } else {
+                                    Picker("", selection: mappingBinding(for: field.id)) {
+                                        Text("(none)").tag(Int64?.none)
+                                        ForEach(sourceFields) { sourceField in
+                                            Text(sourceField.name).tag(Optional(sourceField.id))
+                                        }
                                     }
+                                    .labelsHidden()
+                                    .frame(width: 180)
                                 }
-                                .labelsHidden()
-                                .frame(width: 180)
                             }
                         }
                     }
@@ -292,7 +307,7 @@ struct ChangeTypeWindowView: View {
             destCandidates = allTypes
                 .filter { candidate in
                     candidate.id != sourceTypeID
-                        && !candidate.isBuiltin
+                        && (!candidate.isBuiltin || candidate.isPerson)
                         && candidate.name != POINTMAP_TYPE_NAME
                         && candidate.name != BOUNDARYMAP_TYPE_NAME
                 }
@@ -339,7 +354,10 @@ struct ChangeTypeWindowView: View {
         var mapping: [Int64: Int64?] = [:]
         var assignedSourceIDs: Set<Int64> = []
 
-        for destField in destFields {
+        // Sex is never a mapping target (converted people start as Male).
+        let mappableDestFields = destFields.filter { $0.fieldType != .sex }
+
+        for destField in mappableDestFields {
             mapping[destField.id] = nil
             if let match = sourceFields.first(where: { $0.name == destField.name && !assignedSourceIDs.contains($0.id) }) {
                 mapping[destField.id] = match.id
@@ -348,7 +366,7 @@ struct ChangeTypeWindowView: View {
         }
 
         let leftoverSources = sourceFields.filter { !assignedSourceIDs.contains($0.id) }
-        let blankDestFields = destFields.filter { (mapping[$0.id] ?? nil) == nil }
+        let blankDestFields = mappableDestFields.filter { (mapping[$0.id] ?? nil) == nil }
         for (blank, source) in zip(blankDestFields, leftoverSources) {
             mapping[blank.id] = source.id
         }

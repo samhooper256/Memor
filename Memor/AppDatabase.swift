@@ -3558,6 +3558,21 @@ struct AppDatabase {
         guard !instanceIDs.isEmpty else { return }
 
         try dbQueue.write { db in
+            if let personTypeID = try? Self.fetchPersonTypeID(db: db) {
+                if sourceTypeID == personTypeID {
+                    throw DatabaseError(message: "Person instances cannot be converted to another type.")
+                }
+                if destTypeID == personTypeID {
+                    let sexFieldIDs = try Int64.fetchAll(
+                        db,
+                        sql: "SELECT id FROM field WHERE type_id = ? AND field_type = 'sex'",
+                        arguments: [personTypeID]
+                    )
+                    for sexFieldID in sexFieldIDs where fieldMapping[sexFieldID] != nil {
+                        throw DatabaseError(message: "The Sex field cannot be mapped during conversion; converted people start as Male.")
+                    }
+                }
+            }
             func fetchFields(_ typeID: Int64) throws -> [TypeField] {
                 try TypeField.fetchAll(
                     db,
