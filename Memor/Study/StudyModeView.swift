@@ -401,6 +401,15 @@ struct StudyModeView: View {
                         originalQueryState: originalQueryState,
                         isReverse: previousQuery.isReverse
                     )
+                } else if let personKind = previousQuery.personQueryKind {
+                    try appDatabase.revertPersonStudyResponse(
+                        instanceID: previousQuery.instanceID,
+                        kind: personKind,
+                        partnershipID: previousQuery.personPartnershipID,
+                        originalInterval: originalInterval,
+                        originalLastAnsweredTimestamp: originalLastAnsweredTimestamp,
+                        originalQueryState: originalQueryState
+                    )
                 } else {
                     try appDatabase.revertStudyResponse(
                         instanceID: previousQuery.instanceID,
@@ -792,6 +801,15 @@ struct StudyModeView: View {
                     answeredAtTimestamp: answeredAtTimestamp,
                     overrideInterval: updatedInterval,
                     isReverse: currentQuery.isReverse
+                )
+            } else if let personKind = currentQuery.personQueryKind {
+                outcome = try appDatabase.applyPersonStudyResponse(
+                    instanceID: currentQuery.instanceID,
+                    kind: personKind,
+                    partnershipID: currentQuery.personPartnershipID,
+                    rating: rating,
+                    answeredAtTimestamp: answeredAtTimestamp,
+                    overrideInterval: updatedInterval
                 )
             } else {
                 outcome = try appDatabase.applyStudyResponse(

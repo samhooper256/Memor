@@ -142,6 +142,240 @@ extension AppDatabase {
         }
     }
 
+    // MARK: - Enumeration (search / stacks / study MUST all use this FROM)
+
+    /// The scan target for built-in Person queries: the Person type{N} table
+    /// (so literal:/type:/collection:/id: conditions compile unchanged with
+    /// tableAlias "instance_table") joined to person_query as `pq` (the
+    /// srsAlias for `:new` and interval predicates). Every enumeration surface
+    /// — query search, stack counts, due-day forecasts, study pools — must use
+    /// this fragment with makeQuerySearchConditions(srsAlias: "pq") so they
+    /// never diverge.
+    nonisolated static func personQueryJoinFrom(personTypeID: Int64) -> String {
+        """
+        "type\(personTypeID)" AS instance_table
+        JOIN person_query AS pq
+            ON pq.instance_id = instance_table.id
+        """
+    }
+
+    /// The Person type's InstanceSearchTypeInfo (field indices + display
+    /// column) for callers that don't already have the full type list.
+    nonisolated func personSearchTypeInfo(db: Database) throws -> InstanceSearchTypeInfo? {
+        guard let personTypeID = try? Self.fetchPersonTypeID(db: db) else { return nil }
+        return try fetchInstanceSearchTypeInfos(db: db).first { $0.typeID == personTypeID }
+    }
+
+    private nonisolated struct PersonQueryScanRow: FetchableRecord, Decodable {
+        let instanceID: Int64
+        let kind: String
+        let partnershipID: Int64?
+        let interval: Int64
+        let lastAnsweredTimestamp: Int64?
+        let queryState: Int
+        let displayValue: String
+    }
+
+    private nonisolated func fetchPersonQueryScanRows(
+        db: Database,
+        typeInfo: InstanceSearchTypeInfo,
+        parsedQuery: QuerySearchQuery,
+        whereSQL: String,
+        additionalArguments: StatementArguments,
+        limitSQL: String = "",
+        limitArguments: StatementArguments = StatementArguments()
+    ) throws -> [PersonQueryScanRow] {
+        let searchConditions = makeQuerySearchConditions(
+            tableAlias: "instance_table",
+            typeName: typeInfo.typeName,
+            fieldIndices: typeInfo.allFieldIndices,
+            expression: parsedQuery.expression,
+            srsAlias: "pq"
+        )
+        var arguments = searchConditions.arguments
+        arguments += additionalArguments
+        arguments += limitArguments
+        let searchSQL = searchConditions.sql.isEmpty ? whereSQL : "(\(searchConditions.sql)) AND (\(whereSQL))"
+
+        return try PersonQueryScanRow.fetchAll(
+            db,
+            sql: """
+                SELECT
+                    pq.instance_id AS instanceID,
+                    pq.kind AS kind,
+                    pq.partnership_id AS partnershipID,
+                    pq.interval AS interval,
+                    pq.last_answered_timestamp AS lastAnsweredTimestamp,
+                    pq.query_state AS queryState,
+                    COALESCE(instance_table."field\(typeInfo.displayFieldIndex)", '') AS displayValue
+                FROM \(Self.personQueryJoinFrom(personTypeID: typeInfo.typeID))
+                WHERE \(searchSQL)
+                ORDER BY displayValue COLLATE NOCASE, pq.instance_id, pq.kind, pq.partnership_id
+                \(limitSQL)
+                """,
+            arguments: arguments
+        )
+    }
+
+    /// Query-search rows for the built-in queries ("Bob" + "Children with
+    /// Alice", ...), merged by the caller into the Person type's section.
+    func fetchPersonQuerySearchRows(
+        db: Database,
+        typeInfo: InstanceSearchTypeInfo,
+        parsedQuery: QuerySearchQuery
+    ) throws -> [QuerySearchResult] {
+        let rows = try fetchPersonQueryScanRows(
+            db: db,
+            typeInfo: typeInfo,
+            parsedQuery: parsedQuery,
+            whereSQL: "1",
+            additionalArguments: StatementArguments()
+        )
+        return try rows.map { row in
+            let kind = PersonQueryKind(rawValue: row.kind) ?? .mother
+            return QuerySearchResult(
+                instanceID: row.instanceID,
+                queryTypeID: 0,
+                displayValue: row.displayValue,
+                queryTypeName: try Self.personQueryTypeName(
+                    db: db, personID: row.instanceID, kind: kind, partnershipID: row.partnershipID
+                ),
+                personKind: kind,
+                personPartnershipID: row.partnershipID
+            )
+        }
+    }
+
+    func fetchPersonStudyQueries(
+        db: Database,
+        parsedQuery: QuerySearchQuery,
+        whereSQL: String,
+        additionalArguments: StatementArguments
+    ) throws -> [StudyQuery] {
+        guard let typeInfo = try personSearchTypeInfo(db: db) else { return [] }
+        let rows = try fetchPersonQueryScanRows(
+            db: db,
+            typeInfo: typeInfo,
+            parsedQuery: parsedQuery,
+            whereSQL: whereSQL,
+            additionalArguments: additionalArguments
+        )
+        return try rows.map { row in
+            try Self.makePersonStudyQuery(
+                db: db,
+                instanceID: row.instanceID,
+                kind: PersonQueryKind(rawValue: row.kind) ?? .mother,
+                partnershipID: row.partnershipID,
+                interval: row.interval,
+                lastAnsweredTimestamp: row.lastAnsweredTimestamp,
+                queryState: QueryState(rawValue: row.queryState) ?? .zero
+            )
+        }
+    }
+
+    func fetchPersonStudySummary(
+        db: Database,
+        parsedQuery: QuerySearchQuery
+    ) throws -> PersonStudySummary? {
+        guard let typeInfo = try personSearchTypeInfo(db: db) else { return nil }
+        let searchConditions = makeQuerySearchConditions(
+            tableAlias: "instance_table",
+            typeName: typeInfo.typeName,
+            fieldIndices: typeInfo.allFieldIndices,
+            expression: parsedQuery.expression,
+            srsAlias: "pq"
+        )
+        let whereClause = searchConditions.sql.isEmpty ? "1" : searchConditions.sql
+        guard let row = try Row.fetchOne(
+            db,
+            sql: """
+                SELECT
+                    COUNT(*) AS totalCount,
+                    COALESCE(SUM(CASE WHEN pq.interval = 0 THEN 1 ELSE 0 END), 0) AS newCount,
+                    MIN(CASE WHEN pq.interval != 0 THEN pq.last_answered_timestamp + pq.interval END) AS minimumSeenDueTimestamp
+                FROM \(Self.personQueryJoinFrom(personTypeID: typeInfo.typeID))
+                WHERE \(whereClause)
+                """,
+            arguments: searchConditions.arguments
+        ) else {
+            return nil
+        }
+        return PersonStudySummary(
+            totalCount: row["totalCount"],
+            newCount: row["newCount"],
+            minimumSeenDueTimestamp: row["minimumSeenDueTimestamp"]
+        )
+    }
+
+    func fetchPersonStudyQueryCount(
+        db: Database,
+        parsedQuery: QuerySearchQuery,
+        whereSQL: String,
+        additionalArguments: StatementArguments
+    ) throws -> Int {
+        guard let typeInfo = try personSearchTypeInfo(db: db) else { return 0 }
+        let searchConditions = makeQuerySearchConditions(
+            tableAlias: "instance_table",
+            typeName: typeInfo.typeName,
+            fieldIndices: typeInfo.allFieldIndices,
+            expression: parsedQuery.expression,
+            srsAlias: "pq"
+        )
+        var arguments = searchConditions.arguments
+        arguments += additionalArguments
+        let searchSQL = searchConditions.sql.isEmpty ? whereSQL : "(\(searchConditions.sql)) AND (\(whereSQL))"
+        return try Int.fetchOne(
+            db,
+            sql: """
+                SELECT COUNT(*)
+                FROM \(Self.personQueryJoinFrom(personTypeID: typeInfo.typeID))
+                WHERE \(searchSQL)
+                """,
+            arguments: arguments
+        ) ?? 0
+    }
+
+    func fetchRandomPersonStudyQuery(
+        db: Database,
+        parsedQuery: QuerySearchQuery,
+        whereSQL: String,
+        additionalArguments: StatementArguments
+    ) throws -> StudyQuery {
+        guard let typeInfo = try personSearchTypeInfo(db: db) else {
+            throw DatabaseError(message: "The built-in Person type is missing.")
+        }
+        let matchingCount = try fetchPersonStudyQueryCount(
+            db: db,
+            parsedQuery: parsedQuery,
+            whereSQL: whereSQL,
+            additionalArguments: additionalArguments
+        )
+        guard matchingCount > 0 else {
+            throw DatabaseError(message: "No study query matched the requested criteria.")
+        }
+        let rows = try fetchPersonQueryScanRows(
+            db: db,
+            typeInfo: typeInfo,
+            parsedQuery: parsedQuery,
+            whereSQL: whereSQL,
+            additionalArguments: additionalArguments,
+            limitSQL: "LIMIT 1 OFFSET ?",
+            limitArguments: [Int.random(in: 0..<matchingCount)]
+        )
+        guard let row = rows.first else {
+            throw DatabaseError(message: "Failed to fetch the selected study query.")
+        }
+        return try Self.makePersonStudyQuery(
+            db: db,
+            instanceID: row.instanceID,
+            kind: PersonQueryKind(rawValue: row.kind) ?? .mother,
+            partnershipID: row.partnershipID,
+            interval: row.interval,
+            lastAnsweredTimestamp: row.lastAnsweredTimestamp,
+            queryState: QueryState(rawValue: row.queryState) ?? .zero
+        )
+    }
+
     // MARK: - SRS apply / revert
 
     @discardableResult

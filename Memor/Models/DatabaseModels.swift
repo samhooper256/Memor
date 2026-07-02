@@ -249,8 +249,16 @@ struct QuerySearchResult: Identifiable, Hashable {
     // reverse query. Standard queries are always forward. Included in `id` so the
     // two directions are distinct, selectable rows.
     var isReverse: Bool = false
+    // Built-in Person relationship queries only (queryTypeID is 0 for them).
+    var personKind: PersonQueryKind? = nil
+    var personPartnershipID: Int64? = nil
 
-    var id: String { "\(instanceID):\(queryTypeID):\(isReverse ? "r" : "f")" }
+    var id: String {
+        if let personKind {
+            return "p:\(instanceID):\(personKind.rawValue):\(personPartnershipID ?? 0)"
+        }
+        return "\(instanceID):\(queryTypeID):\(isReverse ? "r" : "f")"
+    }
 }
 
 enum MapElementKind: String, Hashable {
@@ -280,16 +288,20 @@ enum QueryTargetKind: Hashable {
     case standard   // `query` table, by (instance_id, query_type_id)
     case point      // `pointmap_query`, by (point_id, is_reverse)
     case boundary   // `boundarymap_query`, by (attachment_id, is_reverse)
+    case person     // `person_query`, by (instance_id, personKind, personPartnershipID)
 }
 
 // Identifies a single studyable query (a specific direction for map queries) so
 // it can be reset or disabled. `queryTypeID` is a query_type id for standard
-// queries, a point id for points, or an attachment id for boundaries.
+// queries, a point id for points, an attachment id for boundaries, or 0 for
+// built-in Person queries (which are keyed by personKind + personPartnershipID).
 struct QueryTarget: Hashable {
     let instanceID: Int64
     let queryTypeID: Int64
     let isReverse: Bool
     let kind: QueryTargetKind
+    var personKind: PersonQueryKind? = nil
+    var personPartnershipID: Int64? = nil
 }
 
 struct TypeInstancesPageData {

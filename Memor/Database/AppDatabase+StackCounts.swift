@@ -250,6 +250,29 @@ extension AppDatabase {
                 }
             }
 
+            // Built-in Person relationship queries (the standard loop above
+            // already covers Person's user-defined queries via `query`).
+            if let personTypeInfo = try personSearchTypeInfo(db: db) {
+                let personFrom = """
+                    FROM \(Self.personQueryJoinFrom(personTypeID: personTypeInfo.typeID))
+                    """
+                switch Self.staticTruthValue(of: expression, typeName: PERSON_TYPE_NAME, newIsAlwaysFalse: false) {
+                case .some(false):
+                    break
+                case .some(true):
+                    try collect(fromClause: personFrom, srsAlias: "pq", matchSQL: "1", matchArguments: StatementArguments())
+                case .none:
+                    let condition = makeQuerySearchConditions(
+                        tableAlias: "instance_table",
+                        typeName: personTypeInfo.typeName,
+                        fieldIndices: personTypeInfo.allFieldIndices,
+                        expression: expression,
+                        srsAlias: "pq"
+                    )
+                    try collect(fromClause: personFrom, srsAlias: "pq", matchSQL: condition.sql, matchArguments: condition.arguments)
+                }
+            }
+
             // PointMap directional queries (forward/reverse expanded).
             let pointMapFrom = """
                 FROM \(Self.pointMapDirectionalFrom) AS pp
@@ -383,6 +406,44 @@ extension AppDatabase {
                     """,
                 srsAlias: "query",
                 includedGroups: includedGroups,
+                startOfTomorrowTimestamp: startOfTomorrowTimestamp,
+                totals: &totals
+            )
+        }
+
+        // Built-in Person relationship queries (Person's user-defined queries
+        // are already counted by the standard loop — different tables, no
+        // double counting).
+        if let personTypeInfo = try personSearchTypeInfo(db: db) {
+            var personGroups: [(groupIndex: Int, sql: String, arguments: StatementArguments)] = []
+            for (groupIndex, expression) in groups.enumerated() {
+                switch Self.staticTruthValue(
+                    of: expression,
+                    typeName: PERSON_TYPE_NAME,
+                    newIsAlwaysFalse: false
+                ) {
+                case .some(false):
+                    continue
+                case .some(true):
+                    personGroups.append((groupIndex, "1", StatementArguments()))
+                case .none:
+                    let condition = makeQuerySearchConditions(
+                        tableAlias: "instance_table",
+                        typeName: personTypeInfo.typeName,
+                        fieldIndices: personTypeInfo.allFieldIndices,
+                        expression: expression,
+                        srsAlias: "pq"
+                    )
+                    personGroups.append((groupIndex, condition.sql, condition.arguments))
+                }
+            }
+            try addBatchedCategoryCounts(
+                db: db,
+                fromClause: """
+                    FROM \(Self.personQueryJoinFrom(personTypeID: personTypeInfo.typeID))
+                    """,
+                srsAlias: "pq",
+                includedGroups: personGroups,
                 startOfTomorrowTimestamp: startOfTomorrowTimestamp,
                 totals: &totals
             )

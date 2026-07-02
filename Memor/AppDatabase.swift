@@ -129,16 +129,25 @@ struct AppDatabase {
         let minimumSeenDueTimestamp: Int64?
     }
 
+    struct PersonStudySummary {
+        let totalCount: Int
+        let newCount: Int
+        let minimumSeenDueTimestamp: Int64?
+        var seenCount: Int { totalCount - newCount }
+    }
+
     private enum StudySelectionPool {
         case standard(StudyTypeSummary)
         case pointMap(PointMapStudySummary)
         case boundaryMap(BoundaryMapStudySummary)
+        case person(PersonStudySummary)
 
         var totalCount: Int {
             switch self {
             case .standard(let s): return s.totalCount
             case .pointMap(let s): return s.totalCount
             case .boundaryMap(let s): return s.totalCount
+            case .person(let s): return s.totalCount
             }
         }
         var newCount: Int {
@@ -146,6 +155,7 @@ struct AppDatabase {
             case .standard(let s): return s.newCount
             case .pointMap(let s): return s.newCount
             case .boundaryMap(let s): return s.newCount
+            case .person(let s): return s.newCount
             }
         }
         var seenCount: Int {
@@ -153,6 +163,7 @@ struct AppDatabase {
             case .standard(let s): return s.seenCount
             case .pointMap(let s): return s.seenCount
             case .boundaryMap(let s): return s.seenCount
+            case .person(let s): return s.seenCount
             }
         }
         var minimumSeenDueTimestamp: Int64? {
@@ -160,6 +171,7 @@ struct AppDatabase {
             case .standard(let s): return s.minimumSeenDueTimestamp
             case .pointMap(let s): return s.minimumSeenDueTimestamp
             case .boundaryMap(let s): return s.minimumSeenDueTimestamp
+            case .person(let s): return s.minimumSeenDueTimestamp
             }
         }
     }
@@ -1538,12 +1550,32 @@ struct AppDatabase {
             let typeInfos = try fetchInstanceSearchTypeInfos(db: db)
             var sections: [QuerySearchSection] = []
 
+            let personTypeID = try? Self.fetchPersonTypeID(db: db)
             for typeInfo in typeInfos {
-                let rows = try fetchQuerySearchRows(
+                var rows = try fetchQuerySearchRows(
                     db: db,
                     typeInfo: typeInfo,
                     parsedQuery: parsedQuery
                 )
+
+                // Built-in Person relationship queries merge into the same
+                // section (section ids are type ids, so a second Person section
+                // would collide).
+                if typeInfo.typeID == personTypeID {
+                    rows += try fetchPersonQuerySearchRows(
+                        db: db,
+                        typeInfo: typeInfo,
+                        parsedQuery: parsedQuery
+                    )
+                    rows.sort { lhs, rhs in
+                        let byName = lhs.displayValue.localizedCaseInsensitiveCompare(rhs.displayValue)
+                        if byName != .orderedSame { return byName == .orderedAscending }
+                        if lhs.instanceID != rhs.instanceID { return lhs.instanceID < rhs.instanceID }
+                        // User-defined query types before built-ins.
+                        if (lhs.personKind == nil) != (rhs.personKind == nil) { return lhs.personKind == nil }
+                        return lhs.id < rhs.id
+                    }
+                }
 
                 if !rows.isEmpty {
                     sections.append(
@@ -1761,6 +1793,7 @@ struct AppDatabase {
             )
 
             let typeInfos = try fetchInstanceSearchTypeInfos(db: db)
+            let personTypeID = try? Self.fetchPersonTypeID(db: db)
             for typeInfo in typeInfos {
                 let tableName = "\"type\(typeInfo.typeID)\""
                 let tableAlias = "instance_table"
@@ -1787,6 +1820,31 @@ struct AppDatabase {
                         """,
                     arguments: searchConditions.arguments
                 )
+
+                if typeInfo.typeID == personTypeID {
+                    let personConditions = makeQuerySearchConditions(
+                        tableAlias: tableAlias,
+                        typeName: typeInfo.typeName,
+                        fieldIndices: typeInfo.allFieldIndices,
+                        expression: parsedQuery.expression,
+                        srsAlias: "pq"
+                    )
+                    let personWhere = personConditions.sql.isEmpty ? "1" : personConditions.sql
+                    try db.execute(
+                        sql: """
+                            UPDATE person_query
+                            SET query_state = 0,
+                                last_answered_timestamp = NULL,
+                                interval = 0
+                            WHERE id IN (
+                                SELECT pq.id
+                                FROM \(Self.personQueryJoinFrom(personTypeID: typeInfo.typeID))
+                                WHERE \(personWhere)
+                            )
+                            """,
+                        arguments: personConditions.arguments
+                    )
+                }
             }
 
             let pointMapConditions = makePointMapSearchConditions(
@@ -1959,6 +2017,16 @@ struct AppDatabase {
                             """,
                         arguments: [target.isReverse ? 1 : 0, target.queryTypeID, target.instanceID]
                     )
+                case .person:
+                    guard let personKind = target.personKind else { continue }
+                    try db.execute(
+                        sql: """
+                            UPDATE person_query
+                            SET query_state = 0, last_answered_timestamp = NULL, interval = 0
+                            WHERE instance_id = ? AND kind = ? AND partnership_id IS ?
+                            """,
+                        arguments: [target.instanceID, personKind.rawValue, target.personPartnershipID]
+                    )
                 }
             }
         }
@@ -1995,6 +2063,15 @@ struct AppDatabase {
                             )
                             """,
                         arguments: [target.isReverse ? 1 : 0, target.queryTypeID, target.instanceID]
+                    )
+                case .person:
+                    guard let personKind = target.personKind else { continue }
+                    try db.execute(
+                        sql: """
+                            DELETE FROM person_query
+                            WHERE instance_id = ? AND kind = ? AND partnership_id IS ?
+                            """,
+                        arguments: [target.instanceID, personKind.rawValue, target.personPartnershipID]
                     )
                 }
             }
@@ -2039,6 +2116,28 @@ struct AppDatabase {
                     additionalArguments: [startOfTomorrowTimestamp]
                 )
             }
+
+            blueQueries += try fetchPersonStudyQueries(
+                db: db,
+                parsedQuery: parsedQuery,
+                whereSQL: "pq.interval = 0",
+                additionalArguments: StatementArguments()
+            )
+            redQueries += try fetchPersonStudyQueries(
+                db: db,
+                parsedQuery: parsedQuery,
+                whereSQL: "pq.interval != 0 AND pq.interval <= \(QUERY_STARTER_DELAY_GOOD)",
+                additionalArguments: StatementArguments()
+            )
+            greenQueries += try fetchPersonStudyQueries(
+                db: db,
+                parsedQuery: parsedQuery,
+                whereSQL: """
+                    pq.interval > \(QUERY_STARTER_DELAY_GOOD)
+                    AND pq.last_answered_timestamp + pq.interval < ?
+                    """,
+                additionalArguments: [startOfTomorrowTimestamp]
+            )
 
             blueQueries += try fetchPointMapStudyQueries(
                 db: db,
@@ -2106,6 +2205,10 @@ struct AppDatabase {
                     parsedQuery: parsedQuery
                 )
                 return summary.totalCount > 0 ? .standard(summary) : nil
+            }
+            if let personSummary = try fetchPersonStudySummary(db: db, parsedQuery: parsedQuery),
+               personSummary.totalCount > 0 {
+                pools.append(.person(personSummary))
             }
             let pointMapSummary = try fetchPointMapStudySummary(db: db, parsedQuery: parsedQuery)
             if pointMapSummary.totalCount > 0 {
@@ -2194,6 +2297,14 @@ struct AppDatabase {
                         additionalArguments: [minimumSeenDueTimestamp]
                     )
                     return (pool, count)
+                case .person:
+                    let count = try fetchPersonStudyQueryCount(
+                        db: db,
+                        parsedQuery: parsedQuery,
+                        whereSQL: "pq.interval != 0 AND pq.last_answered_timestamp + pq.interval = ?",
+                        additionalArguments: [minimumSeenDueTimestamp]
+                    )
+                    return (pool, count)
                 }
             }
 
@@ -2235,6 +2346,14 @@ struct AppDatabase {
                     db: db,
                     parsedQuery: parsedQuery,
                     whereSQL: "bq.interval != 0 AND bq.last_answered_timestamp + bq.interval = ?",
+                    additionalArguments: [minimumSeenDueTimestamp]
+                )
+                return .query(query)
+            case .person:
+                let query = try fetchRandomPersonStudyQuery(
+                    db: db,
+                    parsedQuery: parsedQuery,
+                    whereSQL: "pq.interval != 0 AND pq.last_answered_timestamp + pq.interval = ?",
                     additionalArguments: [minimumSeenDueTimestamp]
                 )
                 return .query(query)
@@ -2288,6 +2407,14 @@ struct AppDatabase {
                 db: db,
                 parsedQuery: parsedQuery,
                 whereSQL: "bq.interval = 0",
+                additionalArguments: StatementArguments()
+            )
+            return .query(query)
+        case .person:
+            let query = try fetchRandomPersonStudyQuery(
+                db: db,
+                parsedQuery: parsedQuery,
+                whereSQL: "pq.interval = 0",
                 additionalArguments: StatementArguments()
             )
             return .query(query)
@@ -6478,17 +6605,21 @@ struct AppDatabase {
         )
     }
 
+    // `srsAlias` names the table/alias carrying the SRS columns (`query` for
+    // standard rows, `pq` for the person_query scans) — only `:new` uses it.
     nonisolated func makeQuerySearchConditions(
         tableAlias: String,
         typeName: String,
         fieldIndices: [Int],
-        expression: SearchExpression?
+        expression: SearchExpression?,
+        srsAlias: String = "query"
     ) -> (sql: String, arguments: StatementArguments) {
         makeSearchConditions(
             tableAlias: tableAlias,
             typeName: typeName,
             fieldIndices: fieldIndices,
-            expression: expression
+            expression: expression,
+            srsAlias: srsAlias
         )
     }
 
@@ -6496,7 +6627,8 @@ struct AppDatabase {
         tableAlias: String,
         typeName: String,
         fieldIndices: [Int],
-        expression: SearchExpression?
+        expression: SearchExpression?,
+        srsAlias: String = "query"
     ) -> (sql: String, arguments: StatementArguments) {
         guard let expression else {
             return ("", StatementArguments())
@@ -6506,7 +6638,8 @@ struct AppDatabase {
             expression,
             tableAlias: tableAlias,
             typeName: typeName,
-            fieldIndices: fieldIndices
+            fieldIndices: fieldIndices,
+            srsAlias: srsAlias
         )
     }
 
@@ -6514,7 +6647,8 @@ struct AppDatabase {
         _ expression: SearchExpression,
         tableAlias: String,
         typeName: String,
-        fieldIndices: [Int]
+        fieldIndices: [Int],
+        srsAlias: String = "query"
     ) -> (sql: String, arguments: StatementArguments) {
         switch expression {
         case .literal(let literal):
@@ -6572,6 +6706,8 @@ struct AppDatabase {
             return ("\(tableAlias).id = ?", arguments)
 
         case .noQueries:
+            // Built-in Person relationship queries count as queries too; other
+            // types never have person_query rows, so the extra clause is inert.
             return (
                 """
                 NOT EXISTS (
@@ -6579,29 +6715,34 @@ struct AppDatabase {
                     FROM query
                     WHERE query.instance_id = \(tableAlias).id
                 )
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM person_query
+                    WHERE person_query.instance_id = \(tableAlias).id
+                )
                 """,
                 StatementArguments()
             )
 
         case .new:
-            return ("query.interval = 0", StatementArguments())
+            return ("\(srsAlias).interval = 0", StatementArguments())
 
         case .and(let leftExpression, let rightExpression):
-            let left = makeSearchCondition(leftExpression, tableAlias: tableAlias, typeName: typeName, fieldIndices: fieldIndices)
-            let right = makeSearchCondition(rightExpression, tableAlias: tableAlias, typeName: typeName, fieldIndices: fieldIndices)
+            let left = makeSearchCondition(leftExpression, tableAlias: tableAlias, typeName: typeName, fieldIndices: fieldIndices, srsAlias: srsAlias)
+            let right = makeSearchCondition(rightExpression, tableAlias: tableAlias, typeName: typeName, fieldIndices: fieldIndices, srsAlias: srsAlias)
             var arguments = left.arguments
             arguments += right.arguments
             return ("(\(left.sql)) AND (\(right.sql))", arguments)
 
         case .or(let leftExpression, let rightExpression):
-            let left = makeSearchCondition(leftExpression, tableAlias: tableAlias, typeName: typeName, fieldIndices: fieldIndices)
-            let right = makeSearchCondition(rightExpression, tableAlias: tableAlias, typeName: typeName, fieldIndices: fieldIndices)
+            let left = makeSearchCondition(leftExpression, tableAlias: tableAlias, typeName: typeName, fieldIndices: fieldIndices, srsAlias: srsAlias)
+            let right = makeSearchCondition(rightExpression, tableAlias: tableAlias, typeName: typeName, fieldIndices: fieldIndices, srsAlias: srsAlias)
             var arguments = left.arguments
             arguments += right.arguments
             return ("(\(left.sql)) OR (\(right.sql))", arguments)
 
         case .not(let innerExpression):
-            let inner = makeSearchCondition(innerExpression, tableAlias: tableAlias, typeName: typeName, fieldIndices: fieldIndices)
+            let inner = makeSearchCondition(innerExpression, tableAlias: tableAlias, typeName: typeName, fieldIndices: fieldIndices, srsAlias: srsAlias)
             return ("NOT (\(inner.sql))", inner.arguments)
         }
     }
