@@ -32,6 +32,8 @@ struct StudyModeView: View {
     @EnvironmentObject private var editInstanceWindowState: EditInstanceWindowState
     @EnvironmentObject private var addInstanceWindowState: AddInstanceWindowState
     @EnvironmentObject private var shortcutSettings: ShortcutSettings
+    @EnvironmentObject private var navigationState: AppNavigationState
+    @EnvironmentObject private var studyModeState: StudyModeState
 
     let stack: Stack
     let appDatabase: AppDatabase
@@ -194,6 +196,7 @@ struct StudyModeView: View {
                         )
                         openWindow(id: "edit-instance")
                     },
+                    onEditType: performEditType,
                     onArrowLinkShortcut: { key in
                         // Only after the answer is revealed; mirrors the link-click callbacks below.
                         guard isAnswerRevealed, let currentQuery else { return false }
@@ -252,6 +255,11 @@ struct StudyModeView: View {
         .onChange(of: currentQuery) { _, newQuery in
             overlayCollectionNames = []
             allCollectionNames = []
+            if let newQuery, newQuery.kind == .standard {
+                studyModeState.currentTypeID = try? appDatabase.fetchTypeID(instanceID: newQuery.instanceID)
+            } else {
+                studyModeState.currentTypeID = nil
+            }
             guard let instanceID = newQuery?.instanceID else { return }
             overlayCollectionNames = (try? appDatabase.fetchVisibleBeforeAnswerCollectionNames(instanceID: instanceID)) ?? []
             allCollectionNames = (try? appDatabase.fetchAllCollectionNames(instanceID: instanceID)) ?? []
@@ -264,6 +272,12 @@ struct StudyModeView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .memorDidChangeDatabase)) { _ in
             Task { await refreshStudySessionLive() }
+        }
+        .onChange(of: studyModeState.editTypeRequestNonce) { _, _ in
+            performEditType()
+        }
+        .onDisappear {
+            studyModeState.currentTypeID = nil
         }
     }
 
@@ -334,6 +348,17 @@ struct StudyModeView: View {
         guard currentQuery != nil, !isAnswerRevealed, !isCompleted else { return }
         isAnswerRevealed = true
         pendingUndo = .revealAnswer
+    }
+
+    /// Edit Type (⌘⇧T / Instances menu): exits Study mode and opens the Type
+    /// detail page for the current instance's type. Does nothing on map queries
+    /// (built-in types have no detail page).
+    private func performEditType() {
+        guard let typeID = studyModeState.currentTypeID else { return }
+        // Exit first: a quick-study exit selects the Stacks tab, which would
+        // otherwise clobber the Types-tab navigation below.
+        onExit()
+        navigationState.navigateToTypeDetail(typeID: typeID)
     }
 
     private func performUndo() {
@@ -953,6 +978,7 @@ private struct StudyModeKeyCommandHandler: NSViewRepresentable {
     let onResponse: (StudyResponseRating) -> Void
     let onShiftDown: () -> Void
     let onEditInstance: () -> Void
+    let onEditType: () -> Void
     let onArrowLinkShortcut: (LinkShortcutKey) -> Bool
 
     func makeNSView(context: Context) -> KeyCommandHandlingView {
@@ -964,6 +990,7 @@ private struct StudyModeKeyCommandHandler: NSViewRepresentable {
         view.onResponse = onResponse
         view.onShiftDown = onShiftDown
         view.onEditInstance = onEditInstance
+        view.onEditType = onEditType
         view.onArrowLinkShortcut = onArrowLinkShortcut
         return view
     }
@@ -976,6 +1003,7 @@ private struct StudyModeKeyCommandHandler: NSViewRepresentable {
         nsView.onResponse = onResponse
         nsView.onShiftDown = onShiftDown
         nsView.onEditInstance = onEditInstance
+        nsView.onEditType = onEditType
         nsView.onArrowLinkShortcut = onArrowLinkShortcut
     }
 
@@ -987,6 +1015,7 @@ private struct StudyModeKeyCommandHandler: NSViewRepresentable {
         var onResponse: ((StudyResponseRating) -> Void)?
         var onShiftDown: (() -> Void)?
         var onEditInstance: (() -> Void)?
+        var onEditType: (() -> Void)?
         var onArrowLinkShortcut: ((LinkShortcutKey) -> Bool)?
 
         private var keyDownMonitor: Any?
@@ -1047,6 +1076,10 @@ private struct StudyModeKeyCommandHandler: NSViewRepresentable {
                     }
                     if settings.binding(for: .studyEditInstance).matches(event) {
                         self.onEditInstance?()
+                        return nil
+                    }
+                    if settings.binding(for: .studyEditType).matches(event) {
+                        self.onEditType?()
                         return nil
                     }
 

@@ -49,6 +49,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
     case studyRatingEasy
     case studyUndo
     case studyEditInstance
+    case studyEditType
 
     // Instance editor
     case editorSave
@@ -92,6 +93,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         case .studyRatingEasy: return "Rate Easy"
         case .studyUndo: return "Undo Study Response"
         case .studyEditInstance: return "Edit Current Instance"
+        case .studyEditType: return "Edit Type"
         case .editorSave: return "Save"
         case .editorSubmit: return "Submit"
         case .editorWrapBold: return "Wrap Bold"
@@ -116,7 +118,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
              .toggleDeveloperMode:
             return .global
         case .studyRevealOrGood, .studyRatingAgain, .studyRatingHard, .studyRatingGood,
-             .studyRatingEasy, .studyUndo, .studyEditInstance:
+             .studyRatingEasy, .studyUndo, .studyEditInstance, .studyEditType:
             return .study
         case .editorSave, .editorSubmit, .editorWrapBold, .editorWrapItalic, .editorWrapEmphasis,
              .editorInsertImage, .editorCopyLink, .editorPickType, .editorOpenHyperlinkSearch,
@@ -149,6 +151,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         case .studyRatingEasy: return KeyBinding(key: "4")
         case .studyUndo: return KeyBinding(key: "Z", modifiers: .command)
         case .studyEditInstance: return KeyBinding(key: "E")
+        case .studyEditType: return KeyBinding(key: "T", modifiers: [.command, .shift])
         case .editorSave: return KeyBinding(key: "S", modifiers: .command)
         case .editorSubmit: return KeyBinding(key: "Return", modifiers: .command)
         case .editorWrapBold: return KeyBinding(key: "B", modifiers: .command)

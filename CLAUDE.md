@@ -134,7 +134,7 @@ The shortcut system lives in `Memor/Shortcuts/`. **Customizable** shortcuts are 
 1. Add a case to `ShortcutAction` in `Shortcuts/ShortcutAction.swift` with `title`, `category`, and `default: KeyBinding`.
 2. Apply it to the SwiftUI view: `.shortcut(.myAction, settings: shortcutSettings)` (replaces `.keyboardShortcut(...)`).
 3. Display it in button text: `ShortcutLabel(title: "Save", action: .myAction)` or interpolate `shortcutSettings.binding(for: .myAction).displayString`.
-4. For `NSEvent.addLocalMonitorForEvents` handlers, store a `ShortcutSettings` ref on the NSView and call `settings.binding(for: .myAction).matches(event)`. See `StudyModeKeyCommandHandler` in ContentView.swift for a reference implementation.
+4. For `NSEvent.addLocalMonitorForEvents` handlers, store a `ShortcutSettings` ref on the NSView and call `settings.binding(for: .myAction).matches(event)`. See `StudyModeKeyCommandHandler` in Study/StudyModeView.swift for a reference implementation.
 5. Every scene that hosts the view must inject `.environmentObject(shortcutSettings)` (see MemorApp.swift).
 
 ### Non-customizable bindings (kept hard-coded)
@@ -187,6 +187,7 @@ navigates to the linked instance).
 | Study — Again / Hard / Good / Easy | 1 / 2 / 3 / 4 |
 | Study — Undo | ⌘Z |
 | Study — Edit current instance | E |
+| Study — Edit Type (exit Study, open the instance's type detail page) | ⌘⇧T |
 | Instance editor — Save | ⌘S |
 | Types page — Save current editor | ⌘S |
 | Query Search — Reset Due Dates | ⌘R |

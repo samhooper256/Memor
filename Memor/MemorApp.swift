@@ -17,6 +17,18 @@ final class QuickStudyState: ObservableObject {
     }
 }
 
+/// Study-mode state shared with the menu bar: which type the showing instance
+/// belongs to (nil when not studying, or on built-in map queries, which have no
+/// type detail page), and an "Edit Type" request flowing menu → StudyModeView.
+final class StudyModeState: ObservableObject {
+    @Published var currentTypeID: Int64?
+    @Published private(set) var editTypeRequestNonce = UUID()
+
+    func requestEditType() {
+        editTypeRequestNonce = UUID()
+    }
+}
+
 @main
 struct MemorApp: App {
     @StateObject private var navigationState = AppNavigationState()
@@ -29,6 +41,7 @@ struct MemorApp: App {
     @StateObject private var manageBoundariesWindowState = ManageBoundariesWindowState()
     @StateObject private var stackStatsWindowState = StackStatsWindowState()
     @StateObject private var quickStudyState = QuickStudyState()
+    @StateObject private var studyModeState = StudyModeState()
     @StateObject private var shortcutSettings = ShortcutSettings.shared
     @StateObject private var timeZoneSettings = TimeZoneSettings.shared
     @StateObject private var developerState = DeveloperState.shared
@@ -59,6 +72,7 @@ struct MemorApp: App {
                 .environmentObject(stacksPageState)
                 .environmentObject(stackStatsWindowState)
                 .environmentObject(quickStudyState)
+                .environmentObject(studyModeState)
                 .environmentObject(shortcutSettings)
                 .environmentObject(timeZoneSettings)
                 .task {
@@ -198,6 +212,12 @@ struct MemorApp: App {
                     openWindow(id: "search")
                 }
                 .shortcut(.openSearchInstances, settings: shortcutSettings)
+
+                Button("Edit Type") {
+                    studyModeState.requestEditType()
+                }
+                .shortcut(.studyEditType, settings: shortcutSettings)
+                .disabled(studyModeState.currentTypeID == nil)
 
                 Divider()
 

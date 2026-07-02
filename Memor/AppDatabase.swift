@@ -535,6 +535,16 @@ struct AppDatabase {
         }
     }
 
+    func fetchTypeID(instanceID: Int64) throws -> Int64? {
+        try dbQueue.read { db in
+            try Int64.fetchOne(
+                db,
+                sql: "SELECT type_id FROM instance_id_type_id WHERE instance_id = ?",
+                arguments: [instanceID]
+            )
+        }
+    }
+
     func fetchCollections() throws -> [Collection] {
         try dbQueue.read { db in
             try Collection.fetchAll(
