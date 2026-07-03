@@ -215,7 +215,7 @@ navigates to the linked instance).
 
 - Window state communicated via `@StateObject` ObservableObject classes with UUID nonces for change detection
 - NSViewRepresentable used extensively for key command handling (NSEvent monitors) and WKWebView
-- HTML field values rendered via template substitution: `{{FieldName}}` placeholders, `{{{Content}}}` for global wrapper, `{{#QuestionContent}}` for answer-side question reference
+- HTML field values rendered via template substitution: `{{FieldName}}` placeholders, `{{{Content}}}` for global wrapper, `{{#QuestionContent}}` for answer-side question reference, `{{#InstanceID}}` for the instance's numeric id (empty in template previews), `{{#CollectionIDs}}`/`{{#CollectionClasses}}` for collection membership. The instance-scoped `{{#...}}` tokens (InstanceID, CollectionIDs) are substituted in `generatePreviewHTMLForQuestion`/`generatePreviewHTMLForAnswer` (Utilities.swift) using the passed `instanceID`; the answer path re-runs them after `{{#QuestionContent}}` splices the raw question HTML back in.
 - Local images served via custom WKURLSchemeHandler (`flashcards-local-image://`)
 - Prefer `pointerStyle(...)` over NSCursor for hover effects
 - Escape key closes all secondary windows

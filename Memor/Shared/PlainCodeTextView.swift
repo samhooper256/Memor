@@ -308,7 +308,7 @@ struct QueryTypeEditorsSplitView: View {
                     editor: .html,
                     title: "HTML",
                     text: $htmlText,
-                    highlightedTokens: ["{{#QuestionContent}}", "{{#Tags}}"],
+                    highlightedTokens: ["{{#QuestionContent}}", "{{#Tags}}", "{{#InstanceID}}"],
                     fieldNames: fieldNames,
                     booleanFieldNames: booleanFieldNames
                 )

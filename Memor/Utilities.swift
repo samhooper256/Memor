@@ -41,7 +41,8 @@ func generatePreviewHTMLForQuestion(
         html = html.replacingCharacters(in: contentRange, with: questionHTML)
     }
 
-    return substituteCollectionIDsToken(in: html, appDatabase: appDatabase, instanceID: instanceID)
+    let withCollectionIDs = substituteCollectionIDsToken(in: html, appDatabase: appDatabase, instanceID: instanceID)
+    return substituteInstanceIDToken(in: withCollectionIDs, instanceID: instanceID)
 }
 
 func generatePreviewHTMLForAnswer(
@@ -57,7 +58,10 @@ func generatePreviewHTMLForAnswer(
     )
 
     let withQuestion = previewHTML.replacingOccurrences(of: "{{#QuestionContent}}", with: questionHTML)
-    return substituteCollectionIDsToken(in: withQuestion, appDatabase: appDatabase, instanceID: instanceID)
+    // Re-run the instance-scoped tokens: {{#QuestionContent}} may have spliced the
+    // raw question HTML (with its own tokens) in after the first pass.
+    let withCollectionIDs = substituteCollectionIDsToken(in: withQuestion, appDatabase: appDatabase, instanceID: instanceID)
+    return substituteInstanceIDToken(in: withCollectionIDs, instanceID: instanceID)
 }
 
 private func substituteCollectionIDsToken(
@@ -77,6 +81,16 @@ private func substituteCollectionIDsToken(
     }
     return html.replacingOccurrences(of: token, with: arrayLiteral)
 }
+
+/// Replaces every `{{#InstanceID}}` token with the instance's numeric id (a
+/// string of digits). During template previews there is no concrete instance,
+/// so the token resolves to an empty string.
+private func substituteInstanceIDToken(in html: String, instanceID: Int64?) -> String {
+    let token = "{{#InstanceID}}"
+    guard html.contains(token) else { return html }
+    return html.replacingOccurrences(of: token, with: instanceID.map(String.init) ?? "")
+}
+
 func formatFieldDisplayValue(_ raw: String) -> AttributedString {
     // 1. Replace <br> (with optional surrounding whitespace) with "; "
     let text = raw.replacingOccurrences(
