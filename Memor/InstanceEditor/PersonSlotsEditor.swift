@@ -209,13 +209,13 @@ struct PersonSlotsEditor: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 TextField("", text: partner.startText)
-                    .textFieldStyle(.roundedBorder)
+                    .solidFocusField()
                     .frame(maxWidth: 140)
                 Text(entry.isMarried ? "Marriage End:" : "Relationship End:")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 TextField("", text: partner.endText)
-                    .textFieldStyle(.roundedBorder)
+                    .solidFocusField()
                     .frame(maxWidth: 140)
             }
 
@@ -466,7 +466,7 @@ private struct PersonPickerPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("Search people…", text: $searchText)
-                .textFieldStyle(.roundedBorder)
+                .solidFocusField()
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {

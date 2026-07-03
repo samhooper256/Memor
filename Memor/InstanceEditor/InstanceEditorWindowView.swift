@@ -388,14 +388,14 @@ struct InstanceEditorWindowView: View {
                 Text("Name:")
                     .font(.subheadline)
                 TextField("", text: $draft.pointMapTitle)
-                    .textFieldStyle(.roundedBorder)
+                    .solidFocusField()
             }
 
             HStack(spacing: 6) {
                 Text("Description:")
                     .font(.subheadline)
                 TextField("", text: $draft.pointMapDescription)
-                    .textFieldStyle(.roundedBorder)
+                    .solidFocusField()
             }
 
             HStack(alignment: .center, spacing: 8) {
@@ -1045,14 +1045,14 @@ struct InstanceEditorWindowView: View {
                 Text("Name:")
                     .font(.subheadline)
                 TextField("", text: $draft.boundaryMapTitle)
-                    .textFieldStyle(.roundedBorder)
+                    .solidFocusField()
             }
 
             HStack(spacing: 6) {
                 Text("Description:")
                     .font(.subheadline)
                 TextField("", text: $draft.boundaryMapDescription)
-                    .textFieldStyle(.roundedBorder)
+                    .solidFocusField()
             }
 
             MapReader { proxy in

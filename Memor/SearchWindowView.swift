@@ -612,7 +612,7 @@ struct SearchWindowView: View {
                         .font(.headline)
 
                     TextField("Stack Name", text: $newStackName)
-                        .textFieldStyle(.roundedBorder)
+                        .solidFocusField()
                         .focused($isStackNameFocused)
                         .onSubmit {
                             Task { await addStack() }

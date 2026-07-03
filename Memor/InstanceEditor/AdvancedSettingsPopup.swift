@@ -145,7 +145,7 @@ private struct AdvancedSettingsPopupView: View {
                 .fixedSize()
 
             TextField("", text: $draft.maxIntervalText)
-                .textFieldStyle(.roundedBorder)
+                .solidFocusField()
                 .frame(width: 120)
                 .onChange(of: draft.maxIntervalText) { _, newValue in
                     let digitsOnly = newValue.filter(\.isNumber)
@@ -172,17 +172,17 @@ private struct AdvancedSettingsPopupView: View {
         HStack(spacing: 6) {
             Text("Lat:")
             TextField("", text: lat)
-                .textFieldStyle(.roundedBorder)
+                .solidFocusField()
                 .frame(maxWidth: 90)
                 .onSubmit(onApply)
             Text("Lng:")
             TextField("", text: lng)
-                .textFieldStyle(.roundedBorder)
+                .solidFocusField()
                 .frame(maxWidth: 90)
                 .onSubmit(onApply)
             Text("Zoom:")
             TextField("", text: zoom)
-                .textFieldStyle(.roundedBorder)
+                .solidFocusField()
                 .frame(maxWidth: 60)
                 .onSubmit(onApply)
             Button("Apply") {

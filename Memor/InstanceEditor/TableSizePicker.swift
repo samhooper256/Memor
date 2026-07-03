@@ -190,7 +190,7 @@ struct TableSizePickerView: View {
 
     private func numericField(text: Binding<String>, field: Field) -> some View {
         TextField("", text: text)
-            .textFieldStyle(.roundedBorder)
+            .solidFocusField()
             .frame(width: 44)
             .multilineTextAlignment(.center)
             .focused($focusedField, equals: field)

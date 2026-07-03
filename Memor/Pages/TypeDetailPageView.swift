@@ -167,7 +167,7 @@ struct TypeDetailPageView: View {
                                 .font(.headline)
 
                             TextField("Type Name", text: $renamedTypeName)
-                                .textFieldStyle(.roundedBorder)
+                                .solidFocusField()
                                 .focused($isRenameTypeNameFocused)
                                 .onSubmit {
                                     Task {
@@ -262,7 +262,7 @@ struct TypeDetailPageView: View {
                                 .font(.headline)
 
                             TextField("Field Name", text: $newFieldName)
-                                .textFieldStyle(.roundedBorder)
+                                .solidFocusField()
                                 .focused($isAddFieldNameFocused)
                                 .onSubmit {
                                     Task {
@@ -501,7 +501,7 @@ struct TypeDetailPageView: View {
                                         .font(.headline)
                                     
                                     TextField("Query Type Name", text: $renamedQueryTypeName)
-                                        .textFieldStyle(.roundedBorder)
+                                        .solidFocusField()
                                         .focused($isRenameQueryTypeNameFocused)
                                         .onSubmit {
                                             Task {
@@ -548,7 +548,7 @@ struct TypeDetailPageView: View {
                                     .font(.headline)
 
                                 TextField("Query Type Name", text: $newQueryTypeName)
-                                    .textFieldStyle(.roundedBorder)
+                                    .solidFocusField()
                                     .focused($isRenameQueryTypeNameFocused)
                                     .onSubmit {
                                         Task {
@@ -595,7 +595,7 @@ struct TypeDetailPageView: View {
                                         .font(.headline)
 
                                     TextField("Query Type Name", text: $duplicateQueryTypeName)
-                                        .textFieldStyle(.roundedBorder)
+                                        .solidFocusField()
                                         .focused($isRenameQueryTypeNameFocused)
                                         .onSubmit {
                                             Task {
@@ -1308,7 +1308,7 @@ private struct RenameFieldPopoverAnchor: View {
                             .font(.headline)
 
                         TextField("Field Name", text: $renamedFieldName)
-                            .textFieldStyle(.roundedBorder)
+                            .solidFocusField()
                             .focused(isFieldNameFocused)
                             .onSubmit {
                                 onSubmit(fieldPendingRename)

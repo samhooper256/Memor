@@ -124,7 +124,7 @@ struct BoundaryPickerPopoverView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             TextField("Search boundaries", text: $state.searchQuery)
-                .textFieldStyle(.roundedBorder)
+                .solidFocusField()
                 .font(.system(size: 12))
                 .padding(.horizontal, 10)
                 .padding(.top, 10)

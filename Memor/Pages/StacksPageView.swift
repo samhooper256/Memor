@@ -446,7 +446,7 @@ private struct StackDetailPageView: View {
                                 .font(.headline)
 
                             TextField("Stack Name", text: $renamedStackName)
-                                .textFieldStyle(.roundedBorder)
+                                .solidFocusField()
                                 .focused($isRenameFieldFocused)
                                 .onSubmit {
                                     renameStack()

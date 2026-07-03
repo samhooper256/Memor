@@ -148,7 +148,7 @@ struct TypesPageView: View {
                     .buttonStyle(.bordered)
 
                     TextField("Search types", text: $searchText)
-                        .textFieldStyle(.roundedBorder)
+                        .solidFocusField()
                         .focused($isSearchFocused)
                         .frame(maxWidth: .infinity)
                 }
@@ -220,7 +220,7 @@ struct TypesPageView: View {
                 .font(.headline)
 
             TextField("Type Name", text: $newTypeName)
-                .textFieldStyle(.roundedBorder)
+                .solidFocusField()
                 .focused($isNewTypeNameFocused)
                 .onSubmit {
                     Task { await addType() }

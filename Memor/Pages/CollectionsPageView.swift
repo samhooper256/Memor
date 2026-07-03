@@ -76,7 +76,7 @@ struct CollectionsPageView: View {
                             .buttonStyle(.borderedProminent)
 
                             TextField("Search collections", text: $searchText)
-                                .textFieldStyle(.roundedBorder)
+                                .solidFocusField()
                                 .focused($isSearchFocused)
                                 .frame(maxWidth: .infinity)
                         }
@@ -168,7 +168,7 @@ struct CollectionsPageView: View {
                     .font(.headline)
 
                 TextField("Collection Name", text: $newCollectionName)
-                    .textFieldStyle(.roundedBorder)
+                    .solidFocusField()
                     .focused($isCollectionNameFocused)
                     .onSubmit {
                         Task {
@@ -341,7 +341,7 @@ private struct CollectionDetailPageView: View {
                                 .font(.headline)
 
                             TextField("Collection Name", text: $renamedCollectionName)
-                                .textFieldStyle(.roundedBorder)
+                                .solidFocusField()
                                 .focused($isRenameFieldFocused)
                                 .onSubmit {
                                     renameCollection()
