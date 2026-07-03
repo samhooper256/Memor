@@ -16,6 +16,30 @@ import GRDB
 
 extension AppDatabase {
 
+    // MARK: - Customizable "details" HTML (shared by all built-in queries)
+
+    /// The stored details HTML, or the default when the user hasn't customized it.
+    func fetchPersonBuiltinQueryHTML() throws -> String {
+        try dbQueue.read { db in try Self.personBuiltinQueryHTML(db: db) }
+    }
+
+    func setPersonBuiltinQueryHTML(_ html: String) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "INSERT OR REPLACE INTO globals (name, value) VALUES (?, ?)",
+                arguments: [PERSON_BUILTIN_QUERY_HTML_GLOBAL_KEY, html]
+            )
+        }
+    }
+
+    nonisolated static func personBuiltinQueryHTML(db: Database) throws -> String {
+        try String.fetchOne(
+            db,
+            sql: "SELECT value FROM globals WHERE name = ?",
+            arguments: [PERSON_BUILTIN_QUERY_HTML_GLOBAL_KEY]
+        ) ?? PERSON_BUILTIN_QUERY_HTML_DEFAULT
+    }
+
     // MARK: - Enablement
 
     /// Enables/disables one built-in query (row existence = enabled).
@@ -510,7 +534,7 @@ extension AppDatabase {
 
         let queryTypeName = try personQueryTypeName(db: db, personID: instanceID, kind: kind, partnershipID: partnershipID)
         let questionHTML = try personQuestionHTML(
-            db: db, personID: instanceID, kind: kind, partnershipID: partnershipID, fields: fields
+            db: db, personID: instanceID, kind: kind, partnershipID: partnershipID
         )
         let body = try personAnswerBody(db: db, personID: instanceID, kind: kind, partnershipID: partnershipID)
         let answerHTML = uniteQuestionAndAnswerWithDefaultSeparator(
@@ -598,12 +622,14 @@ extension AppDatabase {
         db: Database,
         personID: Int64,
         kind: PersonQueryKind,
-        partnershipID: Int64?,
-        fields: [TypeField]
+        partnershipID: Int64?
     ) throws -> String {
         var lines = ["<div class=\"person-question-title\">\(personQuestionTitle(kind))</div>"]
-        for field in fields where field.fieldType != .boolean {
-            lines.append("<div class=\"\(field.name)\">{{\(field.name)}}</div>")
+        // User-customizable "details" block (shared by every built-in kind);
+        // {{FieldName}} placeholders resolve through the normal template pipeline.
+        let detailsHTML = try personBuiltinQueryHTML(db: db)
+        if !detailsHTML.isEmpty {
+            lines.append(detailsHTML)
         }
         if kind == .childrenWith, let partnershipID {
             let partnerships = try fetchPersonPartnershipSummaries(db: db, personID: personID)

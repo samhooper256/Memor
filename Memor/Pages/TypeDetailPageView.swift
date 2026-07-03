@@ -66,10 +66,27 @@ struct TypeDetailPageView: View {
     // Person only
     @State private var personResetOnConnectionChange = false
     @State private var isPersonResetInfoPopoverPresented = false
+    /// Live copy of the customizable built-in-query "details" HTML (Person only).
+    @State private var personBuiltinQueryHTML = ""
+
+    /// Sentinel `selectedQueryTypeID` for the synthetic, non-deleteable
+    /// "Built-in Queries" entry (Person only). Real query-type ids are positive.
+    private static let builtinQueriesSelectionID: Int64 = -1
 
     private var selectedQueryType: QueryType? {
         guard let selectedQueryTypeID else { return nil }
         return queryTypes.first(where: { $0.id == selectedQueryTypeID })
+    }
+
+    /// Whether the synthetic "Built-in Queries" entry is currently selected.
+    private var isBuiltinQueriesSelected: Bool {
+        type.isPerson && selectedQueryTypeID == Self.builtinQueriesSelectionID
+    }
+
+    /// The query-types toolbar + editor show whenever there's something to edit:
+    /// any user query type, or (on Person) always, thanks to "Built-in Queries".
+    private var showsQueryTypesSection: Bool {
+        type.isPerson || !displayedQueryTypes.isEmpty
     }
 
     private var displayedQueryTypes: [QueryType] {
@@ -453,8 +470,12 @@ struct TypeDetailPageView: View {
 
     private var queryTypesToolbar: some View {
         HStack(spacing: 12) {
-                        if !displayedQueryTypes.isEmpty {
+                        if showsQueryTypesSection {
                             Picker("Edit Query Type:", selection: $selectedQueryTypeID) {
+                                if type.isPerson {
+                                    Text("Built-in Queries")
+                                        .tag(Optional(Self.builtinQueriesSelectionID))
+                                }
                                 ForEach(displayedQueryTypes) { queryType in
                                     Text(queryType.name)
                                         .tag(Optional(queryType.id))
@@ -462,7 +483,7 @@ struct TypeDetailPageView: View {
                             }
                             .pickerStyle(.menu)
                         }
-                        
+
                         if !displayedQueryTypes.isEmpty {
                             Button("Rename") {
                                 guard let selectedQueryType else { return }
@@ -620,7 +641,7 @@ struct TypeDetailPageView: View {
 
     @ViewBuilder
     private var queryEditorAndPreview: some View {
-        if !displayedQueryTypes.isEmpty {
+        if showsQueryTypesSection {
                         HStack(spacing: 16) {
                             RadioSelectionButton(
                                 title: "Question",
@@ -629,11 +650,15 @@ struct TypeDetailPageView: View {
                                 selectedHTMLContentMode = .query
                             }
 
-                            RadioSelectionButton(
-                                title: "Answer",
-                                isSelected: selectedHTMLContentMode == .answer
-                            ) {
-                                selectedHTMLContentMode = .answer
+                            // Built-in queries have no editable answer (answers are
+                            // computed from relationships), so only "Question" shows.
+                            if !isBuiltinQueriesSelected {
+                                RadioSelectionButton(
+                                    title: "Answer",
+                                    isSelected: selectedHTMLContentMode == .answer
+                                ) {
+                                    selectedHTMLContentMode = .answer
+                                }
                             }
                         }
 
@@ -666,8 +691,12 @@ struct TypeDetailPageView: View {
             queryTypes = try appDatabase.fetchQueryTypes(forTypeID: type.id)
             if type.isPerson {
                 personResetOnConnectionChange = (try? appDatabase.fetchPersonResetQueriesOnConnectionChange()) ?? false
+                personBuiltinQueryHTML = (try? appDatabase.fetchPersonBuiltinQueryHTML()) ?? PERSON_BUILTIN_QUERY_HTML_DEFAULT
             }
+            // Person always has the "Built-in Queries" entry to fall back on, even
+            // when the user has deleted every ordinary query type.
             selectedQueryTypeID = displayedQueryTypes.first?.id
+                ?? (type.isPerson ? Self.builtinQueriesSelectionID : nil)
             syncSelectedQueryTypeEditorState(selectedQueryTypeID: selectedQueryTypeID)
             refreshPreviewCanvas()
             errorMessage = nil
@@ -679,6 +708,15 @@ struct TypeDetailPageView: View {
     private func syncSelectedQueryTypeEditorState(selectedQueryTypeID: Int64?) {
         isSyncingEditorState = true
         defer { isSyncingEditorState = false }
+
+        if type.isPerson && selectedQueryTypeID == Self.builtinQueriesSelectionID {
+            // No editable answer for built-in queries; the HTML editor shows the
+            // shared "details" block sourced from the globals table.
+            selectedHTMLContentMode = .query
+            selectedQueryHTML = personBuiltinQueryHTML
+            activeEditor = .html
+            return
+        }
 
         guard let selectedQueryTypeID,
               let queryType = queryTypes.first(where: { $0.id == selectedQueryTypeID }) else {
@@ -722,6 +760,18 @@ struct TypeDetailPageView: View {
         let mode = pendingHTMLSaveMode
         let html = pendingHTMLSaveText
         hasPendingHTMLSave = false
+
+        if queryTypeID == Self.builtinQueriesSelectionID {
+            do {
+                try appDatabase.setPersonBuiltinQueryHTML(html)
+                personBuiltinQueryHTML = html
+                errorMessage = nil
+            } catch {
+                errorMessage = "Failed to save built-in query HTML."
+            }
+            return
+        }
+
         do {
             switch mode {
             case .query:
@@ -778,7 +828,7 @@ struct TypeDetailPageView: View {
 
     @MainActor
     private func renameSelectedQueryType() async {
-        guard let selectedQueryTypeID else { return }
+        guard let selectedQueryTypeID, !isBuiltinQueriesSelected else { return }
 
         let trimmedQueryTypeName = renamedQueryTypeName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedQueryTypeName.isEmpty else { return }
@@ -819,7 +869,7 @@ struct TypeDetailPageView: View {
 
     @MainActor
     private func duplicateSelectedQueryType() async {
-        guard let selectedQueryTypeID else { return }
+        guard let selectedQueryTypeID, !isBuiltinQueriesSelected else { return }
 
         let trimmedQueryTypeName = duplicateQueryTypeName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedQueryTypeName.isEmpty else { return }
@@ -844,6 +894,7 @@ struct TypeDetailPageView: View {
             try appDatabase.deleteQueryType(queryTypeID: queryType.id)
             queryTypes = try appDatabase.fetchQueryTypes(forTypeID: type.id)
             selectedQueryTypeID = displayedQueryTypes.first?.id
+                ?? (type.isPerson ? Self.builtinQueriesSelectionID : nil)
             queryTypePendingDeletion = nil
             errorMessage = nil
         } catch {

@@ -13,6 +13,15 @@ import Foundation
 /// connections change" option ('1' = on; anything else / absent = off).
 nonisolated let PERSON_RESET_QUERIES_GLOBAL_KEY = "person_reset_queries_on_connection_change"
 
+/// The globals-table key for the customizable "details" HTML shown between the
+/// fixed "Who are the X of:" title and the answer bar on EVERY built-in Person
+/// relationship query. Edited via the Type Detail page's "Built-in Queries"
+/// entry; absent = use PERSON_BUILTIN_QUERY_HTML_DEFAULT.
+nonisolated let PERSON_BUILTIN_QUERY_HTML_GLOBAL_KEY = "person_builtin_query_html"
+
+/// The out-of-the-box details HTML for built-in Person queries: just the name.
+nonisolated let PERSON_BUILTIN_QUERY_HTML_DEFAULT = "<div class=\"Name\">{{Name}}</div>"
+
 /// An entry in a Person relationship slot: another Person instance, or a bare
 /// name (free text for someone the user didn't make an instance for). Bare
 /// names anchor to the one instance side of a relationship and carry no
