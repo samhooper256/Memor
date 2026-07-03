@@ -200,7 +200,7 @@ struct TypesPageView: View {
             }
         }
         .background {
-            TypesListKeyNavigationHandler(
+            ListKeyNavigationHandler(
                 isEnabled: !isAddTypePopoverPresented && typePendingDeletion == nil,
                 onMoveUp: { moveHighlight(by: -1) },
                 onMoveDown: { moveHighlight(by: 1) },
