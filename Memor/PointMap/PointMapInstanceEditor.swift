@@ -53,6 +53,9 @@ final class AddPointPopupController: ObservableObject {
     private weak var panel: HyperlinkSearchPanel?
     private var popupState: AddPointPopupState?
 
+    /// Whether the "Add Point" popup panel is currently on screen.
+    var isPresented: Bool { panel != nil }
+
     func present(
         from window: NSWindow?,
         initialName: String = "",

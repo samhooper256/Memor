@@ -133,9 +133,27 @@ struct InstanceEditorWindowView: View {
         }
     }
 
+    /// Escape closes a showing map add-popup (boundaries picker or Add Point panel)
+    /// in preference to the whole window; only a bare Escape dismisses the editor.
+    private func handleEscape() {
+        if isBoundaryPickerPresented {
+            isBoundaryPickerPresented = false
+            return
+        }
+        if isBoundaryMapPickerPresented {
+            isBoundaryMapPickerPresented = false
+            return
+        }
+        if pointMapPointController.isPresented {
+            pointMapPointController.close()
+            return
+        }
+        dismiss()
+    }
+
     private var keyCommandHandler: some View {
         WindowKeyCommandHandler(
-            onEscape: { dismiss() },
+            onEscape: { handleEscape() },
             onCommandReturn: submitInstance,
             onCommandS: handleCommandS,
             onCommandB: { wrapFocusedSelection(openTag: "<b>", closeTag: "</b>") },
@@ -231,9 +249,10 @@ struct InstanceEditorWindowView: View {
             }
         }
         .onExitCommand {
-            // Closes silently; in add mode all tab drafts live on
-            // AddInstanceWindowState and are restored when the window reopens.
-            dismiss()
+            // A showing map add-popup swallows Escape first; otherwise closes
+            // silently — in add mode all tab drafts live on AddInstanceWindowState
+            // and are restored when the window reopens.
+            handleEscape()
         }
         .onDisappear {
             // Floating panels outlive the editor subtree (tab switch or window
