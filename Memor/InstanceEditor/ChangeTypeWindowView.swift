@@ -36,6 +36,36 @@ private enum CollectionHandling {
     case remove
 }
 
+/// Identifies a hoverable row on the destination column.
+private enum DestRow: Hashable {
+    case field(Int64)
+    case queryType(Int64)
+}
+
+/// Gives a destination-column row a slight background highlight while hovered.
+private struct DestRowHoverHighlight: ViewModifier {
+    let row: DestRow
+    @Binding var hovered: DestRow?
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(hovered == row ? Color.primary.opacity(0.08) : Color.clear)
+            )
+            .contentShape(Rectangle())
+            .onHover { isHovering in
+                if isHovering {
+                    hovered = row
+                } else if hovered == row {
+                    hovered = nil
+                }
+            }
+    }
+}
+
 struct ChangeTypeWindowView: View {
     let appDatabase: AppDatabase
 
@@ -59,6 +89,8 @@ struct ChangeTypeWindowView: View {
     @State private var fieldMapping: [Int64: Int64?] = [:]   // destFieldID -> sourceFieldID?
     @State private var enabledDestQueryTypeIDs: Set<Int64> = []
     @State private var collectionHandling: CollectionHandling = .keep
+
+    @State private var hoveredDestRow: DestRow?
 
     @State private var errorMessage: String?
 
@@ -232,6 +264,7 @@ struct ChangeTypeWindowView: View {
                                     .frame(width: 180)
                                 }
                             }
+                            .modifier(DestRowHoverHighlight(row: .field(field.id), hovered: $hoveredDestRow))
                         }
                     }
                 }
@@ -247,6 +280,8 @@ struct ChangeTypeWindowView: View {
                         ForEach(destQueryTypes) { queryType in
                             Toggle(queryType.name, isOn: destQueryTypeBinding(for: queryType.id))
                                 .toggleStyle(.checkbox)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .modifier(DestRowHoverHighlight(row: .queryType(queryType.id), hovered: $hoveredDestRow))
                         }
                     }
                 }
