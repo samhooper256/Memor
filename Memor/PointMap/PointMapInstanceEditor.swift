@@ -492,6 +492,28 @@ struct PointMapEntryRow: View {
     }
 }
 
+/// AddPointTextField wrapped in the app-standard flat chrome, blue when focused.
+private struct FlatAddPointField: View {
+    @Binding var text: String
+    var onPasteCoordinatePair: ((String) -> Bool)? = nil
+    let onSubmit: () -> Void
+    var focusOnAppear: Bool = false
+
+    @State private var isFocused = false
+
+    var body: some View {
+        AddPointTextField(
+            text: $text,
+            placeholder: "",
+            onPasteCoordinatePair: onPasteCoordinatePair,
+            onSubmit: onSubmit,
+            focusOnAppear: focusOnAppear,
+            onFocusChange: { isFocused = $0 }
+        )
+        .solidFocusFieldChrome(isFocused: isFocused)
+    }
+}
+
 private struct AddPointPopupView: View {
     @ObservedObject var state: AddPointPopupState
 
@@ -504,10 +526,8 @@ private struct AddPointPopupView: View {
             HStack(spacing: 6) {
                 Text("Name:")
                     .frame(width: 48, alignment: .trailing)
-                AddPointTextField(
+                FlatAddPointField(
                     text: $state.name,
-                    placeholder: "",
-                    onPasteCoordinatePair: nil,
                     onSubmit: state.submit,
                     focusOnAppear: true
                 )
@@ -517,10 +537,8 @@ private struct AddPointPopupView: View {
             HStack(spacing: 6) {
                 Text("Hint:")
                     .frame(width: 48, alignment: .trailing)
-                AddPointTextField(
+                FlatAddPointField(
                     text: $state.hint,
-                    placeholder: "",
-                    onPasteCoordinatePair: nil,
                     onSubmit: state.submit
                 )
                 .frame(height: 22)
@@ -529,9 +547,8 @@ private struct AddPointPopupView: View {
             HStack(spacing: 6) {
                 Text("Lat:")
                     .frame(width: 48, alignment: .trailing)
-                AddPointTextField(
+                FlatAddPointField(
                     text: $state.latitude,
-                    placeholder: "",
                     onPasteCoordinatePair: { pasted in
                         state.applyPastedCoordinatePair(pasted)
                     },
@@ -539,10 +556,8 @@ private struct AddPointPopupView: View {
                 )
                 .frame(height: 22)
                 Text("Lng:")
-                AddPointTextField(
+                FlatAddPointField(
                     text: $state.longitude,
-                    placeholder: "",
-                    onPasteCoordinatePair: nil,
                     onSubmit: state.submit
                 )
                 .frame(height: 22)
@@ -641,6 +656,7 @@ private struct AddPointTextField: NSViewRepresentable {
     let onPasteCoordinatePair: ((String) -> Bool)?
     let onSubmit: () -> Void
     var focusOnAppear: Bool = false
+    var onFocusChange: ((Bool) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(text: $text, onPasteCoordinatePair: onPasteCoordinatePair, onSubmit: onSubmit)
@@ -651,14 +667,25 @@ private struct AddPointTextField: NSViewRepresentable {
         textField.delegate = context.coordinator
         textField.placeholderString = placeholder
         textField.font = .systemFont(ofSize: NSFont.systemFontSize)
-        textField.focusRingType = .default
-        textField.bezelStyle = .roundedBezel
+        // The SwiftUI wrapper (solidFocusFieldChrome) paints the fill and the
+        // focused border, so the field itself is chromeless.
+        textField.focusRingType = .none
+        textField.isBezeled = false
+        textField.isBordered = false
+        textField.drawsBackground = false
         textField.stringValue = text
         textField.onPaste = { pasted in
             guard let onPasteCoordinatePair = context.coordinator.onPasteCoordinatePair else { return false }
             return onPasteCoordinatePair(pasted)
         }
+        // Focus gain via becomeFirstResponder (fires for clicks AND programmatic
+        // makeFirstResponder) — same pattern as CollectionSelector's
+        // FocusReportingTextField. Loss comes from controlTextDidEndEditing.
+        textField.onBecomeFirstResponder = { [weak coordinator = context.coordinator] in
+            coordinator?.onFocusChange?(true)
+        }
         textField.shouldFocusOnWindowAttach = focusOnAppear
+        context.coordinator.onFocusChange = onFocusChange
         return textField
     }
 
@@ -668,6 +695,7 @@ private struct AddPointTextField: NSViewRepresentable {
         }
         context.coordinator.onPasteCoordinatePair = onPasteCoordinatePair
         context.coordinator.onSubmit = onSubmit
+        context.coordinator.onFocusChange = onFocusChange
         if let pastable = nsView as? PastableTextField {
             pastable.onPaste = { pasted in
                 guard let onPasteCoordinatePair = context.coordinator.onPasteCoordinatePair else { return false }
@@ -680,6 +708,7 @@ private struct AddPointTextField: NSViewRepresentable {
         @Binding var text: String
         var onPasteCoordinatePair: ((String) -> Bool)?
         var onSubmit: () -> Void
+        var onFocusChange: ((Bool) -> Void)?
 
         init(
             text: Binding<String>,
@@ -696,6 +725,10 @@ private struct AddPointTextField: NSViewRepresentable {
             text = textField.stringValue
         }
 
+        func controlTextDidEndEditing(_ obj: Notification) {
+            onFocusChange?(false)
+        }
+
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             if commandSelector == #selector(NSResponder.insertNewline(_:))
                 || commandSelector == #selector(NSResponder.insertLineBreak(_:))
@@ -710,6 +743,13 @@ private struct AddPointTextField: NSViewRepresentable {
     final class PastableTextField: NSTextField {
         var onPaste: ((String) -> Bool)?
         var shouldFocusOnWindowAttach: Bool = false
+        var onBecomeFirstResponder: (() -> Void)?
+
+        override func becomeFirstResponder() -> Bool {
+            let didBecome = super.becomeFirstResponder()
+            if didBecome { onBecomeFirstResponder?() }
+            return didBecome
+        }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
