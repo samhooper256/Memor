@@ -19,6 +19,7 @@ struct CollectionsPageView: View {
     @FocusState private var isSearchFocused: Bool
     @State private var selectedCollection: Collection?
     @State private var collections: [Collection] = []
+    @State private var highlightedCollectionID: Int64?
     @State private var searchText = ""
     @State private var errorMessage: String?
     @State private var isAddCollectionSheetPresented = false
@@ -37,6 +38,20 @@ struct CollectionsPageView: View {
         return collections.filter { $0.name.localizedCaseInsensitiveContains(trimmed) }
     }
 
+    // The keyboard-selected ("currently selected") collection on the list page.
+    private var highlightedCollection: Collection? {
+        filteredCollections.first { $0.id == highlightedCollectionID }
+    }
+
+    // Moves the keyboard selection up (-1) or down (+1) through
+    // filteredCollections, clamped at both ends (no wraparound).
+    private func moveHighlight(by delta: Int) {
+        guard !filteredCollections.isEmpty else { return }
+        let current = filteredCollections.firstIndex { $0.id == highlightedCollectionID } ?? 0
+        let next = min(max(current + delta, 0), filteredCollections.count - 1)
+        highlightedCollectionID = filteredCollections[next].id
+    }
+
     var body: some View {
         Group {
             if let selectedCollection {
@@ -46,6 +61,7 @@ struct CollectionsPageView: View {
                     onBack: { self.selectedCollection = nil }
                 )
             } else {
+                ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         Text(titleText)
@@ -79,6 +95,7 @@ struct CollectionsPageView: View {
                                 ForEach(filteredCollections) { collection in
                                     CollectionRowView(
                                         collection: collection,
+                                        isHighlighted: collection.id == highlightedCollectionID,
                                         onOpen: {
                                             selectedCollection = collection
                                         },
@@ -86,6 +103,7 @@ struct CollectionsPageView: View {
                                             collectionPendingDeletion = collection
                                         }
                                     )
+                                    .id(collection.id)
                                 }
                             }
                         }
@@ -93,16 +111,43 @@ struct CollectionsPageView: View {
                     .padding(24)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
+                .onChange(of: highlightedCollectionID) { _, id in
+                    guard let id else { return }
+                    withAnimation { proxy.scrollTo(id, anchor: .center) }
+                }
                 .background {
                     FindShortcutKeyHandler(shortcutSettings: shortcutSettings) {
                         isSearchFocused = true
                     }
+                }
+                .background {
+                    ListKeyNavigationHandler(
+                        isEnabled: !isAddCollectionSheetPresented && collectionPendingDeletion == nil,
+                        onMoveUp: { moveHighlight(by: -1) },
+                        onMoveDown: { moveHighlight(by: 1) },
+                        onOpen: {
+                            if let collection = highlightedCollection {
+                                selectedCollection = collection
+                            }
+                        }
+                    )
+                }
                 }
             }
         }
         .task(id: selectedCollection?.id) {
             guard selectedCollection == nil else { return }
             await loadCollections()
+            // When the list page is shown (tab switch or back-from-detail):
+            // select the first collection and focus the search box.
+            if selectedCollection == nil {
+                highlightedCollectionID = filteredCollections.first?.id
+                isSearchFocused = true
+            }
+        }
+        .onChange(of: searchText) { _, _ in
+            // Keep the selection on the top match as filtering changes.
+            highlightedCollectionID = filteredCollections.first?.id
         }
         .onChange(of: navigationState.resetToHomeNonce) { _, _ in
             selectedCollection = nil
@@ -650,6 +695,7 @@ private struct CollectionDetailKeyCommandHandler: NSViewRepresentable {
 
 private struct CollectionRowView: View {
     let collection: Collection
+    let isHighlighted: Bool
     let onOpen: () -> Void
     let onDelete: () -> Void
 
@@ -732,7 +778,10 @@ private struct CollectionRowView: View {
         .pointerStyle(isHovered ? .link : .default)
         .overlay {
             RoundedRectangle(cornerRadius: 14)
-                .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
+                .stroke(
+                    isHighlighted ? Color.blue : Color.secondary.opacity(0.15),
+                    lineWidth: isHighlighted ? 2 : 1
+                )
         }
         .onTapGesture {
             isHovered = false
