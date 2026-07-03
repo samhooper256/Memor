@@ -619,6 +619,12 @@ struct StudyModeView: View {
             pendingUndo = savedUndo
         } catch {
             errorMessage = "Failed to record study response."
+            // If the response failed because the card no longer exists (e.g. a
+            // person_query row deleted mid-session by an edit), rebuilding from
+            // the DB drops it from the pools instead of leaving the session
+            // stuck re-erroring on the same card. A transient failure keeps the
+            // card (and the banner) so the user can simply re-rate.
+            await refreshStudySessionLive()
         }
     }
 

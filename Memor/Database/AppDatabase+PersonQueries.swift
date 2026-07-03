@@ -468,6 +468,11 @@ extension AppDatabase {
                     partnershipID,
                 ]
             )
+            // Surface undo of a since-deleted query instead of silently no-oping
+            // (mirrors applyPersonStudyResponse's existence guard).
+            if db.changesCount == 0 {
+                throw DatabaseError(message: "Person query not found.")
+            }
         }
     }
 
