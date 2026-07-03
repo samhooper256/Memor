@@ -496,6 +496,38 @@ struct StudyQuery: Identifiable, Hashable {
             personPartnershipID: personPartnershipID
         )
     }
+
+    /// Copy with updated SRS fields after a study response. Carries every other
+    /// field so pool re-insertion can't silently drop newer optional fields
+    /// (a memberwise copy once dropped personQueryKind, converting a Person
+    /// card into a broken standard card).
+    func withStudyOutcome(
+        interval: Int64,
+        lastAnsweredTimestamp: Int64?,
+        queryState: QueryState
+    ) -> StudyQuery {
+        StudyQuery(
+            instanceID: instanceID,
+            queryTypeID: queryTypeID,
+            interval: interval,
+            maxInterval: maxInterval,
+            lastAnsweredTimestamp: lastAnsweredTimestamp,
+            queryState: queryState,
+            typeName: typeName,
+            queryTypeName: queryTypeName,
+            questionHTML: questionHTML,
+            answerHTML: answerHTML,
+            typeCSS: typeCSS,
+            fieldValuesByName: fieldValuesByName,
+            booleanFieldNames: booleanFieldNames,
+            kind: kind,
+            pointMapPayload: pointMapPayload,
+            boundaryMapPayload: boundaryMapPayload,
+            isReverse: isReverse,
+            personQueryKind: personQueryKind,
+            personPartnershipID: personPartnershipID
+        )
+    }
 }
 
 enum StudySelectionResult: Hashable {

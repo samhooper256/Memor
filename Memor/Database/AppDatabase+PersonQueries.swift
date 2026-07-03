@@ -611,7 +611,7 @@ extension AppDatabase {
         case .parents: return "Who are the parents of:"
         case .adoptiveMother: return "Who is the adoptive mother of:"
         case .adoptiveFather: return "Who is the adoptive father of:"
-        case .partners: return "Who were all the romantic partners of:"
+        case .partners: return "Who are the romantic partners of:"
         case .children: return "Who are the children of:"
         case .childrenWith: return "Who are the children of:"
         case .fullSiblings: return "Who are the full siblings of:"
@@ -688,11 +688,11 @@ extension AppDatabase {
         case .adoptiveFather:
             return try slotHTML(.adoptiveFather)
         case .parents:
-            let mother = try slotHTML(.mother)
             let father = try slotHTML(.father)
+            let mother = try slotHTML(.mother)
             return """
-                <div class="person-parent"><span class="person-parent-label">Mother:</span> \(mother)</div>
                 <div class="person-parent"><span class="person-parent-label">Father:</span> \(father)</div>
+                <div class="person-parent"><span class="person-parent-label">Mother:</span> \(mother)</div>
                 """
         case .partners:
             let partnerships = try fetchPersonPartnershipSummaries(db: db, personID: personID)

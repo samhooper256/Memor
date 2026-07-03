@@ -220,6 +220,7 @@ navigates to the linked instance).
 - Prefer `pointerStyle(...)` over NSCursor for hover effects
 - Escape key closes all secondary windows
 - Customizable keyboard shortcuts are routed through `ShortcutSettings` / `.shortcut(.action, settings:)` — don't hard-code `.keyboardShortcut(...)` for actions a user should be able to rebind.
+- Copy `StudyQuery` only via its copy-helpers (`withFieldValues` / `withStudyOutcome` in Models/DatabaseModels.swift), never with a memberwise `StudyQuery(...)` — the defaulted identity fields (`personQueryKind`/`personPartnershipID`) drop silently and turn a Person card into a broken standard card.
 - **No macOS automatic text substitution, ever, in any editor** (no `...` → `…`, smart quotes/dashes, autocorrect). Every new NSTextView must call `disableAutomaticSubstitutions()` (Shared/TextSubstitutions.swift); NSTextField and SwiftUI TextField surfaces are covered by `registerSubstitutionKillDefaults()` in `MemorApp.init`, which writes the `NSAutomatic*Enabled` defaults false (a `set`, not `register` — the registration domain loses to NSGlobalDomain). Gotcha: `...` → `…` is smart DASHES (`isAutomaticDashSubstitutionEnabled`), not text replacement.
 
 ## Code Style

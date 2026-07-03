@@ -895,24 +895,10 @@ struct StudyModeView: View {
         guard outcome.newState == .zero || outcome.newState == .one else { return }
 
         redQueries.append(
-            StudyQuery(
-                instanceID: query.instanceID,
-                queryTypeID: query.queryTypeID,
+            query.withStudyOutcome(
                 interval: outcome.newInterval,
-                maxInterval: query.maxInterval,
                 lastAnsweredTimestamp: answeredAtTimestamp,
-                queryState: outcome.newState,
-                typeName: query.typeName,
-                queryTypeName: query.queryTypeName,
-                questionHTML: query.questionHTML,
-                answerHTML: query.answerHTML,
-                typeCSS: query.typeCSS,
-                fieldValuesByName: query.fieldValuesByName,
-                booleanFieldNames: query.booleanFieldNames,
-                kind: query.kind,
-                pointMapPayload: query.pointMapPayload,
-                boundaryMapPayload: query.boundaryMapPayload,
-                isReverse: query.isReverse
+                queryState: outcome.newState
             )
         )
     }
