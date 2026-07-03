@@ -91,6 +91,7 @@ nonisolated enum PersonQueryKind: String, Codable, Hashable, CaseIterable {
     case parents
     case adoptiveMother = "adoptive_mother"
     case adoptiveFather = "adoptive_father"
+    case partners
     case children
     case childrenWith = "children_with"
     case fullSiblings = "full_siblings"
@@ -102,6 +103,7 @@ nonisolated enum PersonQueryKind: String, Codable, Hashable, CaseIterable {
         case .parents: return "Parents"
         case .adoptiveMother: return "Adoptive Mother"
         case .adoptiveFather: return "Adoptive Father"
+        case .partners: return "Partners"
         case .children: return "Children"
         case .childrenWith: return "Children with"
         case .fullSiblings: return "Full Siblings"
@@ -111,7 +113,7 @@ nonisolated enum PersonQueryKind: String, Codable, Hashable, CaseIterable {
     /// The partnership-independent kinds, in display order. `childrenWith`
     /// rows are enumerated separately, one per partner entry.
     static let standaloneKinds: [PersonQueryKind] = [
-        .mother, .father, .parents, .adoptiveMother, .adoptiveFather, .children, .fullSiblings
+        .mother, .father, .parents, .adoptiveMother, .adoptiveFather, .partners, .children, .fullSiblings
     ]
 }
 
@@ -199,6 +201,7 @@ nonisolated enum PersonRelationKind: Hashable {
     case parents
     case adoptiveMother
     case adoptiveFather
+    case partners
     case children
     case childrenWith(partnershipID: Int64)
     case fullSiblings

@@ -587,6 +587,7 @@ extension AppDatabase {
         case .parents: return "Who are the parents of:"
         case .adoptiveMother: return "Who is the adoptive mother of:"
         case .adoptiveFather: return "Who is the adoptive father of:"
+        case .partners: return "Who were all the romantic partners of:"
         case .children: return "Who are the children of:"
         case .childrenWith: return "Who are the children of:"
         case .fullSiblings: return "Who are the full siblings of:"
@@ -628,6 +629,14 @@ extension AppDatabase {
         }
     }
 
+    /// Stacks a list of already-built entry fragments one per line (each wrapped
+    /// in a block div) so built-in answers list names vertically, not comma-run.
+    private nonisolated static func personAnswerLines(_ entriesHTML: [String]) -> String {
+        entriesHTML
+            .map { "<div class=\"person-answer-line\">\($0)</div>" }
+            .joined(separator: "\n")
+    }
+
     private nonisolated static let personNAHTML = "<span class=\"person-na\">N/A</span>"
 
     private nonisolated static func personAnswerBody(
@@ -659,13 +668,17 @@ extension AppDatabase {
                 <div class="person-parent"><span class="person-parent-label">Mother:</span> \(mother)</div>
                 <div class="person-parent"><span class="person-parent-label">Father:</span> \(father)</div>
                 """
+        case .partners:
+            let partnerships = try fetchPersonPartnershipSummaries(db: db, personID: personID)
+            guard !partnerships.isEmpty else { return personNAHTML }
+            return personAnswerLines(try partnerships.map { try personEntryHTML(db: db, ref: $0.partner) })
         case .children:
             return try personChildrenBody(db: db, personID: personID)
         case .childrenWith:
             guard let partnershipID else { return personNAHTML }
             let children = try fetchPersonGroupedChildRefs(db: db, partnershipID: partnershipID)
             guard !children.isEmpty else { return personNAHTML }
-            return try children.map { try personEntryHTML(db: db, ref: $0) }.joined(separator: ", ")
+            return personAnswerLines(try children.map { try personEntryHTML(db: db, ref: $0) })
         case .fullSiblings:
             return try personFullSiblingsBody(db: db, personID: personID, slots: slots)
         }
@@ -696,7 +709,7 @@ extension AppDatabase {
             let children = try fetchPersonGroupedChildRefs(db: db, partnershipID: partnership.id)
             guard !children.isEmpty else { continue }
             let partnerHTML = try personEntryHTML(db: db, ref: partnership.partner)
-            let list = try children.map { try personEntryHTML(db: db, ref: $0) }.joined(separator: ", ")
+            let list = personAnswerLines(try children.map { try personEntryHTML(db: db, ref: $0) })
             groups.append("""
                 <div class="person-children-group"><div class="person-children-group-title">With \(partnerHTML):</div><div class="person-children-group-list">\(list)</div></div>
                 """)
@@ -715,7 +728,7 @@ extension AppDatabase {
             return .bare(row["child_bare"] as String? ?? "")
         }
         if !ungrouped.isEmpty {
-            let list = try ungrouped.map { try personEntryHTML(db: db, ref: $0) }.joined(separator: ", ")
+            let list = personAnswerLines(try ungrouped.map { try personEntryHTML(db: db, ref: $0) })
             groups.append("""
                 <div class="person-children-group person-children-ungrouped"><div class="person-children-group-list">\(list)</div></div>
                 """)
@@ -813,6 +826,6 @@ extension AppDatabase {
             }
             return try personEntryHTML(db: db, ref: .instance(siblingID))
         }
-        return entries.joined(separator: ", ")
+        return personAnswerLines(entries)
     }
 }

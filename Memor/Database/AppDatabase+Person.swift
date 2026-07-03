@@ -706,6 +706,8 @@ extension AppDatabase {
                         try Self.appendDirectChild(db: db, parentID: side, child: childRef)
                     }
                     changes.insert(PersonRelationChange(instanceID: side, kind: .children))
+                    // Both sides' partner lists lost this partnership.
+                    changes.insert(PersonRelationChange(instanceID: side, kind: .partners))
                 }
                 for (_, childRef) in children {
                     if case .instance(let childID) = childRef {
@@ -806,6 +808,13 @@ extension AppDatabase {
                     arguments: [personID, bID, bBare, draft.isMarried ? 1 : 0, draft.startText, draft.endText, index, bOrder]
                 )
                 partnershipIDByDraftIndex[index] = db.lastInsertedRowID
+
+                // A new partnership adds to this person's partner list (and the
+                // instance partner's, reciprocally).
+                changes.insert(PersonRelationChange(instanceID: personID, kind: .partners))
+                if case .instance(let partnerID) = draft.partner {
+                    changes.insert(PersonRelationChange(instanceID: partnerID, kind: .partners))
+                }
             }
 
             // 6e. Grouped-children reconciliation (per partner draft).
@@ -1241,13 +1250,17 @@ extension AppDatabase {
                 arguments: [oldID, row.id]
             )
             changes.insert(PersonRelationChange(instanceID: oldID, kind: .children))
+            changes.insert(PersonRelationChange(instanceID: oldID, kind: .partners))
         }
         if case .instance(let newID) = newPartner {
             changes.insert(PersonRelationChange(instanceID: newID, kind: .children))
             changes.insert(PersonRelationChange(instanceID: newID, kind: .childrenWith(partnershipID: row.id)))
+            changes.insert(PersonRelationChange(instanceID: newID, kind: .partners))
         }
         changes.insert(PersonRelationChange(instanceID: personID, kind: .children))
         changes.insert(PersonRelationChange(instanceID: personID, kind: .childrenWith(partnershipID: row.id)))
+        // This person's partner-list entry swapped identity.
+        changes.insert(PersonRelationChange(instanceID: personID, kind: .partners))
 
         // Rewrite each grouped instance child's other-parent slot.
         let partnerRole: PersonParentRole = mySex == "Female" ? .father : .mother
@@ -1392,6 +1405,9 @@ extension AppDatabase {
             for side in row.sideInstanceIDs where side != instanceID {
                 changes.insert(PersonRelationChange(instanceID: side, kind: .children))
                 changes.insert(PersonRelationChange(instanceID: side, kind: .childrenWith(partnershipID: row.id)))
+                // The partner's reference to the deleted person becomes a bare
+                // name, so their Partners answer changes.
+                changes.insert(PersonRelationChange(instanceID: side, kind: .partners))
             }
         }
         // Children of X (their parent slot converts to a bare name).
@@ -1597,6 +1613,7 @@ extension AppDatabase {
             case .parents: kind = .parents
             case .adoptiveMother: kind = .adoptiveMother
             case .adoptiveFather: kind = .adoptiveFather
+            case .partners: kind = .partners
             case .children: kind = .children
             case .fullSiblings: kind = .fullSiblings
             case .childrenWith(let id):

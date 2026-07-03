@@ -94,6 +94,7 @@ struct PersonQueryChecklist: View {
         case .adoptiveMother: return draft.personAdoptiveMother == nil
         case .adoptiveFather: return draft.personAdoptiveFather == nil
         case .parents: return draft.personMother == nil && draft.personFather == nil
+        case .partners: return draft.personPartners.isEmpty
         case .children:
             return draft.personUngroupedChildren.isEmpty
                 && draft.personPartners.allSatisfy { $0.children.isEmpty }
