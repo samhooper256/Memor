@@ -3,10 +3,11 @@
 //  Memor
 //
 //  Map-based boundary-quiz query rendering. In a forward query the current
-//  boundary is filled translucent red (it is the prompt); other attached
-//  boundaries are stroke-only. In a reverse query the boundary's name is the
-//  prompt and the user clicks the matching boundary — hovered boundaries tint
-//  translucent red with a pointer cursor until the answer is revealed.
+//  boundary is filled translucent purple with a purple border (it is the
+//  prompt); other attached boundaries are red stroke-only. In a reverse query
+//  the boundary's name is the prompt and the user clicks the matching boundary
+//  — hovered boundaries tint translucent purple with a pointer cursor until
+//  the answer is revealed.
 //
 
 import AppKit
@@ -195,7 +196,7 @@ private struct BoundaryMapMKMapView: NSViewRepresentable {
         weak var mapView: MKMapView?
         weak var finderOverlay: BoundaryFinderOverlayView?
 
-        // Whether a given boundary should be filled translucent red right now.
+        // Whether a given boundary should be filled translucent purple right now.
         private func isFilled(boundaryID: Int64) -> Bool {
             let answerVisible = showHighlight && (!isReverse || revealName)
             if answerVisible && boundaryID == currentBoundaryID { return true }
@@ -222,9 +223,11 @@ private struct BoundaryMapMKMapView: NSViewRepresentable {
                 guard let polygon = overlay as? MKPolygon,
                       let renderer = mapView.renderer(for: overlay) as? MKPolygonRenderer else { continue }
                 let polygonBoundaryID = Int64(polygon.title ?? "") ?? 0
-                renderer.fillColor = isFilled(boundaryID: polygonBoundaryID)
-                    ? NSColor.systemRed.withAlphaComponent(0.35)
+                let filled = isFilled(boundaryID: polygonBoundaryID)
+                renderer.fillColor = filled
+                    ? NSColor.systemPurple.withAlphaComponent(0.35)
                     : .clear
+                renderer.strokeColor = filled ? .systemPurple : .red
                 renderer.setNeedsDisplay()
             }
         }
@@ -243,10 +246,11 @@ private struct BoundaryMapMKMapView: NSViewRepresentable {
             if let polygon = overlay as? MKPolygon {
                 let renderer = MKPolygonRenderer(polygon: polygon)
                 let polygonBoundaryID = Int64(polygon.title ?? "") ?? 0
-                renderer.strokeColor = .red
+                let filled = isFilled(boundaryID: polygonBoundaryID)
+                renderer.strokeColor = filled ? .systemPurple : .red
                 renderer.lineWidth = 1.5
-                renderer.fillColor = isFilled(boundaryID: polygonBoundaryID)
-                    ? NSColor.systemRed.withAlphaComponent(0.35)
+                renderer.fillColor = filled
+                    ? NSColor.systemPurple.withAlphaComponent(0.35)
                     : .clear
                 return renderer
             }
