@@ -457,7 +457,10 @@ struct InstanceEditorWindowView: View {
                             }
                         }
                     }
-                    .onMapCameraChange(frequency: .continuous) { context in
+                    // .onEnd, not .continuous: per-frame writes to @Published draft
+                    // properties re-render the whole editor on every pan/zoom frame,
+                    // and no consumer of the region needs frame-rate updates.
+                    .onMapCameraChange(frequency: .onEnd) { context in
                         draft.pointMapCurrentRegion = context.region
                         pointMapSyncExplicitFieldsFromRegion()
                     }
@@ -1070,7 +1073,10 @@ struct InstanceEditorWindowView: View {
                             }
                         }
                     }
-                    .onMapCameraChange(frequency: .continuous) { context in
+                    // .onEnd, not .continuous: per-frame writes to @Published draft
+                    // properties re-render the whole editor on every pan/zoom frame,
+                    // and no consumer of the region needs frame-rate updates.
+                    .onMapCameraChange(frequency: .onEnd) { context in
                         draft.boundaryMapCurrentRegion = context.region
                         boundaryMapSyncExplicitFieldsFromRegion()
                     }
