@@ -761,11 +761,14 @@ struct SearchWindowView: View {
     @MainActor
     private func deleteInstances(_ instanceIDsToDelete: [Int64]) async {
         guard !instanceIDsToDelete.isEmpty else { return }
+        var deletedAny = false
         do {
             let shouldNotifyCollectionChange = collectionInAddMode != nil
             for instanceID in instanceIDsToDelete {
                 try appDatabase.deleteInstance(instanceID: instanceID)
+                deletedAny = true
             }
+            NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
             windowState.notifyCollectionsDataChange()
             if shouldNotifyCollectionChange {
                 await loadCollectionMembershipIfNeeded()
@@ -776,6 +779,11 @@ struct SearchWindowView: View {
             await runSearch(for: debouncedSearchQuery)
             errorMessage = nil
         } catch {
+            // A mid-batch failure still deleted the earlier instances.
+            if deletedAny {
+                NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
+                windowState.notifyCollectionsDataChange()
+            }
             pendingDeletionInstanceIDs = []
             isDeletionConfirmationPresented = false
             errorMessage = "Failed to delete instance."

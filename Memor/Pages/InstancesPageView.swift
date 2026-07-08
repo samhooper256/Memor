@@ -460,13 +460,20 @@ struct InstancesPageView: View {
         let idsToDelete = Set(pendingDeletionInstanceIDs)
         pendingDeletionInstanceIDs = []
         isDeletionConfirmationPresented = false
+        var deletedAny = false
         do {
             for instanceID in idsToDelete {
                 try appDatabase.deleteInstance(instanceID: instanceID)
+                deletedAny = true
             }
             pageData?.rows.removeAll { idsToDelete.contains($0.id) }
             selectedInstanceIDs = []
+            NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
         } catch {
+            // A mid-batch failure still deleted the earlier instances.
+            if deletedAny {
+                NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
+            }
             Task {
                 await loadPageData()
             }
