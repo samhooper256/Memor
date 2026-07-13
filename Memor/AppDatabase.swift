@@ -273,6 +273,8 @@ struct AppDatabase {
     }
 
     let dbQueue: DatabaseQueue
+    /// Absolute filesystem path of the SQLite database file (shown in Settings → Data Storage).
+    let databaseFilePath: String
     private let globalQueryHTMLCache = GlobalQueryHTMLCache()
     private let globalQueryCSSCache = GlobalQueryHTMLCache()
     private let imageFolderAccessController = ImageFolderAccessController()
@@ -289,6 +291,7 @@ struct AppDatabase {
     init(fileManager: FileManager = .default) throws {
         let databaseURL = try Self.makeDatabaseURL(fileManager: fileManager)
         let databasePath = databaseURL.path(percentEncoded: false)
+        databaseFilePath = databasePath
         let isNewDatabase = !fileManager.fileExists(atPath: databasePath)
         var configuration = Configuration()
 

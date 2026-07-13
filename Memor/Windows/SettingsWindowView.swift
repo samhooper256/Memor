@@ -135,6 +135,10 @@ struct SettingsWindowView: View {
 
     private var generalTab: some View {
         List {
+            Section(header: Text("Data Storage").font(.headline)) {
+                dataStorageSection
+            }
+
             Section(header: Text("Editor Behavior").font(.headline)) {
                 Toggle(isOn: $editorSettings.autoReplaceHTMLEntities) {
                     Text("Auto-replace `<<` with `&lt;` and `>>` with `&gt;`")
@@ -190,6 +194,30 @@ struct SettingsWindowView: View {
             }
             .padding(12)
         }
+    }
+
+    @ViewBuilder
+    private var dataStorageSection: some View {
+        Text("The SQLite database file where all Memor data is stored.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+        HStack {
+            Text(appDatabase.databaseFilePath)
+                .font(.system(.body, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+            Spacer()
+            Button("Open in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting(
+                    [URL(fileURLWithPath: appDatabase.databaseFilePath)]
+                )
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(.vertical, 2)
     }
 
     @ViewBuilder
