@@ -39,9 +39,13 @@ struct InstancesPageView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Instances")
-                .font(.largeTitle)
-                .fontWeight(.semibold)
+            HStack(spacing: 8) {
+                Text("Instances")
+                    .font(.largeTitle)
+                    .fontWeight(.semibold)
+
+                HelpWindowButton(windowID: "instances-help", tooltip: "Learn what instances are")
+            }
 
             HSplitView {
                 List(types, selection: $selectedTypeID) { type in
