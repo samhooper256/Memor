@@ -8,6 +8,7 @@
       "Bash(git show:*)",
       "Bash(git diff:*)",
       "Bash(git rm:*)",
+      "Bash(git log:*)",
       "Bash(grep:*)",
       "Bash(head:*)",
       "Bash(tail:*)",
