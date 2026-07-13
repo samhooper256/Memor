@@ -89,6 +89,18 @@ enum MemorMCPTools {
         // Person
         case "update_person_relations":
             return try updatePersonRelations(arguments: arguments, appDatabase: appDatabase)
+        case "update_person_offices":
+            return try updatePersonOffices(arguments: arguments, appDatabase: appDatabase)
+
+        // Offices
+        case "list_offices":
+            return try listOffices(arguments: arguments, appDatabase: appDatabase)
+        case "create_office":
+            return try createOfficeTool(arguments: arguments, appDatabase: appDatabase)
+        case "update_office":
+            return try updateOfficeTool(arguments: arguments, appDatabase: appDatabase)
+        case "delete_office":
+            return try deleteOfficeTool(arguments: arguments, appDatabase: appDatabase)
 
         // PointMap
         case "create_pointmap_instance":
@@ -250,6 +262,7 @@ enum MemorMCPTools {
                 queryTypeID: try arguments.optionalInt64("query_type_id"),
                 personKindRaw: try arguments.optionalString("person_kind"),
                 personPartnershipID: try arguments.optionalInt64("partnership_id"),
+                personOfficeID: try arguments.optionalInt64("office_id"),
                 appDatabase: appDatabase
             ))
         case "describe_search_syntax":
@@ -518,7 +531,8 @@ enum MemorMCPTools {
             let personData = try appDatabase.fetchPersonEditorData(instanceID: instanceID)
             relations = PersonRelationsDTO(
                 relations: personData.relations,
-                displayNames: personData.displayNamesByInstanceID
+                displayNames: personData.displayNamesByInstanceID,
+                officeNames: personData.officeNamesByID
             )
             builtinQueries = try appDatabase.fetchPersonBuiltinQueryInfos(instanceID: instanceID)
                 .map(PersonBuiltinQueryDTO.init)
@@ -708,8 +722,12 @@ enum MemorMCPTools {
             }
         }
 
+        // Per-office rows carry officeID (their enablement rides the offices
+        // payload); only true standalone kinds belong in builtinEnabledKinds.
         let enabledStandaloneKinds = Set(
-            current.builtinQueries.filter { $0.enabled && $0.partnershipID == nil }.map(\.kind)
+            current.builtinQueries
+                .filter { $0.enabled && $0.partnershipID == nil && $0.officeID == nil }
+                .map(\.kind)
         )
 
         do {
@@ -727,7 +745,8 @@ enum MemorMCPTools {
                 resetQueryCount: result.resetQueryCount,
                 relations: PersonRelationsDTO(
                     relations: updated.relations,
-                    displayNames: updated.displayNamesByInstanceID
+                    displayNames: updated.displayNamesByInstanceID,
+                    officeNames: updated.officeNamesByID
                 )
             ))
         } catch let error as PersonSaveError {
@@ -745,6 +764,150 @@ enum MemorMCPTools {
                 isError: true
             )
         }
+    }
+
+    /// Full-state office editing for one Person: `offices` is the COMPLETE
+    /// ordered list of holdings (an omitted office is REMOVED, deleting its
+    /// per-office query SRS and this person's succession links for it).
+    /// Items name an EXISTING office by office_id or office_name; absent
+    /// sub-keys inherit from the current holding. Linking a predecessor/
+    /// successor AUTO-ADDS that office to the linked person.
+    private static func updatePersonOffices(
+        arguments: [String: Value],
+        appDatabase: AppDatabase
+    ) throws -> CallTool.Result {
+        let instanceID = try arguments.requireInt64("instance_id")
+        let current = try appDatabase.fetchPersonEditorData(instanceID: instanceID)
+        var relations = current.relations
+
+        guard let items = try arguments.optionalObjectArray("offices") else {
+            throw MemorMCPToolError(message: "`offices` is required (pass [] to remove every office).")
+        }
+
+        let allOffices = try appDatabase.fetchOffices()
+        var newOffices: [PersonOfficeDraft] = []
+        for (index, item) in items.enumerated() {
+            let label = "offices[\(index)]"
+
+            let officeID: Int64
+            if let id = try item.optionalInt64("office_id") {
+                guard allOffices.contains(where: { $0.id == id }) else {
+                    throw MemorMCPToolError(message: "\(label): office_id \(id) does not exist. Use list_offices or create_office first.")
+                }
+                officeID = id
+            } else if let name = try item.optionalString("office_name") {
+                guard let office = allOffices.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
+                    throw MemorMCPToolError(message: "\(label): no office named \u{201C}\(name)\u{201D} exists. Use create_office first (offices are never created implicitly).")
+                }
+                officeID = office.id
+            } else {
+                throw MemorMCPToolError(message: "\(label): exactly one of office_id / office_name is required.")
+            }
+
+            let existing = current.relations.offices.first { $0.officeID == officeID }
+            newOffices.append(PersonOfficeDraft(
+                personOfficeID: existing?.personOfficeID,
+                officeID: officeID,
+                whenBegan: try item.optionalString("when_began") ?? existing?.whenBegan ?? "",
+                whenEnded: try item.optionalString("when_ended") ?? existing?.whenEnded ?? "",
+                note: try item.optionalString("note") ?? existing?.note ?? "",
+                predecessors: try item.optionalInt64Array("predecessors") ?? existing?.predecessors ?? [],
+                successors: try item.optionalInt64Array("successors") ?? existing?.successors ?? [],
+                isQueryEnabled: try item.optionalBool("query_enabled") ?? existing?.isQueryEnabled ?? false
+            ))
+        }
+        relations.offices = newOffices
+
+        let enabledStandaloneKinds = Set(
+            current.builtinQueries
+                .filter { $0.enabled && $0.partnershipID == nil && $0.officeID == nil }
+                .map(\.kind)
+        )
+
+        do {
+            let result = try appDatabase.savePersonInstance(
+                instanceID: instanceID,
+                fieldValuesByFieldID: current.fieldValuesByFieldID,
+                queryTypeIDs: current.enabledQueryTypeIDs,
+                relations: relations,
+                builtinEnabledKinds: enabledStandaloneKinds
+            )
+            postDatabaseChange()
+            let updated = try appDatabase.fetchPersonEditorData(instanceID: instanceID)
+            return try jsonResult(UpdatePersonRelationsResultDTO(
+                instanceId: result.instanceID,
+                resetQueryCount: result.resetQueryCount,
+                relations: PersonRelationsDTO(
+                    relations: updated.relations,
+                    displayNames: updated.displayNamesByInstanceID,
+                    officeNames: updated.officeNamesByID
+                )
+            ))
+        } catch let error as PersonSaveError {
+            // Office edits alone can't produce contradictions, but field/
+            // relationship state rides the same save; keep parity with
+            // update_person_relations.
+            let conflicts = error.conflicts.map { conflict in
+                PersonConflictDTO(
+                    instanceId: conflict.instanceID,
+                    displayName: conflict.displayName,
+                    message: conflict.kind.description
+                )
+            }
+            let data = try encoder.encode(["contradictions": conflicts])
+            let text = String(data: data, encoding: .utf8) ?? "{}"
+            return CallTool.Result(
+                content: [.text(text: "The change contradicts existing relationship data; nothing was saved. \(text)", annotations: nil, _meta: nil)],
+                isError: true
+            )
+        }
+    }
+
+    // MARK: - Office tools
+
+    private static func listOffices(arguments: [String: Value], appDatabase: AppDatabase) throws -> CallTool.Result {
+        let query = try arguments.optionalString("query")
+        let offices = try appDatabase.fetchOffices(matching: query)
+        return try jsonResult(offices.map(OfficeSummaryDTO.init))
+    }
+
+    private static func createOfficeTool(arguments: [String: Value], appDatabase: AppDatabase) throws -> CallTool.Result {
+        let name = try arguments.requireString("name")
+        let description = try arguments.optionalString("description") ?? ""
+        let officeID = try appDatabase.createOffice(name: name, description: description)
+        postDatabaseChange()
+        guard let office = try appDatabase.fetchOffice(officeID: officeID) else {
+            throw MemorMCPToolError(message: "Failed to fetch the created office.")
+        }
+        return try jsonResult(OfficeSummaryDTO(office))
+    }
+
+    private static func updateOfficeTool(arguments: [String: Value], appDatabase: AppDatabase) throws -> CallTool.Result {
+        let officeID = try arguments.requireInt64("office_id")
+        let name = try arguments.optionalString("name")
+        let description = try arguments.optionalString("description")
+        guard name != nil || description != nil else {
+            throw MemorMCPToolError(message: "Provide at least one of name / description.")
+        }
+        if let name {
+            try appDatabase.renameOffice(officeID: officeID, name: name)
+        }
+        if let description {
+            try appDatabase.setOfficeDescription(officeID: officeID, description: description)
+        }
+        postDatabaseChange()
+        guard let office = try appDatabase.fetchOffice(officeID: officeID) else {
+            throw MemorMCPToolError(message: "Office \(officeID) not found.")
+        }
+        return try jsonResult(OfficeSummaryDTO(office))
+    }
+
+    private static func deleteOfficeTool(arguments: [String: Value], appDatabase: AppDatabase) throws -> CallTool.Result {
+        let officeID = try arguments.requireInt64("office_id")
+        let holderCount = try appDatabase.fetchOffice(officeID: officeID)?.holderCount ?? 0
+        try appDatabase.deleteOffice(officeID: officeID)
+        postDatabaseChange()
+        return try jsonResult(["ok": Value.bool(true), "removed_holder_count": Value.int(holderCount)])
     }
 
     // MARK: - PointMap tools
@@ -1198,6 +1361,7 @@ enum MemorMCPTools {
         queryTypeID: Int64?,
         personKindRaw: String?,
         personPartnershipID: Int64?,
+        personOfficeID: Int64?,
         appDatabase: AppDatabase
     ) throws -> RenderedQueryDTO {
         let query: StudyQuery
@@ -1206,14 +1370,15 @@ enum MemorMCPTools {
                 let valid = PersonQueryKind.allCases.map(\.rawValue).joined(separator: ", ")
                 throw MemorMCPToolError(message: "Unknown person_kind `\(personKindRaw)`. Valid kinds: \(valid).")
             }
-            if (kind == .childrenWith) != (personPartnershipID != nil) {
-                throw MemorMCPToolError(message: "partnership_id is required exactly for person_kind `children_with`.")
-            }
+            try validatePersonKindShape(
+                kind: kind, partnershipID: personPartnershipID, officeID: personOfficeID, label: "render_query"
+            )
             // Built-in Person queries are HTML-rendered like standard queries.
             query = try appDatabase.fetchPersonQueryPreview(
                 instanceID: instanceID,
                 kind: kind,
-                partnershipID: personPartnershipID
+                partnershipID: personPartnershipID,
+                officeID: personOfficeID
             )
             return RenderedQueryDTO(
                 kind: "person",
@@ -1330,10 +1495,11 @@ enum MemorMCPTools {
         - :new — match only queries that are new (never studied). Matches standard \
         queries and Person built-in relationship queries; map queries never match :new.
 
-        Person built-in relationship queries (Mother, Father, Parents, Adoptive Mother, \
-        Adoptive Father, Children, Children with {partner}, Full Siblings) appear in \
-        query search alongside the Person type's user-defined queries; their rows carry \
-        person_kind (+ partnership_id for children_with) and query_type_id 0.
+        Person built-in queries (Mother, Father, Parents, Adoptive Mother, Adoptive \
+        Father, Children, Children with {partner}, Full Siblings, Office: {office}, \
+        All Offices) appear in query search alongside the Person type's user-defined \
+        queries; their rows carry person_kind (+ partnership_id for children_with, \
+        + office_id for office) and query_type_id 0.
 
         Examples:
         - type:Term col:Math — Term instances in the Math collection (or, in query search, their queries).
@@ -1359,6 +1525,22 @@ enum MemorMCPTools {
         }
     }
 
+    /// Validates a built-in Person query item's discriminator shape:
+    /// partnership_id exactly for children_with, office_id exactly for office.
+    private static func validatePersonKindShape(
+        kind: PersonQueryKind,
+        partnershipID: Int64?,
+        officeID: Int64?,
+        label: String
+    ) throws {
+        if (kind == .childrenWith) != (partnershipID != nil) {
+            throw MemorMCPToolError(message: "\(label): partnership_id is required exactly for person_kind `children_with`.")
+        }
+        if (kind == .office) != (officeID != nil) {
+            throw MemorMCPToolError(message: "\(label): office_id is required exactly for person_kind `office`.")
+        }
+    }
+
     private static func resetDueDates(
         search: String?,
         queryItems: [[String: Value]]?,
@@ -1375,13 +1557,19 @@ enum MemorMCPTools {
                     guard let kind = PersonQueryKind(rawValue: kindRaw) else {
                         throw MemorMCPToolError(message: "queries[\(index)]: unknown person_kind `\(kindRaw)`.")
                     }
+                    let partnershipID = try item.optionalInt64("partnership_id")
+                    let officeID = try item.optionalInt64("office_id")
+                    try validatePersonKindShape(
+                        kind: kind, partnershipID: partnershipID, officeID: officeID, label: "queries[\(index)]"
+                    )
                     personTargets.append(QueryTarget(
                         instanceID: try item.requireInt64("instance_id"),
                         queryTypeID: 0,
                         isReverse: false,
                         kind: .person,
                         personKind: kind,
-                        personPartnershipID: try item.optionalInt64("partnership_id")
+                        personPartnershipID: partnershipID,
+                        personOfficeID: officeID
                     ))
                 } else {
                     standardItems.append(item)
@@ -1408,7 +1596,7 @@ enum MemorMCPTools {
     ) throws -> OkDTO {
         // Items with `person_kind` target built-in Person queries; the rest are
         // ordinary {instance_id, query_type_id} pairs.
-        var personItems: [(instanceID: Int64, kind: PersonQueryKind, partnershipID: Int64?)] = []
+        var personItems: [(instanceID: Int64, kind: PersonQueryKind, partnershipID: Int64?, officeID: Int64?)] = []
         var standardItems: [[String: Value]] = []
         for (index, item) in queryItems.enumerated() {
             if let kindRaw = try item.optionalString("person_kind") {
@@ -1418,25 +1606,32 @@ enum MemorMCPTools {
                 }
                 let instanceID = try item.requireInt64("instance_id")
                 let partnershipID = try item.optionalInt64("partnership_id")
-                if (kind == .childrenWith) != (partnershipID != nil) {
-                    throw MemorMCPToolError(message: "queries[\(index)]: partnership_id is required exactly for person_kind `children_with`.")
-                }
-                personItems.append((instanceID, kind, partnershipID))
+                let officeID = try item.optionalInt64("office_id")
+                try validatePersonKindShape(
+                    kind: kind, partnershipID: partnershipID, officeID: officeID, label: "queries[\(index)]"
+                )
+                personItems.append((instanceID, kind, partnershipID, officeID))
             } else {
                 standardItems.append(item)
             }
         }
         for item in personItems {
-            // fetchPersonEditorData validates the instance is a Person; the
-            // built-in query list validates the partnership belongs to it.
+            // The built-in query list validates the instance is a Person and
+            // that the partnership/office holding belongs to it.
             let infos = try appDatabase.fetchPersonBuiltinQueryInfos(instanceID: item.instanceID)
-            guard infos.contains(where: { $0.kind == item.kind && $0.partnershipID == item.partnershipID }) else {
-                throw MemorMCPToolError(message: "Instance \(item.instanceID) has no built-in query \(item.kind.rawValue)\(item.partnershipID.map { " for partnership \($0)" } ?? "").")
+            guard infos.contains(where: {
+                $0.kind == item.kind && $0.partnershipID == item.partnershipID && $0.officeID == item.officeID
+            }) else {
+                let discriminator = item.partnershipID.map { " for partnership \($0)" }
+                    ?? item.officeID.map { " for office \($0)" }
+                    ?? ""
+                throw MemorMCPToolError(message: "Instance \(item.instanceID) has no built-in query \(item.kind.rawValue)\(discriminator).")
             }
             try appDatabase.setPersonQueryEnabled(
                 instanceID: item.instanceID,
                 kind: item.kind,
                 partnershipID: item.partnershipID,
+                officeID: item.officeID,
                 enabled: enabled
             )
         }
@@ -1716,7 +1911,7 @@ enum MemorMCPTools {
 
             Tool(
                 name: "update_person_relations",
-                description: "Edit a Person instance's relationship slots with the same propagation and contradiction rules as the app: changes automatically update the other affected Person instances, and a change that contradicts existing data on another instance (an occupied mother/father slot, a sex/role mismatch, same-sex shared children) fails with a structured `contradictions` list and writes nothing. A present key replaces that slot; an absent key keeps it. mother/father/adoptive_mother/adoptive_father each take {\"instance_id\": n} (another Person), {\"name\": \"...\"} (a bare-name placeholder), or null (clear). `partnerships`, when present, is the COMPLETE ordered list: items with partnership_id keep/edit that partnership (absent sub-keys keep current values; SRS state survives), items without partnership_id create one, and omitted existing ids are REMOVED (their children fall back to the ungrouped list). Each partnership item: partner (as above; required for new), is_married, start, end (freetext), children (ordered array of instance ids and/or name strings; not allowed for same-sex couples), children_query_enabled. `ungrouped_children`, when present, replaces the ordered list of children not associated with any partner (adding an instance child fills their mother/father slot; removing one clears it). Returns the new full relations plus reset_query_count (non-zero when the Person type's reset-on-connection-change option is on).",
+                description: "Edit a Person instance's relationship slots with the same propagation and contradiction rules as the app: changes automatically update the other affected Person instances, and a change that contradicts existing data on another instance (an occupied mother/father slot, a sex/role mismatch, same-sex shared children) fails with a structured `contradictions` list and writes nothing. A present key replaces that slot; an absent key keeps it. mother/father/adoptive_mother/adoptive_father each take {\"instance_id\": n} (another Person), {\"name\": \"...\"} (a bare-name placeholder), or null (clear). `partnerships`, when present, is the COMPLETE ordered list: items with partnership_id keep/edit that partnership (absent sub-keys keep current values; SRS state survives), items without partnership_id create one, and omitted existing ids are REMOVED (their children fall back to the ungrouped list). Each partnership item: partner (as above; required for new), is_married, start, end (freetext), children (ordered array of instance ids and/or name strings; not allowed for same-sex couples), children_query_enabled. `ungrouped_children`, when present, replaces the ordered list of children not associated with any partner (adding an instance child fills their mother/father slot; removing one clears it). Office holdings are edited separately via update_person_offices. Returns the new full relations plus reset_query_count (non-zero when the Person type's reset-on-connection-change option is on).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -1736,6 +1931,82 @@ enum MemorMCPTools {
                         ])
                     ]),
                     "required": .array([.string("instance_id")])
+                ])
+            ),
+
+            Tool(
+                name: "update_person_offices",
+                description: "Edit a Person instance's office holdings. `offices` is the COMPLETE ordered list: an omitted office is REMOVED from this person (deleting its per-office query's SRS progress and this person's succession links for it — irreversible). Each item names an EXISTING office via exactly one of office_id / office_name (case-insensitive; unknown names are an error — offices are never created implicitly, use create_office first). Optional per item: when_began, when_ended, note (freetext; absent keys keep the current holding's values), predecessors, successors (COMPLETE arrays of Person instance ids for that office; absent keeps current; reciprocity is automatic — if A precedes B then B succeeds A — and linking a person who doesn't hold the office AUTO-ADDS it to them with empty fields), and query_enabled (the per-office built-in query; default keeps current / false for new holdings). Returns the person's updated relations (including offices) plus reset_query_count (non-zero when the Person type's reset-on-connection-change option is on).",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "instance_id": int64Number,
+                        "offices": .object([
+                            "type": .string("array"),
+                            "description": .string("Complete ordered holdings list; see the tool description for item shape."),
+                            "items": .object([
+                                "type": .string("object"),
+                                "properties": .object([
+                                    "office_id": int64Number,
+                                    "office_name": stringValue,
+                                    "when_began": stringValue,
+                                    "when_ended": stringValue,
+                                    "note": stringValue,
+                                    "predecessors": int64Array,
+                                    "successors": int64Array,
+                                    "query_enabled": boolValue
+                                ])
+                            ])
+                        ])
+                    ]),
+                    "required": .array([.string("instance_id"), .string("offices")])
+                ])
+            ),
+
+            Tool(
+                name: "list_offices",
+                description: "List every office (the shared entities Person instances can hold, e.g. \"U.S. President\"), each with id, name, description, and holder_count (how many Person instances hold it). Optional `query` filters by name substring (case-insensitive).",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "query": stringValue
+                    ])
+                ])
+            ),
+            Tool(
+                name: "create_office",
+                description: "Create a new office. Names are trimmed and must be unique case-insensitively. Offices must exist before they can be assigned to a Person via update_person_offices.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "name": stringValue,
+                        "description": stringValue
+                    ]),
+                    "required": .array([.string("name")])
+                ])
+            ),
+            Tool(
+                name: "update_office",
+                description: "Rename an office and/or set its description (at least one of name/description is required). Renaming does not reset any queries.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "office_id": int64Number,
+                        "name": stringValue,
+                        "description": stringValue
+                    ]),
+                    "required": .array([.string("office_id")])
+                ])
+            ),
+            Tool(
+                name: "delete_office",
+                description: "Delete an office. This cascades IRREVERSIBLY with no confirmation: every Person's holding of it, all of its succession links, and every enabled per-office query (including SRS progress) are removed. Check holder_count via list_offices first.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "office_id": int64Number
+                    ]),
+                    "required": .array([.string("office_id")])
                 ])
             ),
 
@@ -2023,7 +2294,7 @@ enum MemorMCPTools {
 
             Tool(
                 name: "reset_due_dates",
-                description: "Reset queries to new (interval 0, never answered), erasing their SRS progress. Provide exactly one of: `search` (a query-search expression; resets every matching query, including map queries) or `queries` (an array of {instance_id, query_type_id} pairs; for map instances query_type_id is a point/attachment ID and both directions reset). Irreversible.",
+                description: "Reset queries to new (interval 0, never answered), erasing their SRS progress. Provide exactly one of: `search` (a query-search expression; resets every matching query, including map queries) or `queries` (an array of items). Each item is either {instance_id, query_type_id} (standard queries; for map instances query_type_id is a point/attachment ID and both directions reset) or {instance_id, person_kind, partnership_id?, office_id?} for a Person's built-in queries (partnership_id required exactly for children_with; office_id required exactly for office). Irreversible.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -2034,9 +2305,12 @@ enum MemorMCPTools {
                                 "type": .string("object"),
                                 "properties": .object([
                                     "instance_id": int64Number,
-                                    "query_type_id": int64Number
+                                    "query_type_id": int64Number,
+                                    "person_kind": stringValue,
+                                    "partnership_id": int64Number,
+                                    "office_id": int64Number
                                 ]),
-                                "required": .array([.string("instance_id"), .string("query_type_id")])
+                                "required": .array([.string("instance_id")])
                             ])
                         ])
                     ])
@@ -2044,7 +2318,7 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "set_queries_enabled",
-                description: "Enable or disable queries. Each item is either {instance_id, query_type_id} (standard queries) or {instance_id, person_kind, partnership_id?} for a Person's built-in relationship queries (person_kind: mother/father/parents/adoptive_mother/adoptive_father/children/children_with/full_siblings; partnership_id required exactly for children_with — discover ids via get_instance). Disabling deletes the query row — its SRS progress is permanently lost (for map instances, query_type_id is a point/attachment ID and both directions are disabled). Enabling creates the query as new; to enable map queries use update_pointmap_point or update_boundarymap_instance.",
+                description: "Enable or disable queries. Each item is either {instance_id, query_type_id} (standard queries) or {instance_id, person_kind, partnership_id?, office_id?} for a Person's built-in queries (person_kind: mother/father/parents/adoptive_mother/adoptive_father/children/children_with/full_siblings/office/all_offices; partnership_id required exactly for children_with, office_id required exactly for office — discover ids via get_instance). Disabling deletes the query row — its SRS progress is permanently lost (for map instances, query_type_id is a point/attachment ID and both directions are disabled). Enabling creates the query as new; to enable map queries use update_pointmap_point or update_boundarymap_instance.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -2055,9 +2329,12 @@ enum MemorMCPTools {
                                 "type": .string("object"),
                                 "properties": .object([
                                     "instance_id": int64Number,
-                                    "query_type_id": int64Number
+                                    "query_type_id": int64Number,
+                                    "person_kind": stringValue,
+                                    "partnership_id": int64Number,
+                                    "office_id": int64Number
                                 ]),
-                                "required": .array([.string("instance_id"), .string("query_type_id")])
+                                "required": .array([.string("instance_id")])
                             ])
                         ])
                     ]),
@@ -2078,14 +2355,15 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "render_query",
-                description: "Render a flashcard exactly as the user will see it. For Object-type queries, returns the final question_html and answer_html with field values substituted, the global template applied, and CSS inlined. For a Person's built-in relationship queries, pass person_kind (and partnership_id for children_with) instead of query_type_id — the result is HTML like a standard query, with the answer computed from the current relationships. For PointMap/BoundaryMap instances, pass a point/attachment ID as query_type_id and the result describes the map card (highlighted point or boundary) instead of HTML. Omit query_type_id to render the instance's first query.",
+                description: "Render a flashcard exactly as the user will see it. For Object-type queries, returns the final question_html and answer_html with field values substituted, the global template applied, and CSS inlined. For a Person's built-in queries, pass person_kind (plus partnership_id for children_with, or office_id for office) instead of query_type_id — the result is HTML like a standard query, with the answer computed from the current relationships/office holdings (a per-office answer is the fixed predecessors/person/successors layout; all_offices lists every holding via the office question template). For PointMap/BoundaryMap instances, pass a point/attachment ID as query_type_id and the result describes the map card (highlighted point or boundary) instead of HTML. Omit query_type_id to render the instance's first query.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
                         "instance_id": int64Number,
                         "query_type_id": int64Number,
                         "person_kind": stringValue,
-                        "partnership_id": int64Number
+                        "partnership_id": int64Number,
+                        "office_id": int64Number
                     ]),
                     "required": .array([.string("instance_id")])
                 ])
@@ -2362,8 +2640,9 @@ private struct PersonRelationsDTO: Encodable {
     let adoptiveFather: PersonRefDTO?
     let partnerships: [PersonPartnershipDTO]
     let ungroupedChildren: [PersonRefDTO]
+    let offices: [PersonOfficeDTO]
 
-    init(relations: PersonRelationsDraft, displayNames: [Int64: String]) {
+    init(relations: PersonRelationsDraft, displayNames: [Int64: String], officeNames: [Int64: String] = [:]) {
         mother = relations.mother.map { PersonRefDTO($0, displayNames: displayNames) }
         father = relations.father.map { PersonRefDTO($0, displayNames: displayNames) }
         adoptiveMother = relations.adoptiveMother.map { PersonRefDTO($0, displayNames: displayNames) }
@@ -2382,12 +2661,50 @@ private struct PersonRelationsDTO: Encodable {
         ungroupedChildren = relations.ungroupedChildren.map {
             PersonRefDTO($0.child, displayNames: displayNames)
         }
+        offices = relations.offices.map { office in
+            PersonOfficeDTO(
+                officeId: office.officeID,
+                officeName: officeNames[office.officeID] ?? "",
+                whenBegan: office.whenBegan,
+                whenEnded: office.whenEnded,
+                note: office.note,
+                predecessors: office.predecessors.map { PersonRefDTO(.instance($0), displayNames: displayNames) },
+                successors: office.successors.map { PersonRefDTO(.instance($0), displayNames: displayNames) },
+                queryEnabled: office.isQueryEnabled
+            )
+        }
+    }
+}
+
+private struct PersonOfficeDTO: Encodable {
+    let officeId: Int64
+    let officeName: String
+    let whenBegan: String
+    let whenEnded: String
+    let note: String
+    let predecessors: [PersonRefDTO]
+    let successors: [PersonRefDTO]
+    let queryEnabled: Bool
+}
+
+private struct OfficeSummaryDTO: Encodable {
+    let id: Int64
+    let name: String
+    let description: String
+    let holderCount: Int
+
+    init(_ office: OfficeSummary) {
+        id = office.id
+        name = office.name
+        description = office.description
+        holderCount = office.holderCount
     }
 }
 
 private struct PersonBuiltinQueryDTO: Encodable {
     let kind: String
     let partnershipId: Int64?
+    let officeId: Int64?
     let displayName: String
     let enabled: Bool
     let interval: Int64?
@@ -2397,6 +2714,7 @@ private struct PersonBuiltinQueryDTO: Encodable {
     init(_ info: PersonBuiltinQueryInfo) {
         kind = info.kind.rawValue
         partnershipId = info.partnershipID
+        officeId = info.officeID
         displayName = info.displayName
         enabled = info.enabled
         interval = info.interval
@@ -2560,6 +2878,7 @@ private struct QuerySearchResultDTO: Encodable {
     // Built-in Person queries only (query_type_id is 0 for them).
     let personKind: String?
     let partnershipId: Int64?
+    let officeId: Int64?
 
     init(_ r: QuerySearchResult) {
         instanceID = r.instanceID
@@ -2569,6 +2888,7 @@ private struct QuerySearchResultDTO: Encodable {
         isReverse = r.isReverse
         personKind = r.personKind?.rawValue
         partnershipId = r.personPartnershipID
+        officeId = r.personOfficeID
     }
 }
 
