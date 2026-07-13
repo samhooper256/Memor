@@ -265,21 +265,26 @@ struct SearchQueryTextField: NSViewRepresentable {
 
         override func draw(_ dirtyRect: NSRect) {
             super.draw(dirtyRect)
-            if string.isEmpty && self.window?.firstResponder !== self {
+            if string.isEmpty {
                 drawPlaceholder(dirtyRect)
             }
         }
 
+        override func didChangeText() {
+            super.didChangeText()
+            // The placeholder spans more than the glyph rects a keystroke
+            // invalidates; repaint fully so it appears/disappears whole.
+            needsDisplay = true
+        }
+
         override func becomeFirstResponder() -> Bool {
             let result = super.becomeFirstResponder()
-            needsDisplay = true
             if result { onFocusChange?(true) }
             return result
         }
 
         override func resignFirstResponder() -> Bool {
             let result = super.resignFirstResponder()
-            needsDisplay = true
             if result { onFocusChange?(false) }
             return result
         }
