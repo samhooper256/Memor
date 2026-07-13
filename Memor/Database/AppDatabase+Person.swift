@@ -1639,6 +1639,28 @@ extension AppDatabase {
         }
     }
 
+    /// How many of the given instances are Persons linked to at least one
+    /// other person (relationships or office succession) — drives the extra
+    /// consequences line in delete confirmations.
+    func connectedPersonCount(instanceIDs: [Int64]) throws -> Int {
+        let personTypeID = try dbQueue.read { db in try Self.fetchPersonTypeID(db: db) }
+        var count = 0
+        for instanceID in instanceIDs {
+            let typeID = try dbQueue.read { db in
+                try Int64.fetchOne(
+                    db,
+                    sql: "SELECT type_id FROM instance_id_type_id WHERE instance_id = ?",
+                    arguments: [instanceID]
+                )
+            }
+            guard typeID == personTypeID else { continue }
+            if try hasPersonConnections(instanceID: instanceID) > 0 {
+                count += 1
+            }
+        }
+        return count
+    }
+
     /// Converts every reference to `instanceID` on OTHER people into a
     /// bare-name entry (display name, fallback "Unknown"), preserving family
     /// structure, groupings, and children_with SRS state. Returns the affected-

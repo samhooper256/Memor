@@ -202,3 +202,24 @@ func formatFieldDisplayValue(_ raw: String) -> AttributedString {
     return result
 }
 
+
+/// Delete-confirmation body shared by the instance-delete alerts. Appends the
+/// Person consequences line when any pending instance is a Person linked to
+/// others (relationship references convert to plain names; office succession
+/// links are removed).
+func personDeletionConsequencesMessage(appDatabase: AppDatabase, pendingInstanceIDs: [Int64]) -> String {
+    var message = "This action is irreversible."
+    let connected = (try? appDatabase.connectedPersonCount(instanceIDs: pendingInstanceIDs)) ?? 0
+    if connected > 0 {
+        let subject: String
+        if pendingInstanceIDs.count == 1 {
+            subject = "This person is"
+        } else if connected == 1 {
+            subject = "One of these is a person"
+        } else {
+            subject = "\(connected) of these are people"
+        }
+        message += " \(subject) linked to others: relationship references become plain names, and office succession links are removed."
+    }
+    return message
+}

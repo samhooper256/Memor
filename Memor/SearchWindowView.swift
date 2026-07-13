@@ -186,6 +186,13 @@ struct SearchWindowView: View {
         }
     }
 
+    private var deletionConfirmationMessage: String {
+        personDeletionConsequencesMessage(
+            appDatabase: appDatabase,
+            pendingInstanceIDs: pendingDeletionInstanceIDs
+        )
+    }
+
     private var resetDueDatesCount: Int {
         queryIDsPendingReset.isEmpty ? resultsCount : queryIDsPendingReset.count
     }
@@ -301,7 +308,7 @@ struct SearchWindowView: View {
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This action is irreversible.")
+            Text(deletionConfirmationMessage)
         }
         .alert(
             "Are you sure you want to reset the due dates for \(resetDueDatesCount) \(resetDueDatesCount == 1 ? "query" : "queries")?",

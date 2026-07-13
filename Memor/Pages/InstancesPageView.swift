@@ -198,7 +198,10 @@ struct InstancesPageView: View {
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This action is irreversible.")
+            Text(personDeletionConsequencesMessage(
+                appDatabase: appDatabase,
+                pendingInstanceIDs: pendingDeletionInstanceIDs
+            ))
         }
         .alert(
             setMaxIntervalAlertTitle,

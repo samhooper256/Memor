@@ -391,7 +391,7 @@ struct PersonChip: View {
 
 // MARK: - Reorder buttons
 
-private struct PersonReorderButtons: View {
+struct PersonReorderButtons: View {
     let canMoveUp: Bool
     let canMoveDown: Bool
     let onMoveUp: () -> Void
@@ -420,11 +420,14 @@ private struct PersonReorderButtons: View {
 
 // MARK: - Add button + picker popover
 
-private struct PersonAddButton: View {
+struct PersonAddButton: View {
     var title: String = "Add"
     let appDatabase: AppDatabase
     let excludingInstanceID: Int64?
     let alreadySelected: Set<Int64>
+    /// Whether the picker offers the "Add as name" free-text row. Relationship
+    /// slots accept bare names; office succession links do not.
+    var allowsBareNames = true
     let onSelectInstance: (PersonCandidate) -> Void
     let onSelectBareName: (String) -> Void
 
@@ -440,6 +443,7 @@ private struct PersonAddButton: View {
                 appDatabase: appDatabase,
                 excludingInstanceID: excludingInstanceID,
                 alreadySelected: alreadySelected,
+                allowsBareNames: allowsBareNames,
                 onSelectInstance: { candidate in
                     onSelectInstance(candidate)
                     isPickerPresented = false
@@ -457,6 +461,7 @@ private struct PersonPickerPopover: View {
     let appDatabase: AppDatabase
     let excludingInstanceID: Int64?
     let alreadySelected: Set<Int64>
+    var allowsBareNames = true
     let onSelectInstance: (PersonCandidate) -> Void
     let onSelectBareName: (String) -> Void
 
@@ -493,7 +498,7 @@ private struct PersonPickerPopover: View {
                     }
 
                     let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty {
+                    if allowsBareNames, !trimmed.isEmpty {
                         Divider()
                             .padding(.vertical, 4)
                         // A bare name may legitimately coincide with an existing

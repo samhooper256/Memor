@@ -211,7 +211,7 @@ struct InstanceEditorWindowView: View {
                 .keyboardShortcut(.defaultAction)
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("This action is irreversible.")
+                Text(instanceDeletionMessage)
             }
         }
         .padding(.vertical, 12)
@@ -1498,6 +1498,7 @@ struct InstanceEditorWindowView: View {
 
                     if isPersonSelected {
                         PersonSlotsEditor(appDatabase: appDatabase, draft: draft)
+                        PersonOfficesEditor(appDatabase: appDatabase, draft: draft)
                     }
 
                     if draft.selectedTypeID != nil {
@@ -2600,6 +2601,18 @@ struct InstanceEditorWindowView: View {
             print("Failed to reset query due date: \(error)")
             showToast(message: "Failed to reset query due date.", style: .error)
         }
+    }
+
+    /// Delete-confirmation body; for a connected Person it also spells out the
+    /// relationship/succession consequences.
+    private var instanceDeletionMessage: String {
+        var message = "This action is irreversible."
+        if isPersonSelected, let instanceID = draft.loadedInstanceID,
+           let connections = try? appDatabase.hasPersonConnections(instanceID: instanceID),
+           connections > 0 {
+            message += " This person is linked to \(connections) other \(connections == 1 ? "person" : "people"): relationship references become plain names, and office succession links are removed."
+        }
+        return message
     }
 
     @MainActor
