@@ -357,7 +357,7 @@ struct SearchWindowView: View {
                 )
                 .searchCodeEditorStyle()
 
-                SearchHelpButton(windowID: helpWindowID)
+                HelpWindowButton(windowID: helpWindowID, tooltip: "Show search syntax help")
             }
 
             if let collection = collectionInAddMode {

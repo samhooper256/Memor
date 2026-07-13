@@ -96,9 +96,13 @@ struct StacksPageView: View {
     private var stackListBody: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text(titleText)
-                    .font(.largeTitle)
-                    .fontWeight(.semibold)
+                HStack(spacing: 8) {
+                    Text(titleText)
+                        .font(.largeTitle)
+                        .fontWeight(.semibold)
+
+                    HelpWindowButton(windowID: "stacks-help", tooltip: "Learn what stacks are")
+                }
 
                 HStack(spacing: 12) {
                     Button("Add Stack") {

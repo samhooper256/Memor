@@ -195,10 +195,11 @@ struct MapElementSearchHelpWindowView: View {
     }
 }
 
-struct SearchHelpButton: View {
+struct HelpWindowButton: View {
     @Environment(\.openWindow) private var openWindow
 
     let windowID: String
+    let tooltip: String
 
     var body: some View {
         Button {
@@ -208,6 +209,6 @@ struct SearchHelpButton: View {
                 .font(.system(size: 16))
         }
         .buttonStyle(.borderless)
-        .help("Show search syntax help")
+        .help(tooltip)
     }
 }

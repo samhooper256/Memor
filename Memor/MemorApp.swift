@@ -145,6 +145,11 @@ struct MemorApp: App {
         }
         .windowResizability(.contentSize)
 
+        Window("Stacks Help", id: "stacks-help") {
+            StacksHelpWindowView()
+        }
+        .windowResizability(.contentSize)
+
         Window("Edit Global HTML", id: "global-html-editor") {
             GlobalCodeEditorWindowView(
                 appDatabase: appDatabase,

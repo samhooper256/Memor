@@ -78,7 +78,7 @@ struct InstancesPageView: View {
                                     SearchQueryTextField("Search instances", text: $searchQuery, focusRequest: searchFocusRequest)
                                         .searchCodeEditorStyle()
 
-                                    SearchHelpButton(windowID: "instance-search-help")
+                                    HelpWindowButton(windowID: "instance-search-help", tooltip: "Show search syntax help")
                                 }
 
                                 if let searchErrorMessage {
