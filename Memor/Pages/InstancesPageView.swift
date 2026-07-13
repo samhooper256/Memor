@@ -74,8 +74,12 @@ struct InstancesPageView: View {
                             // Indented to match the Table's built-in leading
                             // content inset, so these align with the row text.
                             Group {
-                                SearchQueryTextField("Search instances", text: $searchQuery, focusRequest: searchFocusRequest)
-                                    .searchCodeEditorStyle()
+                                HStack(spacing: 8) {
+                                    SearchQueryTextField("Search instances", text: $searchQuery, focusRequest: searchFocusRequest)
+                                        .searchCodeEditorStyle()
+
+                                    SearchHelpButton(windowID: "instance-search-help")
+                                }
 
                                 if let searchErrorMessage {
                                     Text(searchErrorMessage)
