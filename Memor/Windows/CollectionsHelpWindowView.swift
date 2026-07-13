@@ -25,7 +25,7 @@ struct CollectionsHelpWindowView: View {
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Text("This page lists your collections. Click one to open it—there you can rename it, give it a description, remove instances, or click Add Instances to pick new members from the Search window.")
+                Text("This page lists your collections. Click one to open it—there you can rename it, give it a description, add instances, or remove instances.")
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
 
