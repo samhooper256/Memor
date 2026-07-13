@@ -121,6 +121,11 @@ final class AddPointPopupController: ObservableObject {
 
         popupState.panel = panel
         self.panel = panel
+
+        // Focus the Name editor once the hosting view has settled in the panel.
+        DispatchQueue.main.async { [weak popupState] in
+            popupState?.nameFocusController.focusField(AddPointPopupState.nameFieldID)
+        }
     }
 
     func close() {
@@ -132,6 +137,12 @@ final class AddPointPopupController: ObservableObject {
 
 @MainActor
 final class AddPointPopupState: NSObject, ObservableObject, NSWindowDelegate {
+    // The Name field is a shared InstanceTextView, which routes focus and ⌘B/⌘I
+    // selection-wrapping through an AddInstanceFieldFocusController; the popup
+    // owns a private one with a single synthetic field id.
+    static let nameFieldID: Int64 = 1
+    let nameFocusController = AddInstanceFieldFocusController()
+
     @Published var name: String
     @Published var hint: String
     @Published var latitude: String
@@ -214,6 +225,26 @@ final class AddPointPopupState: NSObject, ObservableObject, NSWindowDelegate {
 
     func close() {
         onClose()
+    }
+
+    func wrapNameSelection(openTag: String, closeTag: String) {
+        _ = nameFocusController.wrapFocusedSelection(openTag: openTag, closeTag: closeTag)
+    }
+
+    /// Re-fits the borderless panel to the SwiftUI content after its height
+    /// changes (the Name editor growing/shrinking, the error label appearing),
+    /// keeping the top edge pinned. Async because height changes are reported
+    /// during SwiftUI view updates.
+    func panelContentDidResize() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let panel = self.panel, let contentView = panel.contentView else { return }
+            let fittingSize = contentView.fittingSize
+            guard fittingSize.height > 0, abs(fittingSize.height - panel.frame.height) > 0.5 else { return }
+            var frame = panel.frame
+            frame.origin.y -= fittingSize.height - frame.size.height
+            frame.size.height = fittingSize.height
+            panel.setFrame(frame, display: true)
+        }
     }
 
     func applyPastedCoordinatePair(_ pasted: String) -> Bool {
@@ -479,7 +510,7 @@ struct PointMapEntryRow: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(name.isEmpty ? "(unnamed)" : name)
+            Text(name.isEmpty ? AttributedString("(unnamed)") : attributedPointName(name, lineBreakReplacement: " "))
                 .foregroundStyle(name.isEmpty ? .secondary : .primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .lineLimit(1)
@@ -496,8 +527,6 @@ struct PointMapEntryRow: View {
 private struct FlatAddPointField: View {
     @Binding var text: String
     var onPasteCoordinatePair: ((String) -> Bool)? = nil
-    let onSubmit: () -> Void
-    var focusOnAppear: Bool = false
 
     @State private var isFocused = false
 
@@ -506,11 +535,43 @@ private struct FlatAddPointField: View {
             text: $text,
             placeholder: "",
             onPasteCoordinatePair: onPasteCoordinatePair,
-            onSubmit: onSubmit,
-            focusOnAppear: focusOnAppear,
             onFocusChange: { isFocused = $0 }
         )
         .solidFocusFieldChrome(isFocused: isFocused)
+    }
+}
+
+/// The multi-line HTML Name editor: the shared instance-field text view (HTML
+/// syntax highlighting, Enter → "<br>" + newline, Shift+Enter → plain newline,
+/// undo, entity auto-replace) in the popup's flat chrome, auto-growing with its
+/// content while the panel re-fits around it.
+private struct AddPointNameField: View {
+    static let singleLineHeight: CGFloat = 24
+
+    @ObservedObject var state: AddPointPopupState
+    @State private var isFocused = false
+    @State private var editorHeight: CGFloat = singleLineHeight
+
+    var body: some View {
+        InstanceTextView(
+            text: $state.name,
+            focusController: state.nameFocusController,
+            fieldID: AddPointPopupState.nameFieldID,
+            onSubmit: {},
+            onRequestHyperlink: nil,
+            onContentHeightChange: { contentHeight in
+                editorHeight = max(Self.singleLineHeight, contentHeight)
+            },
+            onMoveToNextField: { state.panel?.selectNextKeyView(nil) },
+            onMoveToPreviousField: { state.panel?.selectPreviousKeyView(nil) },
+            dedupesTrailingLineBreak: true,
+            onFocusChange: { isFocused = $0 }
+        )
+        .frame(height: editorHeight)
+        .solidFocusFieldChrome(isFocused: isFocused)
+        .onChange(of: editorHeight) { _, _ in
+            state.panelContentDidResize()
+        }
     }
 }
 
@@ -523,25 +584,18 @@ private struct AddPointPopupView: View {
                 .font(.headline)
                 .foregroundStyle(.primary)
 
-            HStack(spacing: 6) {
+            HStack(alignment: .top, spacing: 6) {
                 Text("Name:")
                     .frame(width: 48, alignment: .trailing)
-                FlatAddPointField(
-                    text: $state.name,
-                    onSubmit: state.submit,
-                    focusOnAppear: true
-                )
-                .frame(height: 22)
+                    .padding(.top, 3)
+                AddPointNameField(state: state)
             }
 
             HStack(spacing: 6) {
                 Text("Hint:")
                     .frame(width: 48, alignment: .trailing)
-                FlatAddPointField(
-                    text: $state.hint,
-                    onSubmit: state.submit
-                )
-                .frame(height: 22)
+                FlatAddPointField(text: $state.hint)
+                    .frame(height: 22)
             }
 
             HStack(spacing: 6) {
@@ -551,16 +605,12 @@ private struct AddPointPopupView: View {
                     text: $state.latitude,
                     onPasteCoordinatePair: { pasted in
                         state.applyPastedCoordinatePair(pasted)
-                    },
-                    onSubmit: state.submit
+                    }
                 )
                 .frame(height: 22)
                 Text("Lng:")
-                FlatAddPointField(
-                    text: $state.longitude,
-                    onSubmit: state.submit
-                )
-                .frame(height: 22)
+                FlatAddPointField(text: $state.longitude)
+                    .frame(height: 22)
             }
 
             queryRow(
@@ -584,14 +634,19 @@ private struct AddPointPopupView: View {
 
             HStack {
                 Spacer()
-                Button(state.isEdit ? "Save" : "Submit") {
+                // Submitting is ⌘Return only (WindowKeyCommandHandler below) —
+                // plain Return must never submit; in the Name field it inserts
+                // a "<br>" line break instead.
+                Button(state.isEdit ? "Save (⌘↩)" : "Submit (⌘↩)") {
                     state.submit()
                 }
-                .keyboardShortcut(.defaultAction)
             }
         }
         .frame(width: 316)
         .padding(12)
+        .onChange(of: state.errorMessage) { _, _ in
+            state.panelContentDidResize()
+        }
         .background {
             RoundedRectangle(cornerRadius: 8)
                 .fill(Color(nsColor: .windowBackgroundColor))
@@ -606,7 +661,8 @@ private struct AddPointPopupView: View {
                 onEscape: state.close,
                 onCommandReturn: state.submit,
                 onCommandS: nil,
-                onCommandI: nil,
+                onCommandB: { state.wrapNameSelection(openTag: "<b>", closeTag: "</b>") },
+                onCommandI: { state.wrapNameSelection(openTag: "<i>", closeTag: "</i>") },
                 onCommandO: nil
             )
         }
@@ -654,12 +710,10 @@ private struct AddPointTextField: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
     let onPasteCoordinatePair: ((String) -> Bool)?
-    let onSubmit: () -> Void
-    var focusOnAppear: Bool = false
     var onFocusChange: ((Bool) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, onPasteCoordinatePair: onPasteCoordinatePair, onSubmit: onSubmit)
+        Coordinator(text: $text, onPasteCoordinatePair: onPasteCoordinatePair)
     }
 
     func makeNSView(context: Context) -> NSTextField {
@@ -684,7 +738,6 @@ private struct AddPointTextField: NSViewRepresentable {
         textField.onBecomeFirstResponder = { [weak coordinator = context.coordinator] in
             coordinator?.onFocusChange?(true)
         }
-        textField.shouldFocusOnWindowAttach = focusOnAppear
         context.coordinator.onFocusChange = onFocusChange
         return textField
     }
@@ -694,7 +747,6 @@ private struct AddPointTextField: NSViewRepresentable {
             nsView.stringValue = text
         }
         context.coordinator.onPasteCoordinatePair = onPasteCoordinatePair
-        context.coordinator.onSubmit = onSubmit
         context.coordinator.onFocusChange = onFocusChange
         if let pastable = nsView as? PastableTextField {
             pastable.onPaste = { pasted in
@@ -707,17 +759,14 @@ private struct AddPointTextField: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextFieldDelegate {
         @Binding var text: String
         var onPasteCoordinatePair: ((String) -> Bool)?
-        var onSubmit: () -> Void
         var onFocusChange: ((Bool) -> Void)?
 
         init(
             text: Binding<String>,
-            onPasteCoordinatePair: ((String) -> Bool)?,
-            onSubmit: @escaping () -> Void
+            onPasteCoordinatePair: ((String) -> Bool)?
         ) {
             _text = text
             self.onPasteCoordinatePair = onPasteCoordinatePair
-            self.onSubmit = onSubmit
         }
 
         func controlTextDidChange(_ obj: Notification) {
@@ -730,10 +779,10 @@ private struct AddPointTextField: NSViewRepresentable {
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            // Swallow Enter: submitting the point is ⌘Return only.
             if commandSelector == #selector(NSResponder.insertNewline(_:))
                 || commandSelector == #selector(NSResponder.insertLineBreak(_:))
                 || commandSelector == #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)) {
-                onSubmit()
                 return true
             }
             return false
@@ -742,23 +791,12 @@ private struct AddPointTextField: NSViewRepresentable {
 
     final class PastableTextField: NSTextField {
         var onPaste: ((String) -> Bool)?
-        var shouldFocusOnWindowAttach: Bool = false
         var onBecomeFirstResponder: (() -> Void)?
 
         override func becomeFirstResponder() -> Bool {
             let didBecome = super.becomeFirstResponder()
             if didBecome { onBecomeFirstResponder?() }
             return didBecome
-        }
-
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            guard shouldFocusOnWindowAttach, let window else { return }
-            shouldFocusOnWindowAttach = false
-            DispatchQueue.main.async { [weak self, weak window] in
-                guard let self, let window else { return }
-                window.makeFirstResponder(self)
-            }
         }
 
         override func performKeyEquivalent(with event: NSEvent) -> Bool {

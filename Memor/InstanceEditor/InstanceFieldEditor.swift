@@ -359,6 +359,9 @@ struct InstanceTextView: NSViewRepresentable {
     let onMoveToNextField: () -> Void
     let onMoveToPreviousField: () -> Void
     var dedupesTrailingLineBreak: Bool = false
+    // First-responder tracking for AppKit-chromed hosts (solidFocusFieldChrome) —
+    // @FocusState can't observe an NSTextView.
+    var onFocusChange: ((Bool) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -403,6 +406,7 @@ struct InstanceTextView: NSViewRepresentable {
             context.coordinator.handleCommand(selector)
         }
         textView.onRequestHyperlink = onRequestHyperlink
+        textView.onFocusChange = onFocusChange
 
         if let textContainer = textView.textContainer {
             textContainer.widthTracksTextView = true
@@ -447,6 +451,7 @@ struct InstanceTextView: NSViewRepresentable {
         }
         (textView as? CommandAwareTextView)?.onRequestHyperlink = onRequestHyperlink
         (textView as? CommandAwareTextView)?.dedupesTrailingLineBreak = dedupesTrailingLineBreak
+        (textView as? CommandAwareTextView)?.onFocusChange = onFocusChange
         focusController.register(textView, fieldID: fieldID)
         context.coordinator.updateContentHeight(for: textView)
     }
@@ -561,6 +566,7 @@ struct InstanceTextView: NSViewRepresentable {
         var fieldID: Int64?
         var commandHandler: ((Selector) -> Bool)?
         var onRequestHyperlink: ((CommandAwareTextView) -> Void)?
+        var onFocusChange: ((Bool) -> Void)?
         // When true, pressing Enter at the end of a line that already ends with
         // "<br>" inserts only a newline instead of another "<br>" + newline.
         var dedupesTrailingLineBreak = false
@@ -576,6 +582,9 @@ struct InstanceTextView: NSViewRepresentable {
             if didBecomeFirstResponder, let fieldID {
                 focusController?.setActiveField(fieldID)
             }
+            if didBecomeFirstResponder {
+                onFocusChange?(true)
+            }
             return didBecomeFirstResponder
         }
 
@@ -584,6 +593,9 @@ struct InstanceTextView: NSViewRepresentable {
             let didResignFirstResponder = super.resignFirstResponder()
             if didResignFirstResponder, focusController?.activeFieldID == fieldID {
                 focusController?.setActiveField(nil)
+            }
+            if didResignFirstResponder {
+                onFocusChange?(false)
             }
             return didResignFirstResponder
         }

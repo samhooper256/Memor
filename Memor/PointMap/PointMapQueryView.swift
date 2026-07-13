@@ -16,6 +16,117 @@ enum QueryRenderContent {
     case boundaryMap(BoundaryMapStudyPayload, revealName: Bool)
 }
 
+// MARK: - HTML point names
+
+// Point names may contain a small slice of HTML, authored in the Add/Edit Point
+// popup: <br> line breaks, <b>/<strong>, <i>/<em>, <u>, and character entities.
+// SwiftUI Text surfaces (map tooltips, the prompt/answer line, editor rows)
+// render names through this; unknown tags are stripped but keep their inner text.
+
+private let pointNameTagRegex = try! NSRegularExpression(pattern: #"</?[a-zA-Z][^>]*>"#)
+private let pointNameEntityRegex = try! NSRegularExpression(
+    pattern: #"&(?:[a-zA-Z][a-zA-Z0-9]*|#[0-9]+|#[xX][0-9a-fA-F]+);"#
+)
+
+func attributedPointName(_ html: String, lineBreakReplacement: String = "\n") -> AttributedString {
+    var result = AttributedString()
+    var boldDepth = 0
+    var italicDepth = 0
+    var underlineDepth = 0
+    var atLineStart = true
+
+    func appendText(_ text: String) {
+        guard !text.isEmpty else { return }
+        // Mimic HTML whitespace handling: runs of literal whitespace (including
+        // the "\n" the editor writes after each "<br>") render as one space, and
+        // whitespace at the start of a line renders as nothing. Entities decode
+        // afterwards so "&nbsp;" survives as a non-collapsing space.
+        var collapsed = text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        if atLineStart {
+            collapsed = String(collapsed.drop(while: { $0 == " " }))
+        }
+        guard !collapsed.isEmpty else { return }
+        atLineStart = false
+        var segment = AttributedString(decodePointNameEntities(collapsed))
+        var intent: InlinePresentationIntent = []
+        if boldDepth > 0 { intent.insert(.stronglyEmphasized) }
+        if italicDepth > 0 { intent.insert(.emphasized) }
+        if !intent.isEmpty { segment.inlinePresentationIntent = intent }
+        if underlineDepth > 0 { segment.underlineStyle = .single }
+        result += segment
+    }
+
+    let nsString = html as NSString
+    var cursor = 0
+    pointNameTagRegex.enumerateMatches(in: html, range: NSRange(location: 0, length: nsString.length)) { match, _, _ in
+        guard let match else { return }
+        appendText(nsString.substring(with: NSRange(location: cursor, length: match.range.location - cursor)))
+        cursor = match.range.location + match.range.length
+
+        let tag = nsString.substring(with: match.range)
+        let isClosing = tag.hasPrefix("</")
+        let tagName = tag.drop(while: { $0 == "<" || $0 == "/" })
+            .prefix(while: { $0.isLetter || $0.isNumber })
+            .lowercased()
+        switch tagName {
+        case "br":
+            if !isClosing {
+                result += AttributedString(lineBreakReplacement)
+                atLineStart = true
+            }
+        case "b", "strong":
+            boldDepth = max(0, boldDepth + (isClosing ? -1 : 1))
+        case "i", "em":
+            italicDepth = max(0, italicDepth + (isClosing ? -1 : 1))
+        case "u":
+            underlineDepth = max(0, underlineDepth + (isClosing ? -1 : 1))
+        default:
+            break
+        }
+    }
+    appendText(nsString.substring(from: cursor))
+    return result
+}
+
+private func decodePointNameEntities(_ text: String) -> String {
+    guard text.contains("&") else { return text }
+    let nsString = text as NSString
+    var result = ""
+    var cursor = 0
+    pointNameEntityRegex.enumerateMatches(in: text, range: NSRange(location: 0, length: nsString.length)) { match, _, _ in
+        guard let match else { return }
+        result += nsString.substring(with: NSRange(location: cursor, length: match.range.location - cursor))
+        cursor = match.range.location + match.range.length
+        let entity = nsString.substring(with: match.range)
+        result += decodePointNameEntity(entity) ?? entity
+    }
+    result += nsString.substring(from: cursor)
+    return result
+}
+
+private func decodePointNameEntity(_ entity: String) -> String? {
+    let body = entity.dropFirst().dropLast()
+    switch body.lowercased() {
+    case "lt": return "<"
+    case "gt": return ">"
+    case "amp": return "&"
+    case "quot": return "\""
+    case "apos": return "'"
+    case "nbsp": return "\u{00A0}"
+    default: break
+    }
+    guard body.hasPrefix("#") else { return nil }
+    let numeric = body.dropFirst()
+    let scalarValue: UInt32?
+    if numeric.hasPrefix("x") || numeric.hasPrefix("X") {
+        scalarValue = UInt32(numeric.dropFirst(), radix: 16)
+    } else {
+        scalarValue = UInt32(numeric)
+    }
+    guard let scalarValue, let scalar = Unicode.Scalar(scalarValue) else { return nil }
+    return String(Character(scalar))
+}
+
 struct QueryContentView: View {
     let content: QueryRenderContent
     var disableUserInteraction: Bool = false
@@ -59,7 +170,7 @@ struct MapPointMarker: View {
             }
             .overlay(alignment: .bottom) {
                 if showTooltipOnHover && isHovered && !name.isEmpty {
-                    Text(name)
+                    Text(attributedPointName(name))
                         .font(.caption)
                         .foregroundStyle(.white)
                         .padding(.horizontal, 6)
@@ -81,7 +192,7 @@ struct MapTooltipLabel: View {
     var font: Font = .caption
 
     var body: some View {
-        Text(name)
+        Text(attributedPointName(name))
             .font(font)
             .foregroundStyle(.white)
             .padding(.horizontal, 6)
@@ -224,7 +335,7 @@ struct PointMapQueryView: View {
                 // Forward: show the name only after reveal. Reverse: the name IS
                 // the prompt, so show it throughout.
                 if (revealName && payload.showHighlight) || payload.isReverse {
-                    Text(payload.pointName)
+                    Text(attributedPointName(payload.pointName))
                         .font(.title2)
                         .fontWeight(.semibold)
                         .foregroundStyle(answerTextColor)
