@@ -2023,9 +2023,9 @@ struct AppDatabase {
                         sql: """
                             UPDATE person_query
                             SET query_state = 0, last_answered_timestamp = NULL, interval = 0
-                            WHERE instance_id = ? AND kind = ? AND partnership_id IS ?
+                            WHERE instance_id = ? AND kind = ? AND partnership_id IS ? AND office_id IS ?
                             """,
-                        arguments: [target.instanceID, personKind.rawValue, target.personPartnershipID]
+                        arguments: [target.instanceID, personKind.rawValue, target.personPartnershipID, target.personOfficeID]
                     )
                 }
             }
@@ -2069,9 +2069,9 @@ struct AppDatabase {
                     try db.execute(
                         sql: """
                             DELETE FROM person_query
-                            WHERE instance_id = ? AND kind = ? AND partnership_id IS ?
+                            WHERE instance_id = ? AND kind = ? AND partnership_id IS ? AND office_id IS ?
                             """,
-                        arguments: [target.instanceID, personKind.rawValue, target.personPartnershipID]
+                        arguments: [target.instanceID, personKind.rawValue, target.personPartnershipID, target.personOfficeID]
                     )
                 }
             }

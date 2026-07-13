@@ -131,9 +131,11 @@ final class QueryPreviewWindowState: ObservableObject {
     @Published private(set) var requestedTypeID: Int64?
     @Published private(set) var requestedQueryTypeID: Int64?
     @Published private(set) var requestedFieldValuesByName: [String: String]?
-    // Built-in Person relationship query previews (kind + optional partnership).
+    // Built-in Person query previews (kind + the kind's discriminator:
+    // partnership for childrenWith, office for office).
     @Published private(set) var requestedPersonKind: PersonQueryKind?
     @Published private(set) var requestedPersonPartnershipID: Int64?
+    @Published private(set) var requestedPersonOfficeID: Int64?
     @Published private(set) var requestNonce = UUID()
 
     func requestOpen(
@@ -147,6 +149,7 @@ final class QueryPreviewWindowState: ObservableObject {
         requestedFieldValuesByName = fieldValuesByName
         requestedPersonKind = nil
         requestedPersonPartnershipID = nil
+        requestedPersonOfficeID = nil
         requestNonce = UUID()
     }
 
@@ -157,17 +160,19 @@ final class QueryPreviewWindowState: ObservableObject {
         requestedFieldValuesByName = nil
         requestedPersonKind = nil
         requestedPersonPartnershipID = nil
+        requestedPersonOfficeID = nil
         requestNonce = UUID()
     }
 
-    /// Preview one of a Person instance's built-in relationship queries.
-    func requestOpenPersonQuery(instanceID: Int64, kind: PersonQueryKind, partnershipID: Int64?) {
+    /// Preview one of a Person instance's built-in queries.
+    func requestOpenPersonQuery(instanceID: Int64, kind: PersonQueryKind, partnershipID: Int64?, officeID: Int64? = nil) {
         requestedInstanceID = instanceID
         requestedTypeID = nil
         requestedQueryTypeID = nil
         requestedFieldValuesByName = nil
         requestedPersonKind = kind
         requestedPersonPartnershipID = partnershipID
+        requestedPersonOfficeID = officeID
         requestNonce = UUID()
     }
 
@@ -185,6 +190,7 @@ final class QueryPreviewWindowState: ObservableObject {
         requestedFieldValuesByName = fieldValuesByName
         requestedPersonKind = nil
         requestedPersonPartnershipID = nil
+        requestedPersonOfficeID = nil
         requestNonce = UUID()
     }
 }

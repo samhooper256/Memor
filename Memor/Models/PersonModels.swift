@@ -22,6 +22,18 @@ nonisolated let PERSON_BUILTIN_QUERY_HTML_GLOBAL_KEY = "person_builtin_query_htm
 /// The out-of-the-box details HTML for built-in Person queries: just the name.
 nonisolated let PERSON_BUILTIN_QUERY_HTML_DEFAULT = "<div class=\"Name\">{{Name}}</div>"
 
+/// The globals-table key for the per-office question template (Question HTML
+/// only — the answer side is fixed). Edited via the Type Detail page's
+/// "Built-in Office Queries" entry; absent = PERSON_OFFICE_QUERY_HTML_DEFAULT.
+/// The {{@Office}}/{{@WhenBegan}}/{{@WhenEnded}}/{{@Note}} tokens are
+/// per-holding values substituted BEFORE the normal {{FieldName}} pipeline
+/// (@ = a "field" that may repeat, once per office, unlike instance fields).
+nonisolated let PERSON_OFFICE_QUERY_HTML_GLOBAL_KEY = "person_office_query_html"
+
+/// The out-of-the-box office question HTML: "Office: began–ended" (en dash).
+nonisolated let PERSON_OFFICE_QUERY_HTML_DEFAULT =
+    "<div class=\"Office\">{{@Office}}: {{@WhenBegan}}\u{2013}{{@WhenEnded}}</div>"
+
 /// An entry in a Person relationship slot: another Person instance, or a bare
 /// name (free text for someone the user didn't make an instance for). Bare
 /// names anchor to the one instance side of a relationship and carry no
@@ -81,6 +93,22 @@ nonisolated struct PersonPartnerDraft: Hashable {
     var isChildrenQueryEnabled: Bool = false
 }
 
+/// One office holding on a Person, as edited (and as fetched).
+/// `predecessors`/`successors` are Person INSTANCE ids only (no bare names),
+/// in edge-creation order. `personOfficeID` is the person_office row id
+/// (nil = newly added; kept rows are UPDATEd in place).
+nonisolated struct PersonOfficeDraft: Hashable {
+    var personOfficeID: Int64?
+    var officeID: Int64
+    var whenBegan: String = ""
+    var whenEnded: String = ""
+    var note: String = ""
+    var predecessors: [Int64] = []
+    var successors: [Int64] = []
+    /// Whether this person's per-office built-in query is enabled.
+    var isQueryEnabled: Bool = false
+}
+
 /// The full slot state of one Person, as edited (and as fetched).
 nonisolated struct PersonRelationsDraft: Hashable {
     var mother: PersonRef?
@@ -89,11 +117,13 @@ nonisolated struct PersonRelationsDraft: Hashable {
     var adoptiveFather: PersonRef?
     var partners: [PersonPartnerDraft] = []
     var ungroupedChildren: [PersonChildDraft] = []
+    var offices: [PersonOfficeDraft] = []
 }
 
-/// The built-in, non-deleteable relationship query kinds on a Person instance.
+/// The built-in, non-deleteable query kinds on a Person instance.
 /// Raw values match the person_query.kind column. `childrenWith` rows
-/// additionally carry a partnership id (one query per partner entry).
+/// additionally carry a partnership id (one query per partner entry);
+/// `office` rows carry an office id (one query per holding).
 nonisolated enum PersonQueryKind: String, Codable, Hashable, CaseIterable {
     case mother
     case father
@@ -104,6 +134,8 @@ nonisolated enum PersonQueryKind: String, Codable, Hashable, CaseIterable {
     case children
     case childrenWith = "children_with"
     case fullSiblings = "full_siblings"
+    case office
+    case allOffices = "all_offices"
 
     var displayName: String {
         switch self {
@@ -116,13 +148,17 @@ nonisolated enum PersonQueryKind: String, Codable, Hashable, CaseIterable {
         case .children: return "Children"
         case .childrenWith: return "Children with"
         case .fullSiblings: return "Full Siblings"
+        case .office: return "Office"
+        case .allOffices: return "All Offices"
         }
     }
 
-    /// The partnership-independent kinds, in display order. `childrenWith`
-    /// rows are enumerated separately, one per partner entry.
+    /// The discriminator-independent kinds, in display order. `childrenWith`
+    /// rows are enumerated separately (one per partner entry), and `office`
+    /// rows likewise (one per office holding).
     static let standaloneKinds: [PersonQueryKind] = [
-        .mother, .father, .parents, .adoptiveMother, .adoptiveFather, .partners, .children, .fullSiblings
+        .mother, .father, .parents, .adoptiveMother, .adoptiveFather, .partners, .children, .fullSiblings,
+        .allOffices
     ]
 }
 
@@ -131,6 +167,7 @@ nonisolated enum PersonQueryKind: String, Codable, Hashable, CaseIterable {
 nonisolated struct PersonBuiltinQueryInfo: Hashable {
     let kind: PersonQueryKind
     let partnershipID: Int64?
+    let officeID: Int64?
     let displayName: String
     let enabled: Bool
     let interval: Int64?
@@ -150,8 +187,12 @@ nonisolated struct PersonEditorData {
     let displayNamesByInstanceID: [Int64: String]
     /// "Male"/"Female" for every referenced instance (same-sex child blocking).
     let sexesByInstanceID: [Int64: String]
-    /// Enablement + SRS for the standalone built-in kinds (childrenWith state
-    /// is carried on each PersonPartnerDraft).
+    /// Office names for every office referenced by the relations (chips,
+    /// checklist titles).
+    let officeNamesByID: [Int64: String]
+    /// Enablement + SRS for the built-in kinds: the standalone kinds plus one
+    /// `.office` row per holding (childrenWith state is carried on each
+    /// PersonPartnerDraft; per-office enablement also rides PersonOfficeDraft).
     let builtinQueries: [PersonBuiltinQueryInfo]
 }
 
@@ -203,7 +244,8 @@ nonisolated struct PersonSaveError: Error {
 
 // MARK: - Change set (consumed by reset-on-connection-change)
 
-/// One relationship fact whose rendered answer may have changed on `instanceID`.
+/// One relationship/office fact whose rendered answer may have changed on
+/// `instanceID`.
 nonisolated enum PersonRelationKind: Hashable {
     case mother
     case father
@@ -214,6 +256,8 @@ nonisolated enum PersonRelationKind: Hashable {
     case children
     case childrenWith(partnershipID: Int64)
     case fullSiblings
+    case office(officeID: Int64)
+    case allOffices
 }
 
 nonisolated struct PersonRelationChange: Hashable {

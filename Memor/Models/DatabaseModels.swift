@@ -249,13 +249,16 @@ struct QuerySearchResult: Identifiable, Hashable {
     // reverse query. Standard queries are always forward. Included in `id` so the
     // two directions are distinct, selectable rows.
     var isReverse: Bool = false
-    // Built-in Person relationship queries only (queryTypeID is 0 for them).
+    // Built-in Person queries only (queryTypeID is 0 for them). The kind
+    // disambiguates the discriminator: childrenWith rows carry a partnership
+    // id, office rows an office id, all other kinds neither.
     var personKind: PersonQueryKind? = nil
     var personPartnershipID: Int64? = nil
+    var personOfficeID: Int64? = nil
 
     var id: String {
         if let personKind {
-            return "p:\(instanceID):\(personKind.rawValue):\(personPartnershipID ?? 0)"
+            return "p:\(instanceID):\(personKind.rawValue):\(personPartnershipID ?? personOfficeID ?? 0)"
         }
         return "\(instanceID):\(queryTypeID):\(isReverse ? "r" : "f")"
     }
@@ -288,13 +291,14 @@ enum QueryTargetKind: Hashable {
     case standard   // `query` table, by (instance_id, query_type_id)
     case point      // `pointmap_query`, by (point_id, is_reverse)
     case boundary   // `boundarymap_query`, by (attachment_id, is_reverse)
-    case person     // `person_query`, by (instance_id, personKind, personPartnershipID)
+    case person     // `person_query`, by (instance_id, personKind, personPartnershipID, personOfficeID)
 }
 
 // Identifies a single studyable query (a specific direction for map queries) so
 // it can be reset or disabled. `queryTypeID` is a query_type id for standard
 // queries, a point id for points, an attachment id for boundaries, or 0 for
-// built-in Person queries (which are keyed by personKind + personPartnershipID).
+// built-in Person queries (which are keyed by personKind plus the kind's
+// discriminator: personPartnershipID for childrenWith, personOfficeID for office).
 struct QueryTarget: Hashable {
     let instanceID: Int64
     let queryTypeID: Int64
@@ -302,6 +306,7 @@ struct QueryTarget: Hashable {
     let kind: QueryTargetKind
     var personKind: PersonQueryKind? = nil
     var personPartnershipID: Int64? = nil
+    var personOfficeID: Int64? = nil
 }
 
 struct TypeInstancesPageData {
@@ -459,16 +464,18 @@ struct StudyQuery: Identifiable, Hashable {
     // reverse card. Standard queries are always forward. Included in `id` so the
     // two directions are distinct cards for study selection, undo, and dedup.
     var isReverse: Bool = false
-    // Built-in Person relationship queries: non-nil kind identifies them (the
-    // question/answer HTML is computed from relationship data at assembly time;
-    // `kind` stays .standard so rendering flows through QueryHTMLView).
-    // personPartnershipID is set exactly for .childrenWith. queryTypeID is 0.
+    // Built-in Person queries: non-nil kind identifies them (the
+    // question/answer HTML is computed from relationship/office data at
+    // assembly time; `kind` stays .standard so rendering flows through
+    // QueryHTMLView). personPartnershipID is set exactly for .childrenWith,
+    // personOfficeID exactly for .office. queryTypeID is 0.
     var personQueryKind: PersonQueryKind? = nil
     var personPartnershipID: Int64? = nil
+    var personOfficeID: Int64? = nil
 
     var id: String {
         if let personQueryKind {
-            return "p:\(instanceID):\(personQueryKind.rawValue):\(personPartnershipID ?? 0)"
+            return "p:\(instanceID):\(personQueryKind.rawValue):\(personPartnershipID ?? personOfficeID ?? 0)"
         }
         return "\(instanceID):\(queryTypeID):\(isReverse ? "r" : "f")"
     }
@@ -493,14 +500,15 @@ struct StudyQuery: Identifiable, Hashable {
             boundaryMapPayload: boundaryMapPayload,
             isReverse: isReverse,
             personQueryKind: personQueryKind,
-            personPartnershipID: personPartnershipID
+            personPartnershipID: personPartnershipID,
+            personOfficeID: personOfficeID
         )
     }
 
     /// Copy with updated SRS fields after a study response. Carries every other
     /// field so pool re-insertion can't silently drop newer optional fields
     /// (a memberwise copy once dropped personQueryKind, converting a Person
-    /// card into a broken standard card).
+    /// card into a broken standard card; personOfficeID is equally load-bearing).
     func withStudyOutcome(
         interval: Int64,
         lastAnsweredTimestamp: Int64?,
@@ -525,7 +533,8 @@ struct StudyQuery: Identifiable, Hashable {
             boundaryMapPayload: boundaryMapPayload,
             isReverse: isReverse,
             personQueryKind: personQueryKind,
-            personPartnershipID: personPartnershipID
+            personPartnershipID: personPartnershipID,
+            personOfficeID: personOfficeID
         )
     }
 }

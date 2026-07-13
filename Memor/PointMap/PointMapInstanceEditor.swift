@@ -642,7 +642,7 @@ private struct AddPointPopupView: View {
                 }
             }
         }
-        .frame(width: 316)
+        .frame(width: 400)
         .padding(12)
         .onChange(of: state.errorMessage) { _, _ in
             state.panelContentDidResize()

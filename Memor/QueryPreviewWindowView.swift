@@ -129,11 +129,12 @@ struct QueryPreviewWindowView: View {
             let baseQuery: StudyQuery
             if let personKind = windowState.requestedPersonKind,
                let instanceID = windowState.requestedInstanceID {
-                // Built-in Person relationship query: computed HTML.
+                // Built-in Person query: computed HTML.
                 baseQuery = try appDatabase.fetchPersonQueryPreview(
                     instanceID: instanceID,
                     kind: personKind,
-                    partnershipID: windowState.requestedPersonPartnershipID
+                    partnershipID: windowState.requestedPersonPartnershipID,
+                    officeID: windowState.requestedPersonOfficeID
                 )
             } else if let typeID = windowState.requestedTypeID,
                let queryTypeID = windowState.requestedQueryTypeID {

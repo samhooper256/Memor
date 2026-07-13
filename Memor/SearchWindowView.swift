@@ -812,7 +812,7 @@ struct SearchWindowView: View {
             }
             for query in section.queries where ids == nil || ids!.contains(query.id) {
                 // The Person section mixes standard (user-defined) rows with
-                // built-in relationship rows, so the kind is per row.
+                // built-in rows, so the kind is per row.
                 if let personKind = query.personKind {
                     targets.append(QueryTarget(
                         instanceID: query.instanceID,
@@ -820,7 +820,8 @@ struct SearchWindowView: View {
                         isReverse: false,
                         kind: .person,
                         personKind: personKind,
-                        personPartnershipID: query.personPartnershipID
+                        personPartnershipID: query.personPartnershipID,
+                        personOfficeID: query.personOfficeID
                     ))
                 } else {
                     targets.append(QueryTarget(

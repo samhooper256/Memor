@@ -39,6 +39,25 @@ struct PersonPartnerDraftEntry: Identifiable, Hashable {
     var childrenQueryInterval: Int64?
 }
 
+/// One office card in the Person editor. `holdingID` is the persisted
+/// person_office row id (nil until first save); `officeID` always references
+/// an existing office row — offices are created in the DB before entering a
+/// draft. Predecessors/successors are Person instance ids only (no bare names).
+struct PersonOfficeDraftEntry: Identifiable, Hashable {
+    let id = UUID()
+    var holdingID: Int64?
+    var officeID: Int64
+    var officeName: String
+    var whenBeganText = ""
+    var whenEndedText = ""
+    var noteText = ""
+    var predecessorIDs: [Int64] = []
+    var successorIDs: [Int64] = []
+    var isOfficeQueryEnabled = false
+    /// Edit-mode SRS display for the per-office query (nil = never seen).
+    var officeQueryInterval: Int64?
+}
+
 final class InstanceEditorDraft: ObservableObject, Identifiable {
     let id = UUID()
 
@@ -79,8 +98,9 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
     @Published var personAdoptiveFather: PersonRef?
     @Published var personPartners: [PersonPartnerDraftEntry] = []
     @Published var personUngroupedChildren: [PersonChildEntry] = []
+    @Published var personOffices: [PersonOfficeDraftEntry] = []
     /// Enabled standalone built-in query kinds (childrenWith enablement lives
-    /// on each partner entry).
+    /// on each partner entry; per-office enablement on each office entry).
     @Published var personEnabledQueryKinds: Set<PersonQueryKind> = []
     /// Edit-mode SRS display for the standalone kinds (nil interval = never seen).
     @Published var personQueryIntervalsByKind: [PersonQueryKind: Int64] = [:]
@@ -99,6 +119,7 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
         personMother != nil || personFather != nil
             || personAdoptiveMother != nil || personAdoptiveFather != nil
             || !personPartners.isEmpty || !personUngroupedChildren.isEmpty
+            || !personOffices.isEmpty
     }
 
     func resetPersonState() {
@@ -108,6 +129,7 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
         personAdoptiveFather = nil
         personPartners = []
         personUngroupedChildren = []
+        personOffices = []
         personEnabledQueryKinds = []
         personQueryIntervalsByKind = [:]
         personDisplayNamesByID = [:]
@@ -134,6 +156,18 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
             },
             ungroupedChildren: personUngroupedChildren.map {
                 PersonChildDraft(rowID: $0.rowID, child: $0.child)
+            },
+            offices: personOffices.map { entry in
+                PersonOfficeDraft(
+                    personOfficeID: entry.holdingID,
+                    officeID: entry.officeID,
+                    whenBegan: entry.whenBeganText,
+                    whenEnded: entry.whenEndedText,
+                    note: entry.noteText,
+                    predecessors: entry.predecessorIDs,
+                    successors: entry.successorIDs,
+                    isQueryEnabled: entry.isOfficeQueryEnabled
+                )
             }
         )
     }

@@ -2,11 +2,13 @@
 //  PersonQueryChecklist.swift
 //  Memor
 //
-//  The built-in relationship queries in the Person instance editor's query
-//  panel: one checkbox row per standalone kind plus one "Children with
-//  {partner}" row per partner card. A warning triangle appears when an
+//  The built-in queries in the Person instance editor's query panel: one
+//  checkbox row per standalone relationship kind plus one "Children with
+//  {partner}" row per partner card, then an Offices section with one row per
+//  office card plus the "All Offices" row. A warning triangle appears when an
 //  enabled query's answer would currently be empty (every kind except Full
-//  Siblings) — the query stays enable-able regardless.
+//  Siblings and the per-office queries, whose answers always name the person)
+//  — the query stays enable-able regardless.
 //
 
 import SwiftUI
@@ -14,8 +16,8 @@ import SwiftUI
 struct PersonQueryChecklist: View {
     @ObservedObject var draft: InstanceEditorDraft
     let mode: InstanceEditorMode
-    let onPreview: (PersonQueryKind, _ partnerEntryID: UUID?) -> Void
-    let onResetDueDate: (PersonQueryKind, _ partnerEntryID: UUID?) -> Void
+    let onPreview: (PersonQueryKind, _ partnerEntryID: UUID?, _ officeEntryID: UUID?) -> Void
+    let onResetDueDate: (PersonQueryKind, _ partnerEntryID: UUID?, _ officeEntryID: UUID?) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -25,7 +27,17 @@ struct PersonQueryChecklist: View {
                 .fontWeight(.semibold)
                 .foregroundStyle(.secondary)
 
-            ForEach(orderedRows, id: \.rowID) { row in
+            ForEach(relationshipRows, id: \.rowID) { row in
+                checklistRow(row)
+            }
+
+            Divider()
+            Text("Offices")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+                .foregroundStyle(.secondary)
+
+            ForEach(officeRows, id: \.rowID) { row in
                 checklistRow(row)
             }
         }
@@ -37,16 +49,20 @@ struct PersonQueryChecklist: View {
         let rowID: String
         let kind: PersonQueryKind
         let partnerEntryID: UUID?
+        let officeEntryID: UUID?
         let title: String
         let showsEmptyWarning: Bool
         let isEnabled: Bool
         let interval: Int64?
     }
 
-    private var orderedRows: [ChecklistRow] {
+    private var relationshipRows: [ChecklistRow] {
         var rows: [ChecklistRow] = []
-        let childrenWithIndex = PersonQueryKind.standaloneKinds.firstIndex(of: .fullSiblings) ?? 0
-        for (index, kind) in PersonQueryKind.standaloneKinds.enumerated() {
+        // Office kinds render in their own section below (the filter is
+        // belt-and-braces for .office, which is never standalone).
+        let relationshipKinds = PersonQueryKind.standaloneKinds.filter { $0 != .allOffices && $0 != .office }
+        let childrenWithIndex = relationshipKinds.firstIndex(of: .fullSiblings) ?? 0
+        for (index, kind) in relationshipKinds.enumerated() {
             if index == childrenWithIndex {
                 // Per-partner rows sit between Children and Full Siblings.
                 for partner in draft.personPartners {
@@ -54,6 +70,7 @@ struct PersonQueryChecklist: View {
                         rowID: "children_with:\(partner.id)",
                         kind: .childrenWith,
                         partnerEntryID: partner.id,
+                        officeEntryID: nil,
                         title: "Children with \(partnerLabel(partner))",
                         showsEmptyWarning: partner.isChildrenQueryEnabled && partner.children.isEmpty,
                         isEnabled: partner.isChildrenQueryEnabled,
@@ -66,12 +83,40 @@ struct PersonQueryChecklist: View {
                 rowID: kind.rawValue,
                 kind: kind,
                 partnerEntryID: nil,
+                officeEntryID: nil,
                 title: kind.displayName,
                 showsEmptyWarning: enabled && answerWouldBeEmpty(kind),
                 isEnabled: enabled,
                 interval: draft.personQueryIntervalsByKind[kind]
             ))
         }
+        return rows
+    }
+
+    private var officeRows: [ChecklistRow] {
+        var rows: [ChecklistRow] = draft.personOffices.map { office in
+            ChecklistRow(
+                rowID: "office:\(office.id)",
+                kind: .office,
+                partnerEntryID: nil,
+                officeEntryID: office.id,
+                title: office.officeName,
+                showsEmptyWarning: false,
+                isEnabled: office.isOfficeQueryEnabled,
+                interval: office.officeQueryInterval
+            )
+        }
+        let allOfficesEnabled = draft.personEnabledQueryKinds.contains(.allOffices)
+        rows.append(ChecklistRow(
+            rowID: PersonQueryKind.allOffices.rawValue,
+            kind: .allOffices,
+            partnerEntryID: nil,
+            officeEntryID: nil,
+            title: PersonQueryKind.allOffices.displayName,
+            showsEmptyWarning: allOfficesEnabled && answerWouldBeEmpty(.allOffices),
+            isEnabled: allOfficesEnabled,
+            interval: draft.personQueryIntervalsByKind[.allOffices]
+        ))
         return rows
     }
 
@@ -86,7 +131,8 @@ struct PersonQueryChecklist: View {
     }
 
     /// Whether an enabled query's answer would currently be just "N/A" — a
-    /// warning, never a block (Full Siblings is exempt by spec).
+    /// warning, never a block (Full Siblings is exempt by spec; a per-office
+    /// answer always contains the person's own name).
     private func answerWouldBeEmpty(_ kind: PersonQueryKind) -> Bool {
         switch kind {
         case .mother: return draft.personMother == nil
@@ -98,7 +144,9 @@ struct PersonQueryChecklist: View {
         case .children:
             return draft.personUngroupedChildren.isEmpty
                 && draft.personPartners.allSatisfy { $0.children.isEmpty }
-        case .childrenWith, .fullSiblings:
+        case .allOffices:
+            return draft.personOffices.isEmpty
+        case .childrenWith, .fullSiblings, .office:
             return false
         }
     }
@@ -124,7 +172,7 @@ struct PersonQueryChecklist: View {
 
             if mode == .edit {
                 Button {
-                    onPreview(row.kind, row.partnerEntryID)
+                    onPreview(row.kind, row.partnerEntryID, row.officeEntryID)
                 } label: {
                     Image(systemName: "eye")
                         .foregroundStyle(.gray)
@@ -140,7 +188,7 @@ struct PersonQueryChecklist: View {
                         .foregroundStyle(interval < 86_400 ? Color.red : Color.green)
 
                     Button {
-                        onResetDueDate(row.kind, row.partnerEntryID)
+                        onResetDueDate(row.kind, row.partnerEntryID, row.officeEntryID)
                     } label: {
                         Image(systemName: "arrow.counterclockwise")
                             .foregroundStyle(.gray)
@@ -157,7 +205,15 @@ struct PersonQueryChecklist: View {
     }
 
     private func setEnabled(_ isOn: Bool, row: ChecklistRow) {
-        if let partnerEntryID = row.partnerEntryID {
+        if let officeEntryID = row.officeEntryID {
+            guard let index = draft.personOffices.firstIndex(where: { $0.id == officeEntryID }) else { return }
+            draft.personOffices[index].isOfficeQueryEnabled = isOn
+            if !isOn {
+                draft.personOffices[index].officeQueryInterval = nil
+            } else if mode == .edit {
+                draft.personOffices[index].officeQueryInterval = 0
+            }
+        } else if let partnerEntryID = row.partnerEntryID {
             guard let index = draft.personPartners.firstIndex(where: { $0.id == partnerEntryID }) else { return }
             draft.personPartners[index].isChildrenQueryEnabled = isOn
             if !isOn {

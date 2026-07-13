@@ -40,40 +40,84 @@ extension AppDatabase {
         ) ?? PERSON_BUILTIN_QUERY_HTML_DEFAULT
     }
 
+    // MARK: - Office question template (shared by .office and .allOffices)
+
+    /// The stored office question HTML, or the default when not customized.
+    /// Question side only — the office answer layout is fixed.
+    func fetchPersonOfficeQueryHTML() throws -> String {
+        try dbQueue.read { db in try Self.personOfficeQueryHTML(db: db) }
+    }
+
+    func setPersonOfficeQueryHTML(_ html: String) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "INSERT OR REPLACE INTO globals (name, value) VALUES (?, ?)",
+                arguments: [PERSON_OFFICE_QUERY_HTML_GLOBAL_KEY, html]
+            )
+        }
+    }
+
+    nonisolated static func personOfficeQueryHTML(db: Database) throws -> String {
+        try String.fetchOne(
+            db,
+            sql: "SELECT value FROM globals WHERE name = ?",
+            arguments: [PERSON_OFFICE_QUERY_HTML_GLOBAL_KEY]
+        ) ?? PERSON_OFFICE_QUERY_HTML_DEFAULT
+    }
+
+    /// Substitutes the per-holding {{@…}} tokens into the office question
+    /// template. Runs BEFORE the normal {{FieldName}} pipeline (so e.g.
+    /// {{Name}} in the template still resolves later); values are raw HTML by
+    /// app convention, never escaped.
+    private nonisolated static func renderedOfficeTemplate(
+        _ template: String,
+        holding: PersonOfficeHolding
+    ) -> String {
+        template
+            .replacingOccurrences(of: "{{@Office}}", with: holding.officeName)
+            .replacingOccurrences(of: "{{@WhenBegan}}", with: holding.whenBegan)
+            .replacingOccurrences(of: "{{@WhenEnded}}", with: holding.whenEnded)
+            .replacingOccurrences(of: "{{@Note}}", with: holding.note)
+    }
+
     // MARK: - Enablement
 
     /// Enables/disables one built-in query (row existence = enabled).
-    /// `partnershipID` is required exactly for .childrenWith.
+    /// `partnershipID` is required exactly for .childrenWith; `officeID`
+    /// exactly for .office. Both conditions use null-safe `IS ?` so a
+    /// discriminator-less kind never touches discriminated rows.
     func setPersonQueryEnabled(
         instanceID: Int64,
         kind: PersonQueryKind,
         partnershipID: Int64?,
+        officeID: Int64? = nil,
         enabled: Bool
     ) throws {
         try dbQueue.write { db in
             if enabled {
                 try db.execute(
                     sql: """
-                        INSERT OR IGNORE INTO person_query (instance_id, kind, partnership_id)
-                        VALUES (?, ?, ?)
+                        INSERT OR IGNORE INTO person_query (instance_id, kind, partnership_id, office_id)
+                        VALUES (?, ?, ?, ?)
                         """,
-                    arguments: [instanceID, kind.rawValue, partnershipID]
+                    arguments: [instanceID, kind.rawValue, partnershipID, officeID]
                 )
             } else {
-                let partnershipCondition = partnershipID == nil ? "partnership_id IS NULL" : "partnership_id = ?"
-                var arguments: [DatabaseValue] = [instanceID.databaseValue, kind.rawValue.databaseValue]
-                if let partnershipID { arguments.append(partnershipID.databaseValue) }
                 try db.execute(
-                    sql: "DELETE FROM person_query WHERE instance_id = ? AND kind = ? AND \(partnershipCondition)",
-                    arguments: StatementArguments(arguments)!
+                    sql: """
+                        DELETE FROM person_query
+                        WHERE instance_id = ? AND kind = ? AND partnership_id IS ? AND office_id IS ?
+                        """,
+                    arguments: [instanceID, kind.rawValue, partnershipID, officeID]
                 )
             }
         }
     }
 
-    /// Full built-in query list for one instance: the standalone kinds plus one
-    /// "Children with {partner}" per partnership (in this person's partner
-    /// order), each with enablement + SRS state.
+    /// Full built-in query list for one instance: the standalone kinds
+    /// (including All Offices), one "Children with {partner}" per partnership
+    /// (in this person's partner order), and one "Office: {name}" per office
+    /// holding (in this person's office order), each with enablement + SRS state.
     func fetchPersonBuiltinQueryInfos(instanceID: Int64) throws -> [PersonBuiltinQueryInfo] {
         try dbQueue.read { db in
             try Self.fetchPersonBuiltinQueryInfos(db: db, instanceID: instanceID)
@@ -83,22 +127,20 @@ extension AppDatabase {
     nonisolated static func fetchPersonBuiltinQueryInfos(db: Database, instanceID: Int64) throws -> [PersonBuiltinQueryInfo] {
         var infos: [PersonBuiltinQueryInfo] = []
 
-        func appendInfo(kind: PersonQueryKind, partnershipID: Int64?, displayName: String) throws {
-            let partnershipCondition = partnershipID == nil ? "partnership_id IS NULL" : "partnership_id = ?"
-            var arguments: [DatabaseValue] = [instanceID.databaseValue, kind.rawValue.databaseValue]
-            if let partnershipID { arguments.append(partnershipID.databaseValue) }
+        func appendInfo(kind: PersonQueryKind, partnershipID: Int64?, officeID: Int64?, displayName: String) throws {
             let row = try Row.fetchOne(
                 db,
                 sql: """
                     SELECT interval, query_state, last_answered_timestamp
                     FROM person_query
-                    WHERE instance_id = ? AND kind = ? AND \(partnershipCondition)
+                    WHERE instance_id = ? AND kind = ? AND partnership_id IS ? AND office_id IS ?
                     """,
-                arguments: StatementArguments(arguments)!
+                arguments: [instanceID, kind.rawValue, partnershipID, officeID]
             )
             infos.append(PersonBuiltinQueryInfo(
                 kind: kind,
                 partnershipID: partnershipID,
+                officeID: officeID,
                 displayName: displayName,
                 enabled: row != nil,
                 interval: row?["interval"],
@@ -108,14 +150,23 @@ extension AppDatabase {
         }
 
         for kind in PersonQueryKind.standaloneKinds {
-            try appendInfo(kind: kind, partnershipID: nil, displayName: kind.displayName)
+            try appendInfo(kind: kind, partnershipID: nil, officeID: nil, displayName: kind.displayName)
         }
         let partnerships = try fetchPersonPartnershipSummaries(db: db, personID: instanceID)
         for partnership in partnerships {
             try appendInfo(
                 kind: .childrenWith,
                 partnershipID: partnership.id,
+                officeID: nil,
                 displayName: try personChildrenWithDisplayName(db: db, partnerRef: partnership.partner)
+            )
+        }
+        for holding in try fetchPersonOfficeHoldings(db: db, instanceID: instanceID) {
+            try appendInfo(
+                kind: .office,
+                partnershipID: nil,
+                officeID: holding.officeID,
+                displayName: "Office: \(holding.officeName)"
             )
         }
         return infos
@@ -194,6 +245,7 @@ extension AppDatabase {
         let instanceID: Int64
         let kind: String
         let partnershipID: Int64?
+        let officeID: Int64?
         let interval: Int64
         let lastAnsweredTimestamp: Int64?
         let queryState: Int
@@ -228,13 +280,14 @@ extension AppDatabase {
                     pq.instance_id AS instanceID,
                     pq.kind AS kind,
                     pq.partnership_id AS partnershipID,
+                    pq.office_id AS officeID,
                     pq.interval AS interval,
                     pq.last_answered_timestamp AS lastAnsweredTimestamp,
                     pq.query_state AS queryState,
                     COALESCE(instance_table."field\(typeInfo.displayFieldIndex)", '') AS displayValue
                 FROM \(Self.personQueryJoinFrom(personTypeID: typeInfo.typeID))
                 WHERE \(searchSQL)
-                ORDER BY displayValue COLLATE NOCASE, pq.instance_id, pq.kind, pq.partnership_id
+                ORDER BY displayValue COLLATE NOCASE, pq.instance_id, pq.kind, pq.partnership_id, pq.office_id
                 \(limitSQL)
                 """,
             arguments: arguments
@@ -262,10 +315,11 @@ extension AppDatabase {
                 queryTypeID: 0,
                 displayValue: row.displayValue,
                 queryTypeName: try Self.personQueryTypeName(
-                    db: db, personID: row.instanceID, kind: kind, partnershipID: row.partnershipID
+                    db: db, personID: row.instanceID, kind: kind, partnershipID: row.partnershipID, officeID: row.officeID
                 ),
                 personKind: kind,
-                personPartnershipID: row.partnershipID
+                personPartnershipID: row.partnershipID,
+                personOfficeID: row.officeID
             )
         }
     }
@@ -290,6 +344,7 @@ extension AppDatabase {
                 instanceID: row.instanceID,
                 kind: PersonQueryKind(rawValue: row.kind) ?? .mother,
                 partnershipID: row.partnershipID,
+                officeID: row.officeID,
                 interval: row.interval,
                 lastAnsweredTimestamp: row.lastAnsweredTimestamp,
                 queryState: QueryState(rawValue: row.queryState) ?? .zero
@@ -394,6 +449,7 @@ extension AppDatabase {
             instanceID: row.instanceID,
             kind: PersonQueryKind(rawValue: row.kind) ?? .mother,
             partnershipID: row.partnershipID,
+            officeID: row.officeID,
             interval: row.interval,
             lastAnsweredTimestamp: row.lastAnsweredTimestamp,
             queryState: QueryState(rawValue: row.queryState) ?? .zero
@@ -407,6 +463,7 @@ extension AppDatabase {
         instanceID: Int64,
         kind: PersonQueryKind,
         partnershipID: Int64?,
+        officeID: Int64? = nil,
         rating: StudyResponseRating,
         answeredAtTimestamp: Int64,
         overrideInterval: Int64? = nil
@@ -416,9 +473,9 @@ extension AppDatabase {
                 db,
                 sql: """
                     SELECT interval, query_state FROM person_query
-                    WHERE instance_id = ? AND kind = ? AND partnership_id IS ?
+                    WHERE instance_id = ? AND kind = ? AND partnership_id IS ? AND office_id IS ?
                     """,
-                arguments: [instanceID, kind.rawValue, partnershipID]
+                arguments: [instanceID, kind.rawValue, partnershipID, officeID]
             ) else {
                 throw DatabaseError(message: "Person query not found.")
             }
@@ -436,9 +493,9 @@ extension AppDatabase {
                 sql: """
                     UPDATE person_query
                     SET query_state = ?, last_answered_timestamp = ?, interval = ?
-                    WHERE instance_id = ? AND kind = ? AND partnership_id IS ?
+                    WHERE instance_id = ? AND kind = ? AND partnership_id IS ? AND office_id IS ?
                     """,
-                arguments: [outcome.newState.rawValue, answeredAtTimestamp, updatedInterval, instanceID, kind.rawValue, partnershipID]
+                arguments: [outcome.newState.rawValue, answeredAtTimestamp, updatedInterval, instanceID, kind.rawValue, partnershipID, officeID]
             )
             return StudyResponseOutcome(newState: outcome.newState, newInterval: updatedInterval)
         }
@@ -448,6 +505,7 @@ extension AppDatabase {
         instanceID: Int64,
         kind: PersonQueryKind,
         partnershipID: Int64?,
+        officeID: Int64? = nil,
         originalInterval: Int64,
         originalLastAnsweredTimestamp: Int64?,
         originalQueryState: QueryState
@@ -457,7 +515,7 @@ extension AppDatabase {
                 sql: """
                     UPDATE person_query
                     SET query_state = ?, last_answered_timestamp = ?, interval = ?
-                    WHERE instance_id = ? AND kind = ? AND partnership_id IS ?
+                    WHERE instance_id = ? AND kind = ? AND partnership_id IS ? AND office_id IS ?
                     """,
                 arguments: [
                     originalQueryState.rawValue,
@@ -466,6 +524,7 @@ extension AppDatabase {
                     instanceID,
                     kind.rawValue,
                     partnershipID,
+                    officeID,
                 ]
             )
             // Surface undo of a since-deleted query instead of silently no-oping
@@ -487,6 +546,9 @@ extension AppDatabase {
         .person-parent-label { color: gray; }
         .person-children-group { margin: 4px 0; }
         .person-children-group-title { color: gray; }
+        .office-succession { display: flex; align-items: stretch; text-align: center; }
+        .office-succession-preds, .office-succession-succs { flex: 0 0 20%; }
+        .office-succession-holder { flex: 0 0 60%; border-left: 1px solid white; border-right: 1px solid white; }
         """
 
     /// Assembles one built-in Person query as a renderable StudyQuery: fixed
@@ -498,6 +560,7 @@ extension AppDatabase {
         instanceID: Int64,
         kind: PersonQueryKind,
         partnershipID: Int64?,
+        officeID: Int64? = nil,
         interval: Int64,
         lastAnsweredTimestamp: Int64?,
         queryState: QueryState
@@ -537,11 +600,11 @@ extension AppDatabase {
             arguments: [personTypeID]
         ) ?? ""
 
-        let queryTypeName = try personQueryTypeName(db: db, personID: instanceID, kind: kind, partnershipID: partnershipID)
+        let queryTypeName = try personQueryTypeName(db: db, personID: instanceID, kind: kind, partnershipID: partnershipID, officeID: officeID)
         let questionHTML = try personQuestionHTML(
-            db: db, personID: instanceID, kind: kind, partnershipID: partnershipID
+            db: db, personID: instanceID, kind: kind, partnershipID: partnershipID, officeID: officeID
         )
-        let body = try personAnswerBody(db: db, personID: instanceID, kind: kind, partnershipID: partnershipID)
+        let body = try personAnswerBody(db: db, personID: instanceID, kind: kind, partnershipID: partnershipID, officeID: officeID)
         let answerHTML = uniteQuestionAndAnswerWithDefaultSeparator(
             questionHTML: "{{#QuestionContent}}",
             answerHTML: body
@@ -562,28 +625,30 @@ extension AppDatabase {
             fieldValuesByName: fieldValuesByName,
             booleanFieldNames: booleanFieldNames,
             personQueryKind: kind,
-            personPartnershipID: partnershipID
+            personPartnershipID: partnershipID,
+            personOfficeID: officeID
         )
     }
 
     /// Preview a built-in query outside Study mode (Query Preview window and
     /// MCP render_query). Uses the row's live SRS state when enabled, zeroes
     /// otherwise.
-    func fetchPersonQueryPreview(instanceID: Int64, kind: PersonQueryKind, partnershipID: Int64?) throws -> StudyQuery {
+    func fetchPersonQueryPreview(instanceID: Int64, kind: PersonQueryKind, partnershipID: Int64?, officeID: Int64? = nil) throws -> StudyQuery {
         try dbQueue.read { db in
             let srs = try Row.fetchOne(
                 db,
                 sql: """
                     SELECT interval, query_state, last_answered_timestamp FROM person_query
-                    WHERE instance_id = ? AND kind = ? AND partnership_id IS ?
+                    WHERE instance_id = ? AND kind = ? AND partnership_id IS ? AND office_id IS ?
                     """,
-                arguments: [instanceID, kind.rawValue, partnershipID]
+                arguments: [instanceID, kind.rawValue, partnershipID, officeID]
             )
             return try Self.makePersonStudyQuery(
                 db: db,
                 instanceID: instanceID,
                 kind: kind,
                 partnershipID: partnershipID,
+                officeID: officeID,
                 interval: srs?["interval"] ?? 0,
                 lastAnsweredTimestamp: srs?["last_answered_timestamp"],
                 queryState: (srs?["query_state"] as Int?).flatMap(QueryState.init(rawValue:)) ?? .zero
@@ -592,13 +657,20 @@ extension AppDatabase {
     }
 
     /// The display name shown in query search / the editor checklist
-    /// ("Mother", "Children with Alice", ...).
+    /// ("Mother", "Children with Alice", "Office: U.S. President", ...).
     nonisolated static func personQueryTypeName(
         db: Database,
         personID: Int64,
         kind: PersonQueryKind,
-        partnershipID: Int64?
+        partnershipID: Int64?,
+        officeID: Int64? = nil
     ) throws -> String {
+        if kind == .office, let officeID {
+            guard let officeName = try fetchOfficeName(db: db, officeID: officeID) else {
+                return kind.displayName
+            }
+            return "Office: \(officeName)"
+        }
         guard kind == .childrenWith, let partnershipID else { return kind.displayName }
         let partnerships = try fetchPersonPartnershipSummaries(db: db, personID: personID)
         guard let partnership = partnerships.first(where: { $0.id == partnershipID }) else {
@@ -620,6 +692,8 @@ extension AppDatabase {
         case .children: return "Who are the children of:"
         case .childrenWith: return "Who are the children of:"
         case .fullSiblings: return "Who are the full siblings of:"
+        case .office: return "" // .office questions are the rendered template alone
+        case .allOffices: return "What are the offices of:"
         }
     }
 
@@ -627,8 +701,21 @@ extension AppDatabase {
         db: Database,
         personID: Int64,
         kind: PersonQueryKind,
-        partnershipID: Int64?
+        partnershipID: Int64?,
+        officeID: Int64? = nil
     ) throws -> String {
+        // A per-office question is the rendered office template alone — no
+        // fixed title and no details block, since both would name the person
+        // the answer reveals.
+        if kind == .office {
+            guard let officeID,
+                  let holding = try fetchPersonOfficeHoldings(db: db, instanceID: personID)
+                      .first(where: { $0.officeID == officeID }) else {
+                throw DatabaseError(message: "Office holding not found.")
+            }
+            return renderedOfficeTemplate(try personOfficeQueryHTML(db: db), holding: holding)
+        }
+
         var lines = ["<div class=\"person-question-title\">\(personQuestionTitle(kind))</div>"]
         // User-customizable "details" block (shared by every built-in kind);
         // {{FieldName}} placeholders resolve through the normal template pipeline.
@@ -674,7 +761,8 @@ extension AppDatabase {
         db: Database,
         personID: Int64,
         kind: PersonQueryKind,
-        partnershipID: Int64?
+        partnershipID: Int64?,
+        officeID: Int64? = nil
     ) throws -> String {
         let slots = try fetchParentSlots(db: db, childID: personID)
 
@@ -712,7 +800,47 @@ extension AppDatabase {
             return personAnswerLines(try children.map { try personEntryHTML(db: db, ref: $0) })
         case .fullSiblings:
             return try personFullSiblingsBody(db: db, personID: personID, slots: slots)
+        case .office:
+            guard let officeID else { return personNAHTML }
+            return try personOfficeSuccessionBody(db: db, personID: personID, officeID: officeID)
+        case .allOffices:
+            return try personAllOfficesBody(db: db, personID: personID)
         }
+    }
+
+    /// The fixed per-office answer: a 20%/60%/20% three-panel row — the
+    /// person's predecessors in the office (one per line), the person's
+    /// hyperlinked name, and their successors — with thin white dividers on
+    /// either side of the middle panel (see personBuiltinQueryDefaultCSS).
+    private nonisolated static func personOfficeSuccessionBody(
+        db: Database,
+        personID: Int64,
+        officeID: Int64
+    ) throws -> String {
+        let peers = try fetchOfficeSuccessionPeers(db: db, instanceID: personID, officeID: officeID)
+
+        func panel(_ ids: [Int64]) throws -> String {
+            guard !ids.isEmpty else { return personNAHTML }
+            return personAnswerLines(try ids.map { try personEntryHTML(db: db, ref: .instance($0)) })
+        }
+
+        let selfLink = try personEntryHTML(db: db, ref: .instance(personID))
+        return """
+            <div class="office-succession">
+                <div class="office-succession-panel office-succession-preds">\(try panel(peers.predecessors))</div>
+                <div class="office-succession-panel office-succession-holder">\(selfLink)</div>
+                <div class="office-succession-panel office-succession-succs">\(try panel(peers.successors))</div>
+            </div>
+            """
+    }
+
+    /// The All Offices answer: the office question template rendered once per
+    /// holding, in the person's own office order.
+    private nonisolated static func personAllOfficesBody(db: Database, personID: Int64) throws -> String {
+        let holdings = try fetchPersonOfficeHoldings(db: db, instanceID: personID)
+        guard !holdings.isEmpty else { return personNAHTML }
+        let template = try personOfficeQueryHTML(db: db)
+        return personAnswerLines(holdings.map { renderedOfficeTemplate(template, holding: $0) })
     }
 
     private nonisolated static func fetchPersonGroupedChildRefs(db: Database, partnershipID: Int64) throws -> [PersonRef] {

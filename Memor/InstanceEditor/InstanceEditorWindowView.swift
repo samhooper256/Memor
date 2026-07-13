@@ -1562,11 +1562,11 @@ struct InstanceEditorWindowView: View {
                             PersonQueryChecklist(
                                 draft: draft,
                                 mode: mode,
-                                onPreview: { kind, partnerEntryID in
-                                    openPersonQueryPreview(kind: kind, partnerEntryID: partnerEntryID)
+                                onPreview: { kind, partnerEntryID, officeEntryID in
+                                    openPersonQueryPreview(kind: kind, partnerEntryID: partnerEntryID, officeEntryID: officeEntryID)
                                 },
-                                onResetDueDate: { kind, partnerEntryID in
-                                    resetPersonQueryDueDate(kind: kind, partnerEntryID: partnerEntryID)
+                                onResetDueDate: { kind, partnerEntryID, officeEntryID in
+                                    resetPersonQueryDueDate(kind: kind, partnerEntryID: partnerEntryID, officeEntryID: officeEntryID)
                                 }
                             )
                         }
@@ -2626,24 +2626,40 @@ struct InstanceEditorWindowView: View {
         return draft.personPartners.first(where: { $0.id == entryID })?.partnershipID
     }
 
-    private func openPersonQueryPreview(kind: PersonQueryKind, partnerEntryID: UUID?) {
+    /// The persisted office id for an office checklist row, or nil when the
+    /// card was added this session and hasn't been saved yet (no holding row,
+    /// so no per-office query exists to preview/reset).
+    private func personSavedOfficeID(forEntryID officeEntryID: UUID?) -> Int64? {
+        guard let officeEntryID,
+              let entry = draft.personOffices.first(where: { $0.id == officeEntryID }),
+              entry.holdingID != nil else { return nil }
+        return entry.officeID
+    }
+
+    private func openPersonQueryPreview(kind: PersonQueryKind, partnerEntryID: UUID?, officeEntryID: UUID?) {
         guard mode == .edit, let loadedInstanceID = draft.loadedInstanceID else { return }
         if kind == .childrenWith, personPartnershipID(forEntryID: partnerEntryID) == nil {
             showToast(message: "Save this person before previewing a new partner's query.", style: .error)
             return
         }
+        if kind == .office, personSavedOfficeID(forEntryID: officeEntryID) == nil {
+            showToast(message: "Save this person before previewing a new office's query.", style: .error)
+            return
+        }
         queryPreviewWindowState.requestOpenPersonQuery(
             instanceID: loadedInstanceID,
             kind: kind,
-            partnershipID: personPartnershipID(forEntryID: partnerEntryID)
+            partnershipID: personPartnershipID(forEntryID: partnerEntryID),
+            officeID: personSavedOfficeID(forEntryID: officeEntryID)
         )
         openWindow(id: "query-preview")
     }
 
     @MainActor
-    private func resetPersonQueryDueDate(kind: PersonQueryKind, partnerEntryID: UUID?) {
+    private func resetPersonQueryDueDate(kind: PersonQueryKind, partnerEntryID: UUID?, officeEntryID: UUID?) {
         guard let loadedInstanceID = draft.loadedInstanceID else { return }
         if kind == .childrenWith, personPartnershipID(forEntryID: partnerEntryID) == nil { return }
+        if kind == .office, personSavedOfficeID(forEntryID: officeEntryID) == nil { return }
         do {
             try appDatabase.resetQueryDueDates(targets: [QueryTarget(
                 instanceID: loadedInstanceID,
@@ -2651,9 +2667,13 @@ struct InstanceEditorWindowView: View {
                 isReverse: false,
                 kind: .person,
                 personKind: kind,
-                personPartnershipID: personPartnershipID(forEntryID: partnerEntryID)
+                personPartnershipID: personPartnershipID(forEntryID: partnerEntryID),
+                personOfficeID: personSavedOfficeID(forEntryID: officeEntryID)
             )])
-            if let partnerEntryID,
+            if let officeEntryID,
+               let index = draft.personOffices.firstIndex(where: { $0.id == officeEntryID }) {
+                draft.personOffices[index].officeQueryInterval = 0
+            } else if let partnerEntryID,
                let index = draft.personPartners.firstIndex(where: { $0.id == partnerEntryID }) {
                 draft.personPartners[index].childrenQueryInterval = 0
             } else {
@@ -2690,10 +2710,34 @@ struct InstanceEditorWindowView: View {
         draft.personUngroupedChildren = data.relations.ungroupedChildren.map {
             PersonChildEntry(rowID: $0.rowID, child: $0.child)
         }
-        draft.personEnabledQueryKinds = Set(data.builtinQueries.filter(\.enabled).map(\.kind))
+        draft.personOffices = data.relations.offices.map { office in
+            var entry = PersonOfficeDraftEntry(
+                holdingID: office.personOfficeID,
+                officeID: office.officeID,
+                officeName: data.officeNamesByID[office.officeID] ?? "#\(office.officeID)",
+                whenBeganText: office.whenBegan,
+                whenEndedText: office.whenEnded,
+                noteText: office.note,
+                predecessorIDs: office.predecessors,
+                successorIDs: office.successors,
+                isOfficeQueryEnabled: office.isQueryEnabled
+            )
+            if office.isQueryEnabled,
+               let info = data.builtinQueries.first(where: { $0.kind == .office && $0.officeID == office.officeID }) {
+                entry.officeQueryInterval = info.interval
+            }
+            return entry
+        }
+        // Per-office rows must NOT leak into the standalone kind set — it is
+        // passed to savePersonInstance(builtinEnabledKinds:), where a stray
+        // .office member would be meaningless (office enablement rides the
+        // offices payload). .allOffices IS standalone and stays.
+        draft.personEnabledQueryKinds = Set(
+            data.builtinQueries.filter { $0.enabled && $0.kind != .office }.map(\.kind)
+        )
         draft.personQueryIntervalsByKind = Dictionary(
             uniqueKeysWithValues: data.builtinQueries.compactMap { info in
-                guard info.enabled, info.partnershipID == nil else { return nil }
+                guard info.enabled, info.partnershipID == nil, info.kind != .office else { return nil }
                 return (info.kind, info.interval ?? 0)
             }
         )

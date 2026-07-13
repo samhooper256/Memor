@@ -406,6 +406,7 @@ struct StudyModeView: View {
                         instanceID: previousQuery.instanceID,
                         kind: personKind,
                         partnershipID: previousQuery.personPartnershipID,
+                        officeID: previousQuery.personOfficeID,
                         originalInterval: originalInterval,
                         originalLastAnsweredTimestamp: originalLastAnsweredTimestamp,
                         originalQueryState: originalQueryState
@@ -597,6 +598,7 @@ struct StudyModeView: View {
                     instanceID: currentQuery.instanceID,
                     kind: personKind,
                     partnershipID: currentQuery.personPartnershipID,
+                    officeID: currentQuery.personOfficeID,
                     rating: rating,
                     answeredAtTimestamp: answeredAtTimestamp,
                     overrideInterval: updatedInterval
