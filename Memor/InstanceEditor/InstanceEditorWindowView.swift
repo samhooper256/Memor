@@ -64,6 +64,7 @@ struct InstanceEditorWindowView: View {
 
     // Confirmation for deleting the whole instance being edited (edit mode only).
     @State private var isInstanceDeletionConfirmationPresented = false
+    @State private var instanceDeletionMessage = ""
 
     // Transient map presentation state (per-mounted-editor; per-instance map data lives on the draft)
     @State private var pointMapHoveredEntryID: String?
@@ -181,6 +182,9 @@ struct InstanceEditorWindowView: View {
             HStack {
                 if mode == .edit, draft.loadedInstanceID != nil {
                     Button("Delete", role: .destructive) {
+                        // Computed once here, not in the alert body — the Person
+                        // consequences line runs a DB query.
+                        instanceDeletionMessage = computedInstanceDeletionMessage
                         isInstanceDeletionConfirmationPresented = true
                     }
                     .tint(.red)
@@ -2605,7 +2609,7 @@ struct InstanceEditorWindowView: View {
 
     /// Delete-confirmation body; for a connected Person it also spells out the
     /// relationship/succession consequences.
-    private var instanceDeletionMessage: String {
+    private var computedInstanceDeletionMessage: String {
         var message = "This action is irreversible."
         if isPersonSelected, let instanceID = draft.loadedInstanceID,
            let connections = try? appDatabase.hasPersonConnections(instanceID: instanceID),

@@ -127,12 +127,33 @@ extension AppDatabase {
     /// Deletes an office. FK cascades remove every person's holding of it,
     /// all of its succession edges, and every per-office person_query row
     /// (irreversible SRS loss) — callers show the holder-count confirmation.
-    func deleteOffice(officeID: Int64) throws {
+    /// Every holder's All Offices answer also changes (it loses a line), so
+    /// like every other holding-removal path this participates in
+    /// reset-on-connection-change; returns the number of queries reset
+    /// (0 when the flag is off).
+    @discardableResult
+    func deleteOffice(officeID: Int64) throws -> Int {
         try dbQueue.write { db in
+            let holderIDs = try Int64.fetchAll(
+                db,
+                sql: "SELECT instance_id FROM person_office WHERE office_id = ?",
+                arguments: [officeID]
+            )
             try db.execute(sql: "DELETE FROM office WHERE id = ?", arguments: [officeID])
+            // changesCount counts only the direct DELETE, not FK-action cascades.
             if db.changesCount == 0 {
                 throw DatabaseError(message: "Office not found.")
             }
+            let resetFlag = try String.fetchOne(
+                db,
+                sql: "SELECT value FROM globals WHERE name = ?",
+                arguments: [PERSON_RESET_QUERIES_GLOBAL_KEY]
+            ) == "1"
+            guard resetFlag, !holderIDs.isEmpty else { return 0 }
+            let changes = Set(holderIDs.map {
+                PersonRelationChange(instanceID: $0, kind: .allOffices)
+            })
+            return try Self.resetPersonQueriesForRelationshipChanges(db: db, changes: changes)
         }
     }
 

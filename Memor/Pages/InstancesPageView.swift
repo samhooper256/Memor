@@ -25,6 +25,7 @@ struct InstancesPageView: View {
     @State private var selectedInstanceIDs = Set<Int64>()
     @State private var pendingDeletionInstanceIDs: [Int64] = []
     @State private var isDeletionConfirmationPresented = false
+    @State private var deletionConfirmationMessage = ""
     @State private var pendingMaxIntervalInstanceIDs: Set<Int64> = []
     @State private var isSetMaxIntervalPresented = false
     @State private var maxIntervalInput: String = ""
@@ -198,10 +199,7 @@ struct InstancesPageView: View {
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text(personDeletionConsequencesMessage(
-                appDatabase: appDatabase,
-                pendingInstanceIDs: pendingDeletionInstanceIDs
-            ))
+            Text(deletionConfirmationMessage)
         }
         .alert(
             setMaxIntervalAlertTitle,
@@ -455,6 +453,12 @@ struct InstancesPageView: View {
     private func promptToDeleteInstances(_ instanceIDs: Set<Int64>) {
         guard !instanceIDs.isEmpty else { return }
         pendingDeletionInstanceIDs = Array(instanceIDs)
+        // Computed once here, not in the alert body — the message runs a DB
+        // query, and alert closures re-evaluate on every body render.
+        deletionConfirmationMessage = personDeletionConsequencesMessage(
+            appDatabase: appDatabase,
+            pendingInstanceIDs: pendingDeletionInstanceIDs
+        )
         isDeletionConfirmationPresented = true
     }
 

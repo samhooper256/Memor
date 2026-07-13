@@ -186,12 +186,8 @@ struct SearchWindowView: View {
         }
     }
 
-    private var deletionConfirmationMessage: String {
-        personDeletionConsequencesMessage(
-            appDatabase: appDatabase,
-            pendingInstanceIDs: pendingDeletionInstanceIDs
-        )
-    }
+    @State private var deletionConfirmationMessage = ""
+
 
     private var resetDueDatesCount: Int {
         queryIDsPendingReset.isEmpty ? resultsCount : queryIDsPendingReset.count
@@ -762,6 +758,12 @@ struct SearchWindowView: View {
     private func promptToDeleteInstances(_ instanceIDs: Set<Int64>) {
         guard !instanceIDs.isEmpty else { return }
         pendingDeletionInstanceIDs = Array(instanceIDs)
+        // Computed once here, not in the alert body — the message runs a DB
+        // query, and alert closures re-evaluate on every body render.
+        deletionConfirmationMessage = personDeletionConsequencesMessage(
+            appDatabase: appDatabase,
+            pendingInstanceIDs: pendingDeletionInstanceIDs
+        )
         isDeletionConfirmationPresented = true
     }
 

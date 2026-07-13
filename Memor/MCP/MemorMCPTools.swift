@@ -905,9 +905,13 @@ enum MemorMCPTools {
     private static func deleteOfficeTool(arguments: [String: Value], appDatabase: AppDatabase) throws -> CallTool.Result {
         let officeID = try arguments.requireInt64("office_id")
         let holderCount = try appDatabase.fetchOffice(officeID: officeID)?.holderCount ?? 0
-        try appDatabase.deleteOffice(officeID: officeID)
+        let resetCount = try appDatabase.deleteOffice(officeID: officeID)
         postDatabaseChange()
-        return try jsonResult(["ok": Value.bool(true), "removed_holder_count": Value.int(holderCount)])
+        return try jsonResult([
+            "ok": Value.bool(true),
+            "removed_holder_count": Value.int(holderCount),
+            "reset_query_count": Value.int(resetCount),
+        ])
     }
 
     // MARK: - PointMap tools

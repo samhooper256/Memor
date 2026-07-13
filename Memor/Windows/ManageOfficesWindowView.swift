@@ -42,9 +42,9 @@ struct ManageOfficesWindowView: View {
 
     @State private var descriptionDraft = ""
     @State private var descriptionSaveTask: Task<Void, Never>?
-    // True while descriptionDraft is being set programmatically (selection
-    // change / reload), so the onChange save doesn't fire for non-edits.
-    @State private var isSyncingDescription = false
+    // The not-yet-written edit captured by the debounce, so a selection
+    // change (or window close) can FLUSH it instead of discarding it.
+    @State private var pendingDescriptionSave: (officeID: Int64, description: String)?
 
     @State private var errorMessage: String?
 
@@ -87,12 +87,18 @@ struct ManageOfficesWindowView: View {
             reload()
         }
         .onChange(of: selectedOfficeID) { _, _ in
+            // Commit (never discard) the previous office's in-flight edit.
+            flushPendingDescriptionSave()
             syncDescriptionDraftFromSelection()
         }
         .onChange(of: descriptionDraft) { _, _ in
-            guard !isSyncingDescription else { return }
+            // Programmatic loads set the draft to the stored value, so this
+            // schedules only for genuine edits (a flag can't gate onChange —
+            // it runs after the transaction commits).
+            guard let office = selectedOffice, descriptionDraft != office.description else { return }
             scheduleDescriptionSave()
         }
+        .onDisappear { flushPendingDescriptionSave() }
         .onExitCommand { dismiss() }
         .background(
             // Reliable Escape even when nothing holds focus.
@@ -237,35 +243,42 @@ struct ManageOfficesWindowView: View {
     }
 
     private func syncDescriptionDraftFromSelection() {
-        descriptionSaveTask?.cancel()
-        isSyncingDescription = true
         descriptionDraft = selectedOffice?.description ?? ""
-        isSyncingDescription = false
     }
 
     private func scheduleDescriptionSave() {
         guard let officeID = selectedOfficeID else { return }
-        let description = descriptionDraft
+        pendingDescriptionSave = (officeID, descriptionDraft)
         descriptionSaveTask?.cancel()
         descriptionSaveTask = Task {
             try? await Task.sleep(nanoseconds: 500_000_000)
             guard !Task.isCancelled else { return }
-            do {
-                try appDatabase.setOfficeDescription(officeID: officeID, description: description)
-                // Update the row copy in place; no reload (it would clobber typing)
-                // and no change notification (matches other description autosaves).
-                if let index = offices.firstIndex(where: { $0.id == officeID }) {
-                    offices[index] = OfficeSummary(
-                        id: offices[index].id,
-                        name: offices[index].name,
-                        description: description,
-                        holderCount: offices[index].holderCount
-                    )
-                }
-                errorMessage = nil
-            } catch {
-                errorMessage = "Failed to save the description."
+            flushPendingDescriptionSave()
+        }
+    }
+
+    /// Writes the captured in-flight edit immediately (debounce expiry,
+    /// selection change, window close). No reload (it would clobber typing)
+    /// and no change notification (matches other description autosaves) —
+    /// the in-memory row is patched in place instead.
+    private func flushPendingDescriptionSave() {
+        descriptionSaveTask?.cancel()
+        descriptionSaveTask = nil
+        guard let pending = pendingDescriptionSave else { return }
+        pendingDescriptionSave = nil
+        do {
+            try appDatabase.setOfficeDescription(officeID: pending.officeID, description: pending.description)
+            if let index = offices.firstIndex(where: { $0.id == pending.officeID }) {
+                offices[index] = OfficeSummary(
+                    id: offices[index].id,
+                    name: offices[index].name,
+                    description: pending.description,
+                    holderCount: offices[index].holderCount
+                )
             }
+            errorMessage = nil
+        } catch {
+            errorMessage = "Failed to save the description."
         }
     }
 
@@ -287,13 +300,19 @@ struct ManageOfficesWindowView: View {
     }
 
     private func beginDelete() {
-        guard let office = selectedOffice else { return }
+        guard let selectedID = selectedOfficeID else { return }
+        // Re-fetch the live holder count: the cached row can be stale (UI
+        // instance-editor saves don't post memorDidChangeDatabase), and a
+        // stale 0 would skip the cascade confirmation entirely.
+        guard let office = try? appDatabase.fetchOffice(officeID: selectedID) else {
+            reload()
+            return
+        }
+        deleteTarget = office
         if office.holderCount == 0 {
             // No holders → nothing cascades that the user could care about.
-            deleteTarget = office
             commitDelete()
         } else {
-            deleteTarget = office
             isDeleteConfirmationPresented = true
         }
     }

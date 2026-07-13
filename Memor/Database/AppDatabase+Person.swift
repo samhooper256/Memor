@@ -1641,24 +1641,39 @@ extension AppDatabase {
 
     /// How many of the given instances are Persons linked to at least one
     /// other person (relationships or office succession) — drives the extra
-    /// consequences line in delete confirmations.
+    /// consequences line in delete confirmations. One set-based query, so
+    /// bulk deletes (select-all) don't pay a per-instance round-trip.
     func connectedPersonCount(instanceIDs: [Int64]) throws -> Int {
-        let personTypeID = try dbQueue.read { db in try Self.fetchPersonTypeID(db: db) }
-        var count = 0
-        for instanceID in instanceIDs {
-            let typeID = try dbQueue.read { db in
-                try Int64.fetchOne(
-                    db,
-                    sql: "SELECT type_id FROM instance_id_type_id WHERE instance_id = ?",
-                    arguments: [instanceID]
-                )
-            }
-            guard typeID == personTypeID else { continue }
-            if try hasPersonConnections(instanceID: instanceID) > 0 {
-                count += 1
-            }
+        guard !instanceIDs.isEmpty else { return 0 }
+        return try dbQueue.read { db in
+            let personTypeID = try Self.fetchPersonTypeID(db: db)
+            let idList = Set(instanceIDs).map(String.init).joined(separator: ", ")
+            // The EXISTS arms mirror hasPersonConnections' UNION arms.
+            return try Int.fetchOne(
+                db,
+                sql: """
+                    SELECT COUNT(*) FROM instance_id_type_id i
+                    WHERE i.instance_id IN (\(idList)) AND i.type_id = ?
+                      AND (
+                        EXISTS (SELECT 1 FROM person_partnership pp
+                                WHERE (pp.a_id = i.instance_id AND pp.b_id IS NOT NULL) OR pp.b_id = i.instance_id)
+                        OR EXISTS (SELECT 1 FROM person_parent p
+                                   WHERE (p.child_id = i.instance_id AND p.parent_id IS NOT NULL)
+                                      OR p.parent_id = i.instance_id)
+                        OR EXISTS (SELECT 1 FROM person_direct_child dc
+                                   WHERE (dc.parent_id = i.instance_id AND dc.child_id IS NOT NULL)
+                                      OR dc.child_id = i.instance_id)
+                        OR EXISTS (SELECT 1 FROM person_partnership_child ppc
+                                   JOIN person_partnership pp2 ON pp2.id = ppc.partnership_id
+                                   WHERE (pp2.a_id = i.instance_id OR pp2.b_id = i.instance_id)
+                                     AND ppc.child_id IS NOT NULL)
+                        OR EXISTS (SELECT 1 FROM person_office_succession s
+                                   WHERE s.predecessor_id = i.instance_id OR s.successor_id = i.instance_id)
+                      )
+                    """,
+                arguments: [personTypeID]
+            ) ?? 0
         }
-        return count
     }
 
     /// Converts every reference to `instanceID` on OTHER people into a
