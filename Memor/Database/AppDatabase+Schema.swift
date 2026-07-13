@@ -434,14 +434,86 @@ extension AppDatabase {
                     ON person_direct_child(child_id)
                 """)
 
-            // Built-in Person relationship queries (Mother/Father/Parents/
-            // Adoptive Mother/Adoptive Father/Children/Children with {partner}/
-            // Full Siblings). A row's existence == that query being enabled for
-            // that instance (mirrors pointmap_query). partnership_id is non-NULL
-            // exactly for kind = 'children_with' (one row per partner entry, per
-            // side). The kind set is a closed Swift enum (PersonQueryKind) — no
-            // CHECK constraint, since SQLite CHECKs can't be altered later.
-            // Must be created after person_partnership (FK target).
+            // MARK: Person office tables
+
+            // User-created offices (e.g. "U.S. President"). Names are unique
+            // case-insensitively. Must be created before person_office and
+            // before person_query's office_id column (FK targets).
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS office (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT ''
+                ) STRICT
+                """)
+            try db.execute(sql: """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_office_name_unique
+                    ON office(name COLLATE NOCASE)
+                """)
+
+            // One row per (person, office) holding. UNIQUE(instance_id, office_id)
+            // both enforces one holding per office per person and is the parent
+            // key for person_office_succession's composite FKs. order_index is
+            // the person's own office display/study order.
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS person_office (
+                    id INTEGER PRIMARY KEY,
+                    instance_id INTEGER NOT NULL
+                        REFERENCES instance_id_type_id(instance_id) ON DELETE CASCADE,
+                    office_id INTEGER NOT NULL
+                        REFERENCES office(id) ON DELETE CASCADE,
+                    when_began TEXT NOT NULL DEFAULT '',
+                    when_ended TEXT NOT NULL DEFAULT '',
+                    note TEXT NOT NULL DEFAULT '',
+                    order_index INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE (instance_id, office_id)
+                ) STRICT
+                """)
+            try db.execute(sql: """
+                CREATE INDEX IF NOT EXISTS idx_person_office_office
+                    ON person_office(office_id)
+                """)
+
+            // One row per directed succession fact, stored ONCE (reciprocity by
+            // construction, like person_partnership): "predecessor precedes
+            // successor in office". The composite FKs to person_office mean an
+            // edge can only exist while BOTH endpoints hold the office, and
+            // deleting a holding, an office, or a person cascades its edges.
+            // (X,A,B) and (X,B,A) may coexist (Cleveland/Harrison); exact
+            // duplicate edges and self-links cannot.
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS person_office_succession (
+                    id INTEGER PRIMARY KEY,
+                    office_id INTEGER NOT NULL
+                        REFERENCES office(id) ON DELETE CASCADE,
+                    predecessor_id INTEGER NOT NULL,
+                    successor_id INTEGER NOT NULL,
+                    CHECK (predecessor_id != successor_id),
+                    UNIQUE (office_id, predecessor_id, successor_id),
+                    FOREIGN KEY (predecessor_id, office_id)
+                        REFERENCES person_office(instance_id, office_id) ON DELETE CASCADE,
+                    FOREIGN KEY (successor_id, office_id)
+                        REFERENCES person_office(instance_id, office_id) ON DELETE CASCADE
+                ) STRICT
+                """)
+            try db.execute(sql: """
+                CREATE INDEX IF NOT EXISTS idx_person_office_succession_pred
+                    ON person_office_succession(predecessor_id, office_id)
+                """)
+            try db.execute(sql: """
+                CREATE INDEX IF NOT EXISTS idx_person_office_succession_succ
+                    ON person_office_succession(successor_id, office_id)
+                """)
+
+            // Built-in Person queries (Mother/Father/Parents/Adoptive Mother/
+            // Adoptive Father/Children/Children with {partner}/Full Siblings/
+            // Office: {office}/All Offices). A row's existence == that query
+            // being enabled for that instance (mirrors pointmap_query).
+            // partnership_id is non-NULL exactly for kind = 'children_with';
+            // office_id is non-NULL exactly for kind = 'office' (one row per
+            // holding). The kind set is a closed Swift enum (PersonQueryKind) —
+            // no CHECK constraint, since SQLite CHECKs can't be altered later.
+            // Must be created after person_partnership and office (FK targets).
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS person_query (
                     id INTEGER PRIMARY KEY,
@@ -450,28 +522,47 @@ extension AppDatabase {
                     kind TEXT NOT NULL,
                     partnership_id INTEGER
                         REFERENCES person_partnership(id) ON DELETE CASCADE,
+                    office_id INTEGER
+                        REFERENCES office(id) ON DELETE CASCADE,
                     interval INTEGER NOT NULL DEFAULT 0,
                     last_answered_timestamp INTEGER DEFAULT NULL,
                     query_state INTEGER NOT NULL DEFAULT 0
                 ) STRICT
                 """)
+            // Databases created before Offices existed lack office_id; must run
+            // before the index block below (the indexes reference the column).
+            try migratePersonQueryOfficeColumn(db: db)
             // SQLite UNIQUE treats NULLs as distinct, so a single
-            // UNIQUE(instance_id, kind, partnership_id) would allow duplicate
-            // standalone rows; two partial unique indexes cover both shapes
-            // (INSERT OR IGNORE respects partial unique indexes).
+            // UNIQUE(instance_id, kind, partnership_id, office_id) would allow
+            // duplicate rows; three partial unique indexes cover the three row
+            // shapes (INSERT OR IGNORE respects partial unique indexes).
+            // The pre-Offices standalone index (WHERE partnership_id IS NULL
+            // only) would reject a second office row per instance, so it is
+            // dropped and replaced under a new name (idempotent every launch).
             try db.execute(sql: """
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_person_query_unique_standalone
-                    ON person_query(instance_id, kind) WHERE partnership_id IS NULL
+                DROP INDEX IF EXISTS idx_person_query_unique_standalone
+                """)
+            try db.execute(sql: """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_person_query_unique_standalone2
+                    ON person_query(instance_id, kind)
+                    WHERE partnership_id IS NULL AND office_id IS NULL
                 """)
             try db.execute(sql: """
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_person_query_unique_partner
                     ON person_query(instance_id, kind, partnership_id) WHERE partnership_id IS NOT NULL
                 """)
             try db.execute(sql: """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_person_query_unique_office
+                    ON person_query(instance_id, kind, office_id) WHERE office_id IS NOT NULL
+                """)
+            try db.execute(sql: """
                 CREATE INDEX IF NOT EXISTS idx_person_query_instance ON person_query(instance_id)
                 """)
             try db.execute(sql: """
                 CREATE INDEX IF NOT EXISTS idx_person_query_partnership ON person_query(partnership_id)
+                """)
+            try db.execute(sql: """
+                CREATE INDEX IF NOT EXISTS idx_person_query_office ON person_query(office_id)
                 """)
 
             // Seed the built-in PointMap type (idempotent)
@@ -972,6 +1063,19 @@ extension AppDatabase {
         let names = Set(info.compactMap { $0["name"] as String? })
         if !names.contains("max_interval") {
             try db.execute(sql: "ALTER TABLE \"query\" ADD COLUMN max_interval INTEGER DEFAULT NULL")
+        }
+    }
+
+    // Adds the nullable office_id column to person_query for databases created
+    // before Offices existed (SQLite permits ALTER ... ADD COLUMN with a
+    // REFERENCES clause when the default is NULL). Existing rows stay NULL, so
+    // every pre-existing query is untouched. No-op on fresh installs.
+    private static func migratePersonQueryOfficeColumn(db: Database) throws {
+        if try !columnExists(db, table: "person_query", column: "office_id") {
+            try db.execute(sql: """
+                ALTER TABLE "person_query" ADD COLUMN office_id INTEGER
+                    REFERENCES office(id) ON DELETE CASCADE
+                """)
         }
     }
 
