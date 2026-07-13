@@ -136,9 +136,13 @@ struct TypesPageView: View {
         ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text(AppTab.types.title)
-                    .font(.largeTitle)
-                    .fontWeight(.semibold)
+                HStack(spacing: 8) {
+                    Text(AppTab.types.title)
+                        .font(.largeTitle)
+                        .fontWeight(.semibold)
+
+                    HelpWindowButton(windowID: "types-help", tooltip: "Learn what types are")
+                }
 
                 HStack(spacing: 12) {
                     Button("Edit Global HTML") {

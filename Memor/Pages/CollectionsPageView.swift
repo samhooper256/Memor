@@ -64,9 +64,13 @@ struct CollectionsPageView: View {
                 ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
-                        Text(titleText)
-                            .font(.largeTitle)
-                            .fontWeight(.semibold)
+                        HStack(spacing: 8) {
+                            Text(titleText)
+                                .font(.largeTitle)
+                                .fontWeight(.semibold)
+
+                            HelpWindowButton(windowID: "collections-help", tooltip: "Learn what collections are")
+                        }
 
                         HStack(spacing: 12) {
                             Button("Add Collection") {

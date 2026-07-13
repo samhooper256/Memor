@@ -155,6 +155,16 @@ struct MemorApp: App {
         }
         .windowResizability(.contentSize)
 
+        Window("Collections Help", id: "collections-help") {
+            CollectionsHelpWindowView()
+        }
+        .windowResizability(.contentSize)
+
+        Window("Types Help", id: "types-help") {
+            TypesHelpWindowView()
+        }
+        .windowResizability(.contentSize)
+
         Window("Edit Global HTML", id: "global-html-editor") {
             GlobalCodeEditorWindowView(
                 appDatabase: appDatabase,
