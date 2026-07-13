@@ -48,11 +48,11 @@ struct StacksHelpWindowView: View {
                 Text("What Are Stacks?")
                     .font(.headline)
 
-                Text("A stack is a saved search over your queries: a named deck containing every query that matches its search text. Click a stack to study it.")
+                Text("A stack is a saved search over your queries: a named \"deck of flashcards\" containing every query that matches its search text. Click a stack to study it.")
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Text("Stacks don't own their queries — membership is recomputed from the search on every refresh, so new queries that match join automatically. Editing a stack's search changes what it contains, and deleting a stack never deletes any queries.")
+                Text("Stacks don't own their queries—one query can be in multiple stacks simultaneously. Membership is recomputed from the search on every refresh, so new queries that match join automatically. Editing a stack's search changes what it contains. Deleting a stack never deletes any queries.")
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
 
