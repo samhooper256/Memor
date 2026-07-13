@@ -139,10 +139,10 @@ struct CollectionsPageView: View {
             guard selectedCollection == nil else { return }
             await loadCollections()
             // When the list page is shown (tab switch or back-from-detail):
-            // select the first collection and focus the search box. Focus must
-            // be set after the loaded collections commit — the list swaps its
-            // empty-state branch for the rows in that update, and a focus set
-            // bundled into the same transaction is dropped.
+            // select the first collection and focus the search box. The focus
+            // set is deferred: arriving from a tab whose own search field was
+            // focused, that field's teardown lands after this task starts and
+            // swallows an immediate focus set.
             if selectedCollection == nil {
                 highlightedCollectionID = filteredCollections.first?.id
                 try? await Task.sleep(for: .milliseconds(50))

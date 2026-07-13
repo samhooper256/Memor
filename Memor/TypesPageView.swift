@@ -76,9 +76,13 @@ struct TypesPageView: View {
                 selectedType = type
             }
             // When the list page is shown (tab switch or back-from-detail):
-            // select the first type and focus the search box.
+            // select the first type and focus the search box. The focus set is
+            // deferred: arriving from a tab whose own search field was focused,
+            // that field's teardown lands after this task starts and swallows
+            // an immediate focus set.
             if selectedType == nil {
                 highlightedTypeID = filteredTypes.first?.id
+                try? await Task.sleep(for: .milliseconds(50))
                 isSearchFocused = true
             }
         }
@@ -147,7 +151,7 @@ struct TypesPageView: View {
                     }
                     .buttonStyle(.bordered)
 
-                    TextField("Search types", text: $searchText)
+                    TextField("Search types (⌘F)", text: $searchText)
                         .solidFocusField()
                         .focused($isSearchFocused)
                         .frame(maxWidth: .infinity)
