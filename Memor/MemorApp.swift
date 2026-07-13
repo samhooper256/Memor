@@ -39,6 +39,7 @@ struct MemorApp: App {
     @StateObject private var changeTypeWindowState = ChangeTypeWindowState()
     @StateObject private var stacksPageState = StacksPageState()
     @StateObject private var manageBoundariesWindowState = ManageBoundariesWindowState()
+    @StateObject private var manageOfficesWindowState = ManageOfficesWindowState()
     @StateObject private var stackStatsWindowState = StackStatsWindowState()
     @StateObject private var quickStudyState = QuickStudyState()
     @StateObject private var studyModeState = StudyModeState()
@@ -75,6 +76,9 @@ struct MemorApp: App {
                 .environmentObject(studyModeState)
                 .environmentObject(shortcutSettings)
                 .environmentObject(timeZoneSettings)
+                // The Type detail page's "Edit Offices" button lives in the
+                // main window, so its window state flows through here too.
+                .environmentObject(manageOfficesWindowState)
                 .task {
                     guard !hasPerformedInitialStacksRefresh else { return }
                     hasPerformedInitialStacksRefresh = true
@@ -160,6 +164,12 @@ struct MemorApp: App {
         Window("Manage Boundaries", id: "manage-boundaries") {
             ManageBoundariesWindowView(appDatabase: appDatabase)
                 .environmentObject(manageBoundariesWindowState)
+                .environmentObject(shortcutSettings)
+        }
+
+        Window("Manage Offices", id: "manage-offices") {
+            ManageOfficesWindowView(appDatabase: appDatabase)
+                .environmentObject(manageOfficesWindowState)
                 .environmentObject(shortcutSettings)
         }
 

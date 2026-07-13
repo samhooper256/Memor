@@ -16,6 +16,9 @@ struct TypeDetailPageView: View {
     let onAutoRenamePopoverPresented: () -> Void
     let onBack: () -> Void
 
+    @EnvironmentObject private var manageOfficesWindowState: ManageOfficesWindowState
+    @Environment(\.openWindow) private var openWindow
+
     @FocusState private var isAddFieldNameFocused: Bool
     @FocusState private var isRenameTypeNameFocused: Bool
     @FocusState private var isRenameQueryTypeNameFocused: Bool
@@ -68,19 +71,33 @@ struct TypeDetailPageView: View {
     @State private var isPersonResetInfoPopoverPresented = false
     /// Live copy of the customizable built-in-query "details" HTML (Person only).
     @State private var personBuiltinQueryHTML = ""
+    /// Live copy of the per-office question template HTML (Person only).
+    @State private var personOfficeQueryHTML = ""
 
-    /// Sentinel `selectedQueryTypeID` for the synthetic, non-deleteable
-    /// "Built-in Queries" entry (Person only). Real query-type ids are positive.
+    /// Sentinel `selectedQueryTypeID`s for the synthetic, non-deleteable
+    /// "Built-in Relationship Queries" / "Built-in Office Queries" entries
+    /// (Person only). Real query-type ids are positive.
     private static let builtinQueriesSelectionID: Int64 = -1
+    private static let builtinOfficeQueriesSelectionID: Int64 = -2
 
     private var selectedQueryType: QueryType? {
         guard let selectedQueryTypeID else { return nil }
         return queryTypes.first(where: { $0.id == selectedQueryTypeID })
     }
 
-    /// Whether the synthetic "Built-in Queries" entry is currently selected.
+    /// Whether the synthetic "Built-in Relationship Queries" entry is selected.
     private var isBuiltinQueriesSelected: Bool {
         type.isPerson && selectedQueryTypeID == Self.builtinQueriesSelectionID
+    }
+
+    /// Whether the synthetic "Built-in Office Queries" entry is selected.
+    private var isBuiltinOfficeQueriesSelected: Bool {
+        type.isPerson && selectedQueryTypeID == Self.builtinOfficeQueriesSelectionID
+    }
+
+    /// Either synthetic built-in entry (both are Question-only, non-renameable).
+    private var isAnyBuiltinSelected: Bool {
+        isBuiltinQueriesSelected || isBuiltinOfficeQueriesSelected
     }
 
     /// The query-types toolbar + editor show whenever there's something to edit:
@@ -148,6 +165,14 @@ struct TypeDetailPageView: View {
                         Text("(built-in)")
                             .font(.title3)
                             .foregroundStyle(.secondary)
+
+                        Button {
+                            manageOfficesWindowState.requestOpen()
+                            openWindow(id: "manage-offices")
+                        } label: {
+                            Label("Edit Offices", systemImage: "building.columns")
+                        }
+                        .buttonStyle(.bordered)
                     }
 
                     if !type.isPerson {
@@ -310,6 +335,7 @@ struct TypeDetailPageView: View {
 
                     if type.isPerson {
                         personBuiltinQueriesSection
+                        personOfficeQueriesSection
                     }
 
                     Text("Query Types")
@@ -468,13 +494,58 @@ struct TypeDetailPageView: View {
         ]
     }
 
+    private var personOfficeQueriesSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Built-in Office Queries")
+                .font(.title3)
+                .fontWeight(.semibold)
+
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(personOfficeQueryRows.enumerated()), id: \.offset) { index, row in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(row.0)
+                        Text(row.1)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+
+                    if index < personOfficeQueryRows.count - 1 {
+                        Divider()
+                    }
+                }
+            }
+            .background(Color(NSColor.controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
+            }
+
+            Text("Offices are managed via Edit Offices and assigned per person in the instance editor. The question HTML (under Query Types) supports the {{@Office}}, {{@WhenBegan}}, {{@WhenEnded}}, and {{@Note}} tokens; answers are computed from the person's holdings and succession links.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var personOfficeQueryRows: [(String, String)] {
+        [
+            ("Office: {office}", "One query per office the person holds; the answer shows predecessors, the person, and successors."),
+            ("All Offices", "Which offices has this person held?"),
+        ]
+    }
+
     private var queryTypesToolbar: some View {
         HStack(spacing: 12) {
                         if showsQueryTypesSection {
                             Picker("Edit Query Type:", selection: $selectedQueryTypeID) {
                                 if type.isPerson {
-                                    Text("Built-in Queries")
+                                    Text("Built-in Relationship Queries")
                                         .tag(Optional(Self.builtinQueriesSelectionID))
+                                    Text("Built-in Office Queries")
+                                        .tag(Optional(Self.builtinOfficeQueriesSelectionID))
                                 }
                                 ForEach(displayedQueryTypes) { queryType in
                                     Text(queryType.name)
@@ -651,8 +722,9 @@ struct TypeDetailPageView: View {
                             }
 
                             // Built-in queries have no editable answer (answers are
-                            // computed from relationships), so only "Question" shows.
-                            if !isBuiltinQueriesSelected {
+                            // computed from relationship/office data), so only
+                            // "Question" shows.
+                            if !isAnyBuiltinSelected {
                                 RadioSelectionButton(
                                     title: "Answer",
                                     isSelected: selectedHTMLContentMode == .answer
@@ -692,8 +764,9 @@ struct TypeDetailPageView: View {
             if type.isPerson {
                 personResetOnConnectionChange = (try? appDatabase.fetchPersonResetQueriesOnConnectionChange()) ?? false
                 personBuiltinQueryHTML = (try? appDatabase.fetchPersonBuiltinQueryHTML()) ?? PERSON_BUILTIN_QUERY_HTML_DEFAULT
+                personOfficeQueryHTML = (try? appDatabase.fetchPersonOfficeQueryHTML()) ?? PERSON_OFFICE_QUERY_HTML_DEFAULT
             }
-            // Person always has the "Built-in Queries" entry to fall back on, even
+            // Person always has the built-in entries to fall back on, even
             // when the user has deleted every ordinary query type.
             selectedQueryTypeID = displayedQueryTypes.first?.id
                 ?? (type.isPerson ? Self.builtinQueriesSelectionID : nil)
@@ -714,6 +787,15 @@ struct TypeDetailPageView: View {
             // shared "details" block sourced from the globals table.
             selectedHTMLContentMode = .query
             selectedQueryHTML = personBuiltinQueryHTML
+            activeEditor = .html
+            return
+        }
+
+        if type.isPerson && selectedQueryTypeID == Self.builtinOfficeQueriesSelectionID {
+            // The per-office question template ({{@Office}} etc.); the office
+            // answer layout is fixed and never editable.
+            selectedHTMLContentMode = .query
+            selectedQueryHTML = personOfficeQueryHTML
             activeEditor = .html
             return
         }
@@ -768,6 +850,17 @@ struct TypeDetailPageView: View {
                 errorMessage = nil
             } catch {
                 errorMessage = "Failed to save built-in query HTML."
+            }
+            return
+        }
+
+        if queryTypeID == Self.builtinOfficeQueriesSelectionID {
+            do {
+                try appDatabase.setPersonOfficeQueryHTML(html)
+                personOfficeQueryHTML = html
+                errorMessage = nil
+            } catch {
+                errorMessage = "Failed to save office query HTML."
             }
             return
         }
@@ -828,7 +921,7 @@ struct TypeDetailPageView: View {
 
     @MainActor
     private func renameSelectedQueryType() async {
-        guard let selectedQueryTypeID, !isBuiltinQueriesSelected else { return }
+        guard let selectedQueryTypeID, !isAnyBuiltinSelected else { return }
 
         let trimmedQueryTypeName = renamedQueryTypeName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedQueryTypeName.isEmpty else { return }
@@ -869,7 +962,7 @@ struct TypeDetailPageView: View {
 
     @MainActor
     private func duplicateSelectedQueryType() async {
-        guard let selectedQueryTypeID, !isBuiltinQueriesSelected else { return }
+        guard let selectedQueryTypeID, !isAnyBuiltinSelected else { return }
 
         let trimmedQueryTypeName = duplicateQueryTypeName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedQueryTypeName.isEmpty else { return }
