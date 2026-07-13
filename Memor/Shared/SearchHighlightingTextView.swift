@@ -183,6 +183,11 @@ struct SearchQueryTextField: NSViewRepresentable {
         (textView as? SearchHighlightingTextView)?.onFocusChange = onFocusChange
         (textView as? SearchHighlightingTextView)?.onBacktab = onBacktab
         (textView as? SearchHighlightingTextView)?.onMoveDown = onMoveDown
+        if let highlightingTextView = textView as? SearchHighlightingTextView,
+           highlightingTextView.placeholderString != placeholder {
+            highlightingTextView.placeholderString = placeholder
+            highlightingTextView.needsDisplay = true
+        }
         if textView.string != text {
             textView.string = text
             context.coordinator.applySyntaxHighlighting()

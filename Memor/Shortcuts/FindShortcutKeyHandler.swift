@@ -4,7 +4,8 @@
 //
 //  Background NSEvent monitor that fires `onTriggered` when the user's
 //  `.findInList` shortcut is pressed while the hosting view's window is key.
-//  Used by list pages (Collections, Types) to focus their search box.
+//  Used by list pages (Collections, Types) and the Search window to focus
+//  their search box.
 //
 
 import AppKit

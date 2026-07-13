@@ -253,6 +253,11 @@ struct SearchWindowView: View {
         }
         .frame(minWidth: 560, minHeight: 520)
         .background(SearchWindowBacktabHandler { cycleMode() })
+        .background {
+            FindShortcutKeyHandler(shortcutSettings: shortcutSettings) {
+                searchFocusRequest = UUID()
+            }
+        }
         .task {
             await resetAndFocusSearch()
         }
@@ -370,11 +375,13 @@ struct SearchWindowView: View {
     }
 
     private var searchFieldPlaceholder: String {
+        let base: String
         switch windowState.mode {
-        case .instances: return "Search instances"
-        case .queries: return "Search queries"
-        case .pointsAndBoundaries: return "Search points & boundaries"
+        case .instances: base = "Search instances"
+        case .queries: base = "Search queries"
+        case .pointsAndBoundaries: base = "Search points and boundaries"
         }
+        return "\(base) (\(shortcutSettings.binding(for: .findInList).displayString))"
     }
 
     private var modeSwitcher: some View {
