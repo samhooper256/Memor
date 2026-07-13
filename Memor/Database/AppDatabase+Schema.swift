@@ -29,7 +29,8 @@ extension AppDatabase {
                     field_index INTEGER,
                     field_display_index INTEGER,
                     is_primary INTEGER NOT NULL DEFAULT 0,
-                    field_type TEXT NOT NULL DEFAULT 'text'
+                    field_type TEXT NOT NULL DEFAULT 'text',
+                    is_protected INTEGER NOT NULL DEFAULT 0
                 ) STRICT
                 """)
 
@@ -42,11 +43,6 @@ extension AppDatabase {
                     answer_html TEXT
                 ) STRICT
                 """)
-
-            try migrateFieldPrimaryColumn(db: db)
-            try migrateTypeDescriptionColumn(db: db)
-            try migrateFieldTypeColumn(db: db)
-            try migrateFieldProtectedColumn(db: db)
 
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS globals (
@@ -95,9 +91,6 @@ extension AppDatabase {
                 ) STRICT
                 """)
 
-            try migrateQueryStateColumn(db: db, table: "query")
-            try migrateQueryMaxIntervalColumn(db: db)
-
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS stack (
                     id INTEGER PRIMARY KEY,
@@ -107,9 +100,6 @@ extension AppDatabase {
                     is_pinned INTEGER NOT NULL DEFAULT 0
                 ) STRICT
                 """)
-
-            try migrateStackPinnedColumn(db: db)
-            try migrateStackDescriptionColumn(db: db)
 
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS image_file (
@@ -186,21 +176,14 @@ extension AppDatabase {
                 ) STRICT
                 """)
 
-            try migrateQueryStateColumn(db: db, table: "pointmap_point")
-            try migrateReverseQueryColumns(db: db, table: "pointmap_point")
-            try migratePointMapPointHintColumn(db: db)
-            try migratePointMapInstancePointSizeColumn(db: db)
-            try migratePointMapInstanceDescriptionColumn(db: db)
-
             try db.execute(sql: """
                 CREATE INDEX IF NOT EXISTS idx_pointmap_point_instance
                     ON pointmap_point(instance_id)
                 """)
 
             // Each point has 0, 1, or 2 first-class queries (one per direction).
-            // A row's existence == that direction being enabled. The legacy inline
-            // SRS columns on pointmap_point are now dormant; the one-time backfill
-            // below seeds this table from them.
+            // A row's existence == that direction being enabled. The inline SRS
+            // columns on pointmap_point are dormant legacy columns.
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS pointmap_query (
                     id INTEGER PRIMARY KEY,
@@ -218,8 +201,6 @@ extension AppDatabase {
                 CREATE INDEX IF NOT EXISTS idx_pointmap_query_point
                     ON pointmap_query(point_id)
                 """)
-
-            try backfillPointMapQueries(db: db)
 
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS boundary_set (
@@ -270,12 +251,7 @@ extension AppDatabase {
             // BoundaryMap mirrors PointMap: a boundarymap_attachment is the
             // linkable identity entity (its id is the stable attachmentID used in
             // links/previews), and boundarymap_query holds 0/1/2 first-class
-            // directional queries. Historically a single boundarymap_query table
-            // doubled as both; this one-time transform splits it, preserving the
-            // attachment ids. Must run BEFORE the unconditional CREATE statements
-            // below so the rename frees the boundarymap_query name first.
-            try migrateBoundaryMapQuerySplit(db: db)
-
+            // directional queries.
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS boundarymap_attachment (
                     id INTEGER PRIMARY KEY,
@@ -309,8 +285,6 @@ extension AppDatabase {
                 CREATE INDEX IF NOT EXISTS idx_boundarymap_query_attachment
                     ON boundarymap_query(attachment_id)
                 """)
-
-            try migrateBoundaryMapInstanceDescriptionColumn(db: db)
 
             // MARK: Person relationship tables
             //
@@ -529,19 +503,11 @@ extension AppDatabase {
                     query_state INTEGER NOT NULL DEFAULT 0
                 ) STRICT
                 """)
-            // Databases created before Offices existed lack office_id; must run
-            // before the index block below (the indexes reference the column).
-            try migratePersonQueryOfficeColumn(db: db)
             // SQLite UNIQUE treats NULLs as distinct, so a single
             // UNIQUE(instance_id, kind, partnership_id, office_id) would allow
             // duplicate rows; three partial unique indexes cover the three row
             // shapes (INSERT OR IGNORE respects partial unique indexes).
-            // The pre-Offices standalone index (WHERE partnership_id IS NULL
-            // only) would reject a second office row per instance, so it is
-            // dropped and replaced under a new name (idempotent every launch).
-            try db.execute(sql: """
-                DROP INDEX IF EXISTS idx_person_query_unique_standalone
-                """)
+            // (The standalone index's "2" suffix is historical.)
             try db.execute(sql: """
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_person_query_unique_standalone2
                     ON person_query(instance_id, kind)
@@ -697,157 +663,6 @@ extension AppDatabase {
         }
     }
 
-    // Idempotent: on a fresh DB the new column already exists and the legacy
-    // columns are absent, so every branch is a no-op. On a pre-existing DB the
-    // new column is added with default 0 and then existing rows are bumped to
-    // state 2 (treat the user's current corpus as already-learned), after
-    // which the legacy boolean columns are dropped.
-    private static func migrateQueryStateColumn(db: Database, table: String) throws {
-        let info = try Row.fetchAll(db, sql: "PRAGMA table_info(\"\(table)\")")
-        let names = Set(info.compactMap { $0["name"] as String? })
-
-        if !names.contains("query_state") {
-            try db.execute(sql: "ALTER TABLE \"\(table)\" ADD COLUMN query_state INTEGER NOT NULL DEFAULT 0")
-            try db.execute(sql: "UPDATE \"\(table)\" SET query_state = 2")
-        }
-        if names.contains("was_last_answer_correct") {
-            try db.execute(sql: "ALTER TABLE \"\(table)\" DROP COLUMN was_last_answer_correct")
-        }
-        if names.contains("has_been_answered_good_or_higher") {
-            try db.execute(sql: "ALTER TABLE \"\(table)\" DROP COLUMN has_been_answered_good_or_higher")
-        }
-    }
-
-    // Adds the forward/reverse query columns to a map-query table
-    // (pointmap_point or boundarymap_query) for databases created before reverse
-    // queries existed. Idempotent: each ALTER runs only when its column is
-    // absent, so this is a no-op on fresh installs. Existing rows default to
-    // forward_enabled = 1, reverse_enabled = 0 — all current queries are forward.
-    private static func migrateReverseQueryColumns(db: Database, table: String) throws {
-        let info = try Row.fetchAll(db, sql: "PRAGMA table_info(\"\(table)\")")
-        let names = Set(info.compactMap { $0["name"] as String? })
-
-        if !names.contains("forward_enabled") {
-            try db.execute(sql: "ALTER TABLE \"\(table)\" ADD COLUMN forward_enabled INTEGER NOT NULL DEFAULT 1")
-        }
-        if !names.contains("reverse_enabled") {
-            try db.execute(sql: "ALTER TABLE \"\(table)\" ADD COLUMN reverse_enabled INTEGER NOT NULL DEFAULT 0")
-        }
-        if !names.contains("reverse_interval") {
-            try db.execute(sql: "ALTER TABLE \"\(table)\" ADD COLUMN reverse_interval INTEGER NOT NULL DEFAULT 0")
-        }
-        if !names.contains("reverse_last_answered_timestamp") {
-            try db.execute(sql: "ALTER TABLE \"\(table)\" ADD COLUMN reverse_last_answered_timestamp INTEGER DEFAULT NULL")
-        }
-        if !names.contains("reverse_query_state") {
-            try db.execute(sql: "ALTER TABLE \"\(table)\" ADD COLUMN reverse_query_state INTEGER NOT NULL DEFAULT 0")
-        }
-    }
-
-    // Adds the is_pinned column to the stack table for databases created before
-    // stack pinning existed. Idempotent: the ALTER runs only when the column is
-    // absent, so this is a no-op on fresh installs. Existing rows default to
-    // is_pinned = 0 — i.e. unpinned.
-    // Adds the per-point hint column to databases created before point hints
-    // existed. Idempotent: the ALTER runs only when the column is absent, so it's
-    // a no-op on fresh installs. Existing rows default to '' (blank hint),
-    // preserving all points and their query state.
-    private static func migratePointMapPointHintColumn(db: Database) throws {
-        let info = try Row.fetchAll(db, sql: "PRAGMA table_info(\"pointmap_point\")")
-        let names = Set(info.compactMap { $0["name"] as String? })
-        if !names.contains("hint") {
-            try db.execute(sql: "ALTER TABLE \"pointmap_point\" ADD COLUMN hint TEXT NOT NULL DEFAULT ''")
-        }
-    }
-
-    // Adds the per-instance point_size column to pointmap_instance for databases
-    // created before the Point Size setting existed. Idempotent: the ALTER runs only
-    // when the column is absent. Existing rows default to 'medium' (= the historical
-    // fixed marker size), so they look identical to before.
-    private static func migratePointMapInstancePointSizeColumn(db: Database) throws {
-        let info = try Row.fetchAll(db, sql: "PRAGMA table_info(\"pointmap_instance\")")
-        let names = Set(info.compactMap { $0["name"] as String? })
-        if !names.contains("point_size") {
-            try db.execute(sql: "ALTER TABLE \"pointmap_instance\" ADD COLUMN point_size TEXT NOT NULL DEFAULT 'medium'")
-        }
-    }
-
-    // Adds the per-instance description column to pointmap_instance for databases
-    // created before instance descriptions existed. Idempotent: the ALTER runs only
-    // when the column is absent. Existing rows default to '' (blank note).
-    private static func migratePointMapInstanceDescriptionColumn(db: Database) throws {
-        let info = try Row.fetchAll(db, sql: "PRAGMA table_info(\"pointmap_instance\")")
-        let names = Set(info.compactMap { $0["name"] as String? })
-        if !names.contains("description") {
-            try db.execute(sql: "ALTER TABLE \"pointmap_instance\" ADD COLUMN description TEXT NOT NULL DEFAULT ''")
-        }
-    }
-
-    // Adds the per-instance description column to boundarymap_instance for databases
-    // created before instance descriptions existed. Idempotent: the ALTER runs only
-    // when the column is absent. Existing rows default to '' (blank note).
-    private static func migrateBoundaryMapInstanceDescriptionColumn(db: Database) throws {
-        let info = try Row.fetchAll(db, sql: "PRAGMA table_info(\"boundarymap_instance\")")
-        let names = Set(info.compactMap { $0["name"] as String? })
-        if !names.contains("description") {
-            try db.execute(sql: "ALTER TABLE \"boundarymap_instance\" ADD COLUMN description TEXT NOT NULL DEFAULT ''")
-        }
-    }
-
-    private static func migrateStackPinnedColumn(db: Database) throws {
-        let info = try Row.fetchAll(db, sql: "PRAGMA table_info(\"stack\")")
-        let names = Set(info.compactMap { $0["name"] as String? })
-        if !names.contains("is_pinned") {
-            try db.execute(sql: "ALTER TABLE \"stack\" ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0")
-        }
-    }
-
-    // Adds the description column to the stack table for databases created before
-    // stack descriptions existed. Idempotent: the ALTER runs only when the column is
-    // absent, so this is a no-op on fresh installs. Existing rows default to NULL,
-    // which fetchStacks coalesces to an empty string.
-    private static func migrateStackDescriptionColumn(db: Database) throws {
-        let info = try Row.fetchAll(db, sql: "PRAGMA table_info(\"stack\")")
-        let names = Set(info.compactMap { $0["name"] as String? })
-        if !names.contains("description") {
-            try db.execute(sql: "ALTER TABLE \"stack\" ADD COLUMN description TEXT")
-        }
-    }
-
-    // Adds the description column to the type table for databases created before
-    // type descriptions existed. Idempotent: the ALTER runs only when the column is
-    // absent, so this is a no-op on fresh installs. Existing rows default to NULL,
-    // which the type fetch SELECTs coalesce to an empty string.
-    private static func migrateTypeDescriptionColumn(db: Database) throws {
-        let info = try Row.fetchAll(db, sql: "PRAGMA table_info(\"type\")")
-        let names = Set(info.compactMap { $0["name"] as String? })
-        if !names.contains("description") {
-            try db.execute(sql: "ALTER TABLE \"type\" ADD COLUMN description TEXT")
-        }
-    }
-
-    // Adds the field.field_type column (text/boolean) to databases created before
-    // Boolean fields existed. Idempotent. Existing fields default to 'text', i.e.
-    // ordinary free-text fields, unchanged.
-    private static func migrateFieldTypeColumn(db: Database) throws {
-        let info = try Row.fetchAll(db, sql: "PRAGMA table_info(field)")
-        let names = Set(info.compactMap { $0["name"] as String? })
-        if !names.contains("field_type") {
-            try db.execute(sql: "ALTER TABLE field ADD COLUMN field_type TEXT NOT NULL DEFAULT 'text'")
-        }
-    }
-
-    // Adds the field.is_protected column (built-in Person fields that can't be
-    // renamed or deleted) to databases created before the Person type existed.
-    // Idempotent. Existing fields default to unprotected.
-    private static func migrateFieldProtectedColumn(db: Database) throws {
-        let info = try Row.fetchAll(db, sql: "PRAGMA table_info(field)")
-        let names = Set(info.compactMap { $0["name"] as String? })
-        if !names.contains("is_protected") {
-            try db.execute(sql: "ALTER TABLE field ADD COLUMN is_protected INTEGER NOT NULL DEFAULT 0")
-        }
-    }
-
     // Seeds the built-in Person type (idempotent, PointMap pattern): the type
     // row, its fields — deletable Name/Description plus protected
     // Sex/WhenBorn/WhenDied — the dynamic type{N} table, and one premade
@@ -920,249 +735,4 @@ extension AppDatabase {
         )
     }
 
-    // Adds the field.is_primary column to databases created before it existed.
-    // Idempotent: the ALTER runs only when the column is absent, so this is a
-    // no-op on fresh installs. is_primary marks the field that supplies an
-    // instance's display value (falling back to display order when unset).
-    private static func migrateFieldPrimaryColumn(db: Database) throws {
-        let fieldInfo = try Row.fetchAll(db, sql: "PRAGMA table_info(field)")
-        if !Set(fieldInfo.compactMap { $0["name"] as String? }).contains("is_primary") {
-            try db.execute(sql: "ALTER TABLE field ADD COLUMN is_primary INTEGER NOT NULL DEFAULT 0")
-        }
-    }
-
-    // MARK: - Node purge (one-time, destructive)
-
-    /// Destroys everything Node-related in a pre-existing database: all
-    /// `kind = 'node'` types (with their instances, fields, query types, and SRS
-    /// state), the `node_link` and `link_field` tables, `type.kind`, and
-    /// `query_type.link_field_id`. The Node feature was removed from the app.
-    ///
-    /// Must run BEFORE `createSchema` and outside its transaction:
-    /// `query_type.link_field_id` carries a foreign key, which makes plain
-    /// `DROP COLUMN` illegal, and `DROP TABLE query_type` with foreign keys ON
-    /// would fire the implicit-DELETE cascade and wipe every `query` row (all
-    /// SRS state). The only safe path is a rename/copy/drop rebuild under
-    /// `PRAGMA foreign_keys = OFF`, and that pragma cannot change inside a
-    /// transaction — hence `writeWithoutTransaction` with an explicit inner
-    /// transaction (a crash mid-purge rolls back and retries next launch).
-    ///
-    /// Idempotency is structural: every step is guarded by sqlite_master /
-    /// table_info checks, so fresh databases and already-purged databases no-op
-    /// before the pragma is touched.
-    static func purgeNodeMachinery(in dbQueue: DatabaseQueue) throws {
-        try dbQueue.writeWithoutTransaction { db in
-            let typeHasKind = try columnExists(db, table: "type", column: "kind")
-            let queryTypeHasLinkFieldID = try columnExists(db, table: "query_type", column: "link_field_id")
-            let hasNodeLinkTable = try tableExists(db, "node_link")
-            let hasLinkFieldTable = try tableExists(db, "link_field")
-            guard typeHasKind || queryTypeHasLinkFieldID || hasNodeLinkTable || hasLinkFieldTable else {
-                return
-            }
-
-            try db.execute(sql: "PRAGMA foreign_keys = OFF")
-            defer { try? db.execute(sql: "PRAGMA foreign_keys = ON") }
-
-            try db.inTransaction {
-                // 1. Destroy node types and everything hanging off them. Foreign
-                //    keys are OFF, so children are deleted explicitly, parents last.
-                if typeHasKind {
-                    let nodeTypeIDs = try Int64.fetchAll(
-                        db,
-                        sql: "SELECT id FROM \"type\" WHERE kind = 'node'"
-                    )
-                    if !nodeTypeIDs.isEmpty {
-                        let idList = nodeTypeIDs.map(String.init).joined(separator: ", ")
-                        try db.execute(sql: """
-                            DELETE FROM query WHERE query_type_id IN
-                                (SELECT id FROM query_type WHERE type_id IN (\(idList)))
-                            """)
-                        try db.execute(sql: """
-                            DELETE FROM query WHERE instance_id IN
-                                (SELECT instance_id FROM instance_id_type_id WHERE type_id IN (\(idList)))
-                            """)
-                        try db.execute(sql: """
-                            DELETE FROM instance_id_collection_id WHERE instance_id IN
-                                (SELECT instance_id FROM instance_id_type_id WHERE type_id IN (\(idList)))
-                            """)
-                        try db.execute(sql: "DELETE FROM instance_id_type_id WHERE type_id IN (\(idList))")
-                        if try tableExists(db, "type_query_default") {
-                            try db.execute(sql: "DELETE FROM type_query_default WHERE type_id IN (\(idList))")
-                        }
-                        try db.execute(sql: "DELETE FROM query_type WHERE type_id IN (\(idList))")
-                        try db.execute(sql: "DELETE FROM field WHERE type_id IN (\(idList))")
-                        if try tableExists(db, "sticky_field") {
-                            try db.execute(sql: "DELETE FROM sticky_field WHERE type_id IN (\(idList))")
-                        }
-                        if try tableExists(db, "pinned_collection") {
-                            try db.execute(sql: "DELETE FROM pinned_collection WHERE type_id IN (\(idList))")
-                        }
-                        for typeID in nodeTypeIDs {
-                            try db.execute(sql: "DROP TABLE IF EXISTS \"type\(typeID)\"")
-                        }
-                        try db.execute(sql: "DELETE FROM \"type\" WHERE id IN (\(idList))")
-                    }
-                }
-                try db.execute(sql: "DROP TABLE IF EXISTS node_link")
-
-                // 2. Rebuild query_type without link_field_id. The DROP does not
-                //    cascade into `query` (foreign keys OFF), and query's FK clause
-                //    references "query_type" by name, which the RENAME restores.
-                if queryTypeHasLinkFieldID {
-                    try db.execute(sql: """
-                        CREATE TABLE query_type_new (
-                            id INTEGER PRIMARY KEY,
-                            type_id INTEGER NOT NULL REFERENCES "type"(id),
-                            name TEXT,
-                            question_html TEXT,
-                            answer_html TEXT
-                        ) STRICT
-                        """)
-                    try db.execute(sql: """
-                        INSERT INTO query_type_new (id, type_id, name, question_html, answer_html)
-                        SELECT id, type_id, name, question_html, answer_html FROM query_type
-                        """)
-                    try db.execute(sql: "DROP TABLE query_type")
-                    try db.execute(sql: "ALTER TABLE query_type_new RENAME TO query_type")
-                }
-                try db.execute(sql: "DROP TABLE IF EXISTS link_field")
-
-                // 3. type.kind is a plain column (no index, CHECK, or FK), so a
-                //    straight DROP COLUMN is legal even on a STRICT table.
-                if typeHasKind {
-                    try db.execute(sql: "ALTER TABLE \"type\" DROP COLUMN kind")
-                }
-
-                // 4. Refuse to commit a purge that broke referential integrity.
-                let violations = try Row.fetchAll(db, sql: "PRAGMA foreign_key_check")
-                guard violations.isEmpty else {
-                    throw DatabaseError(message: "Node purge failed the foreign-key integrity check.")
-                }
-                return .commit
-            }
-        }
-    }
-
-    private static func tableExists(_ db: Database, _ name: String) throws -> Bool {
-        try Int.fetchOne(
-            db,
-            sql: "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
-            arguments: [name]
-        ) ?? 0 > 0
-    }
-
-    private static func columnExists(_ db: Database, table: String, column: String) throws -> Bool {
-        let info = try Row.fetchAll(db, sql: "PRAGMA table_info(\"\(table)\")")
-        return Set(info.compactMap { $0["name"] as String? }).contains(column)
-    }
-
-    // Adds the nullable max_interval column to the query table for databases
-    // created before max_interval existed. No-op on fresh installs.
-    private static func migrateQueryMaxIntervalColumn(db: Database) throws {
-        let info = try Row.fetchAll(db, sql: "PRAGMA table_info(\"query\")")
-        let names = Set(info.compactMap { $0["name"] as String? })
-        if !names.contains("max_interval") {
-            try db.execute(sql: "ALTER TABLE \"query\" ADD COLUMN max_interval INTEGER DEFAULT NULL")
-        }
-    }
-
-    // Adds the nullable office_id column to person_query for databases created
-    // before Offices existed (SQLite permits ALTER ... ADD COLUMN with a
-    // REFERENCES clause when the default is NULL). Existing rows stay NULL, so
-    // every pre-existing query is untouched. No-op on fresh installs.
-    private static func migratePersonQueryOfficeColumn(db: Database) throws {
-        if try !columnExists(db, table: "person_query", column: "office_id") {
-            try db.execute(sql: """
-                ALTER TABLE "person_query" ADD COLUMN office_id INTEGER
-                    REFERENCES office(id) ON DELETE CASCADE
-                """)
-        }
-    }
-
-    // One-time backfill: seed pointmap_query from the legacy inline SRS columns on
-    // pointmap_point. Guarded by a globals flag so it runs exactly once — otherwise
-    // a direction the user later disables (its query row deleted) would be
-    // resurrected from the still-present inline columns on the next launch. After
-    // this runs, pointmap_query is the sole source of truth for point queries.
-    private static func backfillPointMapQueries(db: Database) throws {
-        let alreadyDone = try String.fetchOne(
-            db,
-            sql: "SELECT value FROM globals WHERE name = 'pointmap_query_backfill_done'"
-        ) != nil
-        guard !alreadyDone else { return }
-
-        try db.execute(sql: """
-            INSERT INTO pointmap_query (point_id, is_reverse, interval, last_answered_timestamp, query_state)
-            SELECT id, 0, interval, last_answered_timestamp, query_state
-            FROM pointmap_point WHERE forward_enabled = 1
-            """)
-        try db.execute(sql: """
-            INSERT INTO pointmap_query (point_id, is_reverse, interval, last_answered_timestamp, query_state)
-            SELECT id, 1, reverse_interval, reverse_last_answered_timestamp, reverse_query_state
-            FROM pointmap_point WHERE reverse_enabled = 1
-            """)
-        try db.execute(sql: "INSERT INTO globals (name, value) VALUES ('pointmap_query_backfill_done', '1')")
-    }
-
-    // One-time split of the legacy boundarymap_query table (which doubled as both
-    // the attachment identity and the inline forward/reverse SRS holder) into a
-    // boundarymap_attachment identity table plus a per-direction boundarymap_query.
-    // Existing ids are preserved as attachment ids so links/previews keep working.
-    // Detected via the old-only `reverse_interval` column; guarded by a globals
-    // flag. No-op on fresh installs and on every subsequent launch.
-    private static func migrateBoundaryMapQuerySplit(db: Database) throws {
-        let info = try Row.fetchAll(db, sql: "PRAGMA table_info(boundarymap_query)")
-        let columns = Set(info.compactMap { $0["name"] as String? })
-        let isLegacyShape = columns.contains("reverse_interval")
-        guard isLegacyShape else { return }
-
-        let alreadyDone = try String.fetchOne(
-            db,
-            sql: "SELECT value FROM globals WHERE name = 'boundarymap_query_split_done'"
-        ) != nil
-        guard !alreadyDone else { return }
-
-        try db.execute(sql: "ALTER TABLE boundarymap_query RENAME TO boundarymap_query_legacy")
-
-        try db.execute(sql: """
-            CREATE TABLE boundarymap_attachment (
-                id INTEGER PRIMARY KEY,
-                instance_id INTEGER NOT NULL
-                    REFERENCES boundarymap_instance(instance_id) ON DELETE CASCADE,
-                boundary_id INTEGER NOT NULL
-                    REFERENCES boundary(id) ON DELETE CASCADE,
-                UNIQUE(instance_id, boundary_id)
-            ) STRICT
-            """)
-        try db.execute(sql: """
-            INSERT INTO boundarymap_attachment (id, instance_id, boundary_id)
-            SELECT id, instance_id, boundary_id FROM boundarymap_query_legacy
-            """)
-
-        try db.execute(sql: """
-            CREATE TABLE boundarymap_query (
-                id INTEGER PRIMARY KEY,
-                attachment_id INTEGER NOT NULL
-                    REFERENCES boundarymap_attachment(id) ON DELETE CASCADE,
-                is_reverse INTEGER NOT NULL,
-                interval INTEGER NOT NULL DEFAULT 0,
-                last_answered_timestamp INTEGER DEFAULT NULL,
-                query_state INTEGER NOT NULL DEFAULT 0,
-                UNIQUE(attachment_id, is_reverse)
-            ) STRICT
-            """)
-        try db.execute(sql: """
-            INSERT INTO boundarymap_query (attachment_id, is_reverse, interval, last_answered_timestamp, query_state)
-            SELECT id, 0, interval, last_answered_timestamp, query_state
-            FROM boundarymap_query_legacy WHERE forward_enabled = 1
-            """)
-        try db.execute(sql: """
-            INSERT INTO boundarymap_query (attachment_id, is_reverse, interval, last_answered_timestamp, query_state)
-            SELECT id, 1, reverse_interval, reverse_last_answered_timestamp, reverse_query_state
-            FROM boundarymap_query_legacy WHERE reverse_enabled = 1
-            """)
-
-        try db.execute(sql: "DROP TABLE boundarymap_query_legacy")
-        try db.execute(sql: "INSERT INTO globals (name, value) VALUES ('boundarymap_query_split_done', '1')")
-    }
 }
