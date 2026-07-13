@@ -75,7 +75,7 @@ struct CollectionsPageView: View {
                             }
                             .buttonStyle(.borderedProminent)
 
-                            TextField("Search collections", text: $searchText)
+                            TextField("Search collections (⌘F)", text: $searchText)
                                 .solidFocusField()
                                 .focused($isSearchFocused)
                                 .frame(maxWidth: .infinity)
@@ -139,9 +139,13 @@ struct CollectionsPageView: View {
             guard selectedCollection == nil else { return }
             await loadCollections()
             // When the list page is shown (tab switch or back-from-detail):
-            // select the first collection and focus the search box.
+            // select the first collection and focus the search box. Focus must
+            // be set after the loaded collections commit — the list swaps its
+            // empty-state branch for the rows in that update, and a focus set
+            // bundled into the same transaction is dropped.
             if selectedCollection == nil {
                 highlightedCollectionID = filteredCollections.first?.id
+                try? await Task.sleep(for: .milliseconds(50))
                 isSearchFocused = true
             }
         }
