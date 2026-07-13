@@ -198,7 +198,7 @@ struct SettingsWindowView: View {
 
     @ViewBuilder
     private var dataStorageSection: some View {
-        Text("The SQLite database file where all Memor data is stored.")
+        Text("This is the SQLite database file where all your Memor data is stored.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
