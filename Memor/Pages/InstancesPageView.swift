@@ -71,18 +71,23 @@ struct InstancesPageView: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     } else if selectedType != nil, let pageData {
                         VStack(alignment: .leading, spacing: 8) {
-                            SearchQueryTextField("Search instances", text: $searchQuery, focusRequest: searchFocusRequest)
-                                .searchCodeEditorStyle()
+                            // Indented to match the Table's built-in leading
+                            // content inset, so these align with the row text.
+                            Group {
+                                SearchQueryTextField("Search instances", text: $searchQuery, focusRequest: searchFocusRequest)
+                                    .searchCodeEditorStyle()
 
-                            if let searchErrorMessage {
-                                Text(searchErrorMessage)
+                                if let searchErrorMessage {
+                                    Text(searchErrorMessage)
+                                        .font(.subheadline)
+                                        .foregroundStyle(.red)
+                                }
+
+                                Text(resultsCountText(for: pageData))
                                     .font(.subheadline)
-                                    .foregroundStyle(.red)
+                                    .foregroundStyle(.secondary)
                             }
-
-                            Text(resultsCountText(for: pageData))
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                            .padding(.leading, 16)
 
                             TypeInstancesTableView(
                                 pageData: pageData,
