@@ -2,9 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Fill in the 10-character Team ID from developer.apple.com → Membership. -->
 	<key>teamID</key>
-	<string>TEAM_ID_PLACEHOLDER</string>
+	<string>4A6G9YXAJT</string>
 	<key>method</key>
 	<string>app-store-connect</string>
 	<key>destination</key>
