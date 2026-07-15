@@ -35,21 +35,35 @@ struct FlowLayout: Layout {
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) {
-        let maxX = bounds.maxX
-        var x = bounds.minX
         var y = bounds.minY
-        var rowHeight: CGFloat = 0
+        var row: [(subview: LayoutSubview, size: CGSize)] = []
+        var rowWidth: CGFloat = 0
+
+        // Rows are gathered before placing so mixed-height content (caption
+        // labels next to taller chips) can be vertically centered per row.
+        func placeRow() {
+            let rowHeight = row.map(\.size.height).max() ?? 0
+            var x = bounds.minX
+            for (subview, size) in row {
+                subview.place(
+                    at: CGPoint(x: x, y: y + (rowHeight - size.height) / 2),
+                    proposal: ProposedViewSize(size)
+                )
+                x += size.width + spacing
+            }
+            y += rowHeight + spacing
+            row = []
+            rowWidth = 0
+        }
 
         for subview in subviews {
             let size = subview.sizeThatFits(.unspecified)
-            if x + size.width > maxX, x > bounds.minX {
-                x = bounds.minX
-                y += rowHeight + spacing
-                rowHeight = 0
+            if rowWidth + size.width > bounds.width, !row.isEmpty {
+                placeRow()
             }
-            subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
+            row.append((subview, size))
+            rowWidth += size.width + spacing
         }
+        placeRow()
     }
 }

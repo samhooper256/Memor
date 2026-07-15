@@ -141,35 +141,30 @@ struct PersonOfficesEditor: View {
     }
 
     private func successionRow(title: String, ids: Binding<[Int64]>) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                Text(title)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                PersonAddButton(
-                    appDatabase: appDatabase,
-                    excludingInstanceID: draft.loadedInstanceID,
-                    alreadySelected: Set(ids.wrappedValue),
-                    allowsBareNames: false,
-                    onSelectInstance: { candidate in
-                        draft.personDisplayNamesByID[candidate.id] = candidate.displayValue
-                        draft.personSexesByID[candidate.id] = candidate.sex
-                        ids.wrappedValue.append(candidate.id)
-                    },
-                    onSelectBareName: { _ in }
+        // One flow: the title, Add button, and chips share the first line and
+        // only wrap when the card runs out of width.
+        FlowLayout(spacing: 6) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            PersonAddButton(
+                appDatabase: appDatabase,
+                excludingInstanceID: draft.loadedInstanceID,
+                alreadySelected: Set(ids.wrappedValue),
+                allowsBareNames: false,
+                onSelectInstance: { candidate in
+                    draft.personDisplayNamesByID[candidate.id] = candidate.displayValue
+                    draft.personSexesByID[candidate.id] = candidate.sex
+                    ids.wrappedValue.append(candidate.id)
+                },
+                onSelectBareName: { _ in }
+            )
+            ForEach(ids.wrappedValue, id: \.self) { personID in
+                PersonChip(
+                    label: personLabel(personID),
+                    isBareName: false,
+                    onRemove: { ids.wrappedValue.removeAll { $0 == personID } }
                 )
-            }
-
-            if !ids.wrappedValue.isEmpty {
-                FlowLayout(spacing: 6) {
-                    ForEach(ids.wrappedValue, id: \.self) { personID in
-                        PersonChip(
-                            label: personLabel(personID),
-                            isBareName: false,
-                            onRemove: { ids.wrappedValue.removeAll { $0 == personID } }
-                        )
-                    }
-                }
             }
         }
     }
