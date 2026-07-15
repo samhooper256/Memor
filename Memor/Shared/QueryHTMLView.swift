@@ -145,6 +145,24 @@ private func substitutingPersonOffices(
 let localImageResourceScheme = "flashcards-local-image"
 let instanceLinkScheme = "id"
 
+/// The single ephemeral data store shared by every WKWebView in the app (still
+/// non-persistent — nothing touches disk). Each `WKWebsiteDataStore.nonPersistent()`
+/// call mints a distinct store with its own networking session and defeats WebKit's
+/// web-content-process reuse, so per-view stores made every card/preview spawn fresh
+/// helper processes — each spawn logging a burst of sandbox XPC-denial noise.
+let sharedEphemeralWebsiteDataStore = WKWebsiteDataStore.nonPersistent()
+
+/// Configuration shared by all of Memor's WKWebViews, which only ever render
+/// locally generated HTML: the shared ephemeral data store, and no Safari
+/// safe-browsing lookups (external links open in the default browser anyway;
+/// the lookups just fail against the sandbox and log SafariSafeBrowsing errors).
+func makeLocalContentWebViewConfiguration() -> WKWebViewConfiguration {
+    let configuration = WKWebViewConfiguration()
+    configuration.websiteDataStore = sharedEphemeralWebsiteDataStore
+    configuration.preferences.isFraudulentWebsiteWarningEnabled = false
+    return configuration
+}
+
 func parseLinkedInstanceID(from url: URL) -> Int64? {
     guard url.scheme?.lowercased() == instanceLinkScheme else { return nil }
     let prefix = "\(instanceLinkScheme):"
@@ -275,8 +293,7 @@ final class QueryWebContainerView: NSView {
     }
 
     init(disableUserInteraction: Bool = false) {
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .nonPersistent()
+        let configuration = makeLocalContentWebViewConfiguration()
         configuration.setURLSchemeHandler(imageSchemeHandler, forURLScheme: localImageResourceScheme)
         if disableUserInteraction {
             webView = NonFirstResponderWKWebView(frame: .zero, configuration: configuration)

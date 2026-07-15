@@ -72,8 +72,7 @@ final class PreviewWebContainerView: NSView {
     private let imageSchemeHandler = LocalImageURLSchemeHandler()
 
     override init(frame frameRect: NSRect) {
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .nonPersistent()
+        let configuration = makeLocalContentWebViewConfiguration()
         configuration.preferences.isTextInteractionEnabled = true
         configuration.setURLSchemeHandler(imageSchemeHandler, forURLScheme: localImageResourceScheme)
         webView = WKWebView(frame: .zero, configuration: configuration)

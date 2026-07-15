@@ -80,8 +80,7 @@ private struct GraphWebView: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> WKWebView {
-        let config = WKWebViewConfiguration()
-        config.websiteDataStore = .nonPersistent()
+        let config = makeLocalContentWebViewConfiguration()
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
         webView.navigationDelegate = context.coordinator
