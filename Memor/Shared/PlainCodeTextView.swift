@@ -121,6 +121,9 @@ struct PlainCodeTextView: NSViewRepresentable {
 
         if textView.string != text {
             textView.string = text
+            // External reset (switching query types, Question/Answer, or type detail pages)
+            // invalidates undo entries' ranges into the old text.
+            textView.undoManager?.removeAllActions()
             context.coordinator.applySyntaxHighlighting()
         }
 
