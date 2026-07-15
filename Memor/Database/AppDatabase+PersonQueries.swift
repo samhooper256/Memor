@@ -817,6 +817,18 @@ extension AppDatabase {
         personID: Int64,
         officeID: Int64
     ) throws -> String {
+        let selfLink = try personEntryHTML(db: db, ref: .instance(personID))
+        return try officeSuccessionRowHTML(db: db, personID: personID, officeID: officeID, centerHTML: selfLink)
+    }
+
+    /// One 20%/60%/20% three-panel succession row for (person, office):
+    /// predecessors | centerHTML | successors, with N/A on empty sides.
+    private nonisolated static func officeSuccessionRowHTML(
+        db: Database,
+        personID: Int64,
+        officeID: Int64,
+        centerHTML: String
+    ) throws -> String {
         let peers = try fetchOfficeSuccessionPeers(db: db, instanceID: personID, officeID: officeID)
 
         func panel(_ ids: [Int64]) throws -> String {
@@ -824,14 +836,68 @@ extension AppDatabase {
             return personAnswerLines(try ids.map { try personEntryHTML(db: db, ref: .instance($0)) })
         }
 
-        let selfLink = try personEntryHTML(db: db, ref: .instance(personID))
         return """
             <div class="office-succession">
                 <div class="office-succession-panel office-succession-preds">\(try panel(peers.predecessors))</div>
-                <div class="office-succession-panel office-succession-holder">\(selfLink)</div>
+                <div class="office-succession-panel office-succession-holder">\(centerHTML)</div>
                 <div class="office-succession-panel office-succession-succs">\(try panel(peers.successors))</div>
             </div>
             """
+    }
+
+    // MARK: The `_offices` element (user-defined Person query HTML)
+
+    /// User-authored Person query HTML support: replaces the CONTENTS of every
+    /// element with id "_offices" with one .office-succession row per office
+    /// the person holds, in the person's own office order. Unlike the built-in
+    /// per-office answer, the middle panel shows "Office: began–ended" (just
+    /// the name when both dates are blank) instead of the person's name; the
+    /// side panels are the office's predecessors/successors as usual. The
+    /// element's own tag and attributes are kept so it can be styled. Called
+    /// by buildRenderedQuestionHTML/buildRenderedAnswerHTML for every Person
+    /// query, so it works in Study mode, Query Preview, and MCP render_query.
+    func renderPersonOfficesElements(in html: String, instanceID: Int64) throws -> String {
+        try dbQueue.read { db in
+            try Self.substitutePersonOfficesElements(db: db, html: html, instanceID: instanceID)
+        }
+    }
+
+    private nonisolated static func substitutePersonOfficesElements(
+        db: Database,
+        html: String,
+        instanceID: Int64
+    ) throws -> String {
+        // Groups: 1 = opening tag, 2 = tag name, 3 = contents, 4 = closing tag.
+        // Non-greedy contents match: an element nesting its own tag name inside
+        // (e.g. a div inside the _offices div) is not supported.
+        let pattern = "(<([a-zA-Z][a-zA-Z0-9]*)\\b[^>]*\\bid\\s*=\\s*[\"']_offices[\"'][^>]*>)([\\s\\S]*?)(</\\2\\s*>)"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return html }
+
+        let nsHTML = html as NSString
+        let matches = regex.matches(in: html, range: NSRange(location: 0, length: nsHTML.length))
+        guard !matches.isEmpty else { return html }
+
+        let contents = try personOfficesElementContents(db: db, personID: instanceID)
+        var result = html
+        // Replace from the end so earlier match ranges stay valid as we mutate.
+        for match in matches.reversed() {
+            guard let contentRange = Range(match.range(at: 3), in: result) else { continue }
+            result.replaceSubrange(contentRange, with: contents)
+        }
+        return result
+    }
+
+    private nonisolated static func personOfficesElementContents(db: Database, personID: Int64) throws -> String {
+        let holdings = try fetchPersonOfficeHoldings(db: db, instanceID: personID)
+        return try holdings.map { holding -> String in
+            let began = holding.whenBegan.trimmingCharacters(in: .whitespacesAndNewlines)
+            let ended = holding.whenEnded.trimmingCharacters(in: .whitespacesAndNewlines)
+            let center = (began.isEmpty && ended.isEmpty)
+                ? holding.officeName
+                : "\(holding.officeName): \(began)–\(ended)"
+            return try officeSuccessionRowHTML(db: db, personID: personID, officeID: holding.officeID, centerHTML: center)
+        }
+        .joined(separator: "\n")
     }
 
     /// The All Offices answer: the office question template rendered once per

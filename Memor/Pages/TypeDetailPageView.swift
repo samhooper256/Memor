@@ -69,6 +69,7 @@ struct TypeDetailPageView: View {
     // Person only
     @State private var personResetOnConnectionChange = false
     @State private var isPersonResetInfoPopoverPresented = false
+    @State private var isPersonOfficesElementInfoPopoverPresented = false
     /// Live copy of the customizable built-in-query "details" HTML (Person only).
     @State private var personBuiltinQueryHTML = ""
     /// Live copy of the per-office question template HTML (Person only).
@@ -731,6 +732,27 @@ struct TypeDetailPageView: View {
                                 ) {
                                     selectedHTMLContentMode = .answer
                                 }
+                            }
+
+                            if type.isPerson, !isAnyBuiltinSelected {
+                                Button {
+                                    isPersonOfficesElementInfoPopoverPresented = true
+                                } label: {
+                                    Image(systemName: "questionmark.circle")
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.borderless)
+                                .popover(isPresented: $isPersonOfficesElementInfoPopoverPresented, arrowEdge: .bottom) {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text("The _offices element")
+                                            .font(.headline)
+                                        Text("In a Person query's HTML, an element with the id _offices—for example <div id=\"_offices\"></div>—has its contents replaced when the query renders. The replacement is one three-panel succession row per office this person holds, in the person's office order. The left and right panels list the office's predecessors and successors. The middle panel shows the office name, a colon, and the held period—not the person's name. Style the rows with the .office-succession CSS classes. The preview on this page renders no specific person, so the element is left as typed here.")
+                                            .font(.callout)
+                                    }
+                                    .frame(width: 360, alignment: .leading)
+                                    .padding(12)
+                                }
+                                .help("Person query HTML features")
                             }
                         }
 

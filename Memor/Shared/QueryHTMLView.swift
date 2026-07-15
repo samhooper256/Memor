@@ -93,12 +93,15 @@ func buildRenderedQuestionHTML(appDatabase: AppDatabase, query: StudyQuery) thro
         questionHTML: query.questionHTML,
         instanceID: query.instanceID
     )
+    let (substitutedHTML, typeCSS) = try substitutingPersonOffices(
+        appDatabase: appDatabase, query: query, html: previewHTML
+    )
     let renderedHTML = renderQueryHTMLTemplate(
-        previewHTML,
+        substitutedHTML,
         fieldValuesByName: query.fieldValuesByName,
         booleanFieldNames: query.booleanFieldNames
     )
-    return try injectQueryCSS(into: renderedHTML, appDatabase: appDatabase, typeCSS: query.typeCSS)
+    return try injectQueryCSS(into: renderedHTML, appDatabase: appDatabase, typeCSS: typeCSS)
 }
 
 func buildRenderedAnswerHTML(appDatabase: AppDatabase, query: StudyQuery) throws -> String {
@@ -108,12 +111,36 @@ func buildRenderedAnswerHTML(appDatabase: AppDatabase, query: StudyQuery) throws
         answerHTML: query.answerHTML,
         instanceID: query.instanceID
     )
+    let (substitutedHTML, typeCSS) = try substitutingPersonOffices(
+        appDatabase: appDatabase, query: query, html: previewHTML
+    )
     let renderedHTML = renderQueryHTMLTemplate(
-        previewHTML,
+        substitutedHTML,
         fieldValuesByName: query.fieldValuesByName,
         booleanFieldNames: query.booleanFieldNames
     )
-    return try injectQueryCSS(into: renderedHTML, appDatabase: appDatabase, typeCSS: query.typeCSS)
+    return try injectQueryCSS(into: renderedHTML, appDatabase: appDatabase, typeCSS: typeCSS)
+}
+
+/// `_offices` support for Person queries: elements with id "_offices" in the
+/// authored HTML get their contents replaced with per-office succession rows
+/// (see AppDatabase.renderPersonOfficesElements). Returns the html and the
+/// typeCSS to inject — a standard Person query's typeCSS lacks the built-in
+/// default CSS that styles the generated .office-succession/.person-* markup,
+/// so it is prepended here (built-in Person queries already carry it).
+private func substitutingPersonOffices(
+    appDatabase: AppDatabase,
+    query: StudyQuery,
+    html: String
+) throws -> (html: String, typeCSS: String) {
+    guard query.typeName == PERSON_TYPE_NAME, html.contains("_offices") else {
+        return (html, query.typeCSS)
+    }
+    let substituted = try appDatabase.renderPersonOfficesElements(in: html, instanceID: query.instanceID)
+    let typeCSS = query.personQueryKind == nil
+        ? AppDatabase.personBuiltinQueryDefaultCSS + "\n\n" + query.typeCSS
+        : query.typeCSS
+    return (substituted, typeCSS)
 }
 let localImageResourceScheme = "flashcards-local-image"
 let instanceLinkScheme = "id"
