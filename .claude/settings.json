@@ -23,7 +23,9 @@
       "Bash(diff:*)",
       "Bash(cd:*)",
       "Bash(echo:*)",
+      "Bash(printf:*)",
       "Bash(sqlite3:*)",
+      "Bash(lsof:*)",
       "Bash(xcodebuild:*)",
       "Read(//tmp/**)",
       "Read(//private/tmp/**)"
