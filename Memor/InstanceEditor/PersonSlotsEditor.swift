@@ -451,6 +451,9 @@ struct PersonAddButton: View {
                 onSelectBareName: { name in
                     onSelectBareName(name)
                     isPickerPresented = false
+                },
+                onCancel: {
+                    isPickerPresented = false
                 }
             )
         }
@@ -464,6 +467,7 @@ private struct PersonPickerPopover: View {
     var allowsBareNames = true
     let onSelectInstance: (PersonCandidate) -> Void
     let onSelectBareName: (String) -> Void
+    let onCancel: () -> Void
 
     @State private var searchText = ""
     @State private var results: [PersonCandidate] = []
@@ -494,7 +498,8 @@ private struct PersonPickerPopover: View {
                 isFocused: $isSearchFieldFocused,
                 onMoveDown: moveHighlightDown,
                 onMoveUp: moveHighlightUp,
-                onSubmit: chooseHighlightedRow
+                onSubmit: chooseHighlightedRow,
+                onCancel: onCancel
             )
             .solidFocusFieldChrome(isFocused: isSearchFieldFocused)
 
@@ -638,6 +643,7 @@ private struct PersonPickerSearchField: NSViewRepresentable {
     let onMoveDown: () -> Void
     let onMoveUp: () -> Void
     let onSubmit: () -> Void
+    let onCancel: () -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -645,7 +651,8 @@ private struct PersonPickerSearchField: NSViewRepresentable {
             isFocused: $isFocused,
             onMoveDown: onMoveDown,
             onMoveUp: onMoveUp,
-            onSubmit: onSubmit
+            onSubmit: onSubmit,
+            onCancel: onCancel
         )
     }
 
@@ -671,6 +678,7 @@ private struct PersonPickerSearchField: NSViewRepresentable {
         context.coordinator.onMoveDown = onMoveDown
         context.coordinator.onMoveUp = onMoveUp
         context.coordinator.onSubmit = onSubmit
+        context.coordinator.onCancel = onCancel
     }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
@@ -679,19 +687,22 @@ private struct PersonPickerSearchField: NSViewRepresentable {
         var onMoveDown: () -> Void
         var onMoveUp: () -> Void
         var onSubmit: () -> Void
+        var onCancel: () -> Void
 
         init(
             text: Binding<String>,
             isFocused: Binding<Bool>,
             onMoveDown: @escaping () -> Void,
             onMoveUp: @escaping () -> Void,
-            onSubmit: @escaping () -> Void
+            onSubmit: @escaping () -> Void,
+            onCancel: @escaping () -> Void
         ) {
             _text = text
             _isFocused = isFocused
             self.onMoveDown = onMoveDown
             self.onMoveUp = onMoveUp
             self.onSubmit = onSubmit
+            self.onCancel = onCancel
         }
 
         func setFocused(_ focused: Bool) {
@@ -721,6 +732,16 @@ private struct PersonPickerSearchField: NSViewRepresentable {
                 || selector == #selector(NSResponder.insertLineBreak(_:))
                 || selector == #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)) {
                 onSubmit()
+                return true
+            }
+            // Escape must be consumed HERE: a popover's responder chain
+            // continues into the anchor view's window, so an unhandled
+            // cancelOperation reaches the editor window's onExitCommand and
+            // closes the whole editor instead of just this popup. (Esc can
+            // also arrive as complete: in a field editor.)
+            if selector == #selector(NSResponder.cancelOperation(_:))
+                || selector == #selector(NSStandardKeyBindingResponding.complete(_:)) {
+                onCancel()
                 return true
             }
             return false
