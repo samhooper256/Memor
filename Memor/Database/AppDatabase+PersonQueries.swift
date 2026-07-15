@@ -546,7 +546,7 @@ extension AppDatabase {
         .person-parent-label { color: gray; }
         .person-children-group { margin: 4px 0; }
         .person-children-group-title { color: gray; }
-        .office-succession { display: flex; align-items: stretch; text-align: center; }
+        .office-succession { width: 100%; display: flex; align-items: stretch; text-align: center; }
         .office-succession-preds, .office-succession-succs { flex: 0 0 20%; }
         .office-succession-holder { flex: 0 0 60%; border-left: 1px solid white; border-right: 1px solid white; }
         """
