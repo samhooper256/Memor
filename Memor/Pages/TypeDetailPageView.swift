@@ -540,7 +540,12 @@ struct TypeDetailPageView: View {
 
     private var queryTypesToolbar: some View {
         HStack(spacing: 12) {
-                        if showsQueryTypesSection {
+                        // The nil check keeps the Picker unmounted for the first frames of a
+                        // Person page, before loadTypeDetails() sets the selection — a Picker
+                        // whose optional selection is nil (no matching tag) logs a SwiftUI
+                        // "Invalid Configuration" fault. Post-load, nil implies the section
+                        // is hidden anyway (deletion falls back to the built-in sentinel).
+                        if showsQueryTypesSection, selectedQueryTypeID != nil {
                             Picker("Edit Query Type:", selection: $selectedQueryTypeID) {
                                 if type.isPerson {
                                     Text("Built-in Relationship Queries")
