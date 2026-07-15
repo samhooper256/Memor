@@ -467,57 +467,66 @@ private struct PersonPickerPopover: View {
 
     @State private var searchText = ""
     @State private var results: [PersonCandidate] = []
+    @State private var highlightedRowID: String?
+    @State private var isSearchFieldFocused = false
+
+    /// Row id of the "Add as name" row (candidate rows use the instance id).
+    private static let bareNameRowID = "bare"
+
+    private var trimmedSearchText: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Rows the arrow keys traverse, top to bottom: selectable candidates
+    /// (already-used ones are skipped) then the "Add as name" row.
+    private var navigableRowIDs: [String] {
+        var ids = results.filter { !alreadySelected.contains($0.id) }.map { String($0.id) }
+        if allowsBareNames, !trimmedSearchText.isEmpty {
+            ids.append(Self.bareNameRowID)
+        }
+        return ids
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField("Search people…", text: $searchText)
-                .solidFocusField()
+            PersonPickerSearchField(
+                text: $searchText,
+                isFocused: $isSearchFieldFocused,
+                onMoveDown: moveHighlightDown,
+                onMoveUp: moveHighlightUp,
+                onSubmit: chooseHighlightedRow
+            )
+            .solidFocusFieldChrome(isFocused: isSearchFieldFocused)
 
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if results.isEmpty {
-                        Text("No matching people.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(.vertical, 6)
-                    } else {
-                        ForEach(results) { candidate in
-                            Button {
-                                onSelectInstance(candidate)
-                            } label: {
-                                Text(formatFieldDisplayValue(candidate.displayValue))
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 6)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(alreadySelected.contains(candidate.id))
-                            .opacity(alreadySelected.contains(candidate.id) ? 0.4 : 1)
-                        }
-                    }
-
-                    let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if allowsBareNames, !trimmed.isEmpty {
-                        Divider()
-                            .padding(.vertical, 4)
-                        // A bare name may legitimately coincide with an existing
-                        // instance's name, so this row shows whenever text is typed.
-                        Button {
-                            onSelectBareName(trimmed)
-                        } label: {
-                            Label("Add as name: “\(trimmed)”", systemImage: "plus.circle")
-                                .foregroundStyle(Color.accentColor)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 8)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        if results.isEmpty {
+                            Text("No matching people.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                                 .padding(.vertical, 6)
-                                .contentShape(Rectangle())
+                        } else {
+                            ForEach(results) { candidate in
+                                candidateRow(candidate)
+                            }
                         }
-                        .buttonStyle(.plain)
+
+                        if allowsBareNames, !trimmedSearchText.isEmpty {
+                            Divider()
+                                .padding(.vertical, 4)
+                            bareNameRow
+                        }
                     }
                 }
+                .frame(height: 240)
+                .onChange(of: highlightedRowID) { _, newID in
+                    guard let newID else { return }
+                    // Scroll the minimal amount to keep the highlighted row
+                    // visible (anchor: nil), matching the ⌘K hyperlink popup.
+                    proxy.scrollTo(newID, anchor: nil)
+                }
             }
-            .frame(height: 240)
         }
         .padding(12)
         .frame(width: 300)
@@ -525,10 +534,221 @@ private struct PersonPickerPopover: View {
         .onChange(of: searchText) { _, _ in performSearch() }
     }
 
+    @ViewBuilder
+    private func candidateRow(_ candidate: PersonCandidate) -> some View {
+        let isDisabled = alreadySelected.contains(candidate.id)
+        let isHighlighted = highlightedRowID == String(candidate.id)
+        Button {
+            onSelectInstance(candidate)
+        } label: {
+            Text(formatFieldDisplayValue(candidate.displayValue))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
+                .background(isHighlighted ? Color.accentColor.opacity(0.75) : Color.clear)
+                .foregroundStyle(isHighlighted ? Color.white : Color.primary)
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.4 : 1)
+        .id(String(candidate.id))
+    }
+
+    private var bareNameRow: some View {
+        // A bare name may legitimately coincide with an existing
+        // instance's name, so this row shows whenever text is typed.
+        let isHighlighted = highlightedRowID == Self.bareNameRowID
+        return Button {
+            onSelectBareName(trimmedSearchText)
+        } label: {
+            Label("Add as name: “\(trimmedSearchText)”", systemImage: "plus.circle")
+                .foregroundStyle(isHighlighted ? Color.white : Color.accentColor)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
+                .background(isHighlighted ? Color.accentColor.opacity(0.75) : Color.clear)
+        }
+        .buttonStyle(.plain)
+        .id(Self.bareNameRowID)
+    }
+
     private func performSearch() {
         results = (try? appDatabase.fetchPersonCandidates(
             matching: searchText,
             excludingInstanceID: excludingInstanceID
         )) ?? []
+        let ids = navigableRowIDs
+        if let highlightedRowID, ids.contains(highlightedRowID) {
+            // Keep the user's position when the row survives the new search.
+        } else {
+            highlightedRowID = ids.first
+        }
+    }
+
+    private func moveHighlightDown() {
+        let ids = navigableRowIDs
+        guard !ids.isEmpty else { return }
+        if let highlightedRowID, let currentIndex = ids.firstIndex(of: highlightedRowID) {
+            // Wrap to the top when moving down past the last row, mirroring
+            // moveHighlightUp's wrap from the top to the bottom.
+            let nextIndex = currentIndex + 1
+            self.highlightedRowID = nextIndex < ids.count ? ids[nextIndex] : ids.first
+        } else {
+            highlightedRowID = ids.first
+        }
+    }
+
+    private func moveHighlightUp() {
+        let ids = navigableRowIDs
+        guard !ids.isEmpty else { return }
+        if let highlightedRowID,
+           let currentIndex = ids.firstIndex(of: highlightedRowID),
+           currentIndex > 0 {
+            self.highlightedRowID = ids[currentIndex - 1]
+        } else {
+            self.highlightedRowID = ids.last
+        }
+    }
+
+    private func chooseHighlightedRow() {
+        guard let highlightedRowID else { return }
+        if highlightedRowID == Self.bareNameRowID {
+            guard allowsBareNames, !trimmedSearchText.isEmpty else { return }
+            onSelectBareName(trimmedSearchText)
+        } else if let id = Int64(highlightedRowID),
+                  let candidate = results.first(where: { $0.id == id }),
+                  !alreadySelected.contains(id) {
+            onSelectInstance(candidate)
+        }
+    }
+}
+
+// MARK: - Picker search field
+
+/// The picker's search box: an NSTextField that stays focused (and typeable)
+/// while ↑/↓ move the row highlight and Return chooses the highlighted row —
+/// the same interaction as the ⌘K hyperlink-search field. Arrow/Return keys
+/// are intercepted in the field editor's doCommandBy, so the caret and all
+/// normal text editing are untouched.
+private struct PersonPickerSearchField: NSViewRepresentable {
+    @Binding var text: String
+    @Binding var isFocused: Bool
+    let onMoveDown: () -> Void
+    let onMoveUp: () -> Void
+    let onSubmit: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(
+            text: $text,
+            isFocused: $isFocused,
+            onMoveDown: onMoveDown,
+            onMoveUp: onMoveUp,
+            onSubmit: onSubmit
+        )
+    }
+
+    func makeNSView(context: Context) -> Field {
+        let field = Field()
+        field.placeholderString = "Search people…"
+        field.delegate = context.coordinator
+        field.isBordered = false
+        field.focusRingType = .none
+        field.drawsBackground = false
+        field.font = .systemFont(ofSize: NSFont.systemFontSize)
+        field.stringValue = text
+        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        field.onFocusChange = context.coordinator.setFocused
+        return field
+    }
+
+    func updateNSView(_ nsView: Field, context: Context) {
+        if nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+        context.coordinator.onMoveDown = onMoveDown
+        context.coordinator.onMoveUp = onMoveUp
+        context.coordinator.onSubmit = onSubmit
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        @Binding private var text: String
+        @Binding private var isFocused: Bool
+        var onMoveDown: () -> Void
+        var onMoveUp: () -> Void
+        var onSubmit: () -> Void
+
+        init(
+            text: Binding<String>,
+            isFocused: Binding<Bool>,
+            onMoveDown: @escaping () -> Void,
+            onMoveUp: @escaping () -> Void,
+            onSubmit: @escaping () -> Void
+        ) {
+            _text = text
+            _isFocused = isFocused
+            self.onMoveDown = onMoveDown
+            self.onMoveUp = onMoveUp
+            self.onSubmit = onSubmit
+        }
+
+        func setFocused(_ focused: Bool) {
+            DispatchQueue.main.async { [weak self] in
+                self?.isFocused = focused
+            }
+        }
+
+        func controlTextDidChange(_ obj: Notification) {
+            text = (obj.object as? NSTextField)?.stringValue ?? ""
+        }
+
+        func controlTextDidEndEditing(_ obj: Notification) {
+            setFocused(false)
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            if selector == #selector(NSResponder.moveDown(_:)) {
+                onMoveDown()
+                return true
+            }
+            if selector == #selector(NSResponder.moveUp(_:)) {
+                onMoveUp()
+                return true
+            }
+            if selector == #selector(NSResponder.insertNewline(_:))
+                || selector == #selector(NSResponder.insertLineBreak(_:))
+                || selector == #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)) {
+                onSubmit()
+                return true
+            }
+            return false
+        }
+    }
+
+    final class Field: NSTextField {
+        var onFocusChange: ((Bool) -> Void)?
+        private var hasAutoFocused = false
+
+        // Focus the search box as soon as the popover appears so arrows and
+        // typing work immediately.
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard window != nil, !hasAutoFocused else { return }
+            hasAutoFocused = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let window = self.window else { return }
+                window.makeFirstResponder(self)
+            }
+        }
+
+        override func becomeFirstResponder() -> Bool {
+            let didBecome = super.becomeFirstResponder()
+            if didBecome {
+                onFocusChange?(true)
+            }
+            return didBecome
+        }
     }
 }
