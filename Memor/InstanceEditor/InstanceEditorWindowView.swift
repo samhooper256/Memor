@@ -1985,6 +1985,13 @@ struct InstanceEditorWindowView: View {
 
         do {
             let didChangeType = draft.loadedTypeID != typeID
+            if didChangeType {
+                // Same hazard as loadInstance: resetPersonState() below empties
+                // the arrays behind any focused partner/office card TextField,
+                // and the focusField call later in this function would force it
+                // to resign against a stale element binding.
+                focusController.endEditing()
+            }
             draft.fields = try appDatabase.fetchFieldsForDisplay(forTypeID: typeID)
             draft.queryTypes = try appDatabase.fetchQueryTypes(forTypeID: typeID)
             draft.stickyFieldIDs = try appDatabase.fetchStickyFieldIDs(forTypeID: typeID)
@@ -2051,6 +2058,12 @@ struct InstanceEditorWindowView: View {
 
     @MainActor
     private func loadInstance(instanceID: Int64) async {
+        // Resign the focused control before the draft is repointed at another
+        // instance. Reloading into an instance with fewer partner/office cards
+        // empties the arrays behind the old cards' TextField bindings, and the
+        // focusField call at the end of this load would then force the stale
+        // field to resign and re-read its out-of-bounds element binding (crash).
+        focusController.endEditing()
         do {
             if let pointMap = try appDatabase.fetchPointMapInstance(instanceID: instanceID),
                let pointMapTypeID = types.first(where: { $0.isBuiltin && $0.name == POINTMAP_TYPE_NAME })?.id {
@@ -2819,6 +2832,11 @@ struct InstanceEditorWindowView: View {
             switch mode {
             case .add:
                 onAddSaved?(typeID)
+                // Resign a focused partner/office card TextField while its
+                // element binding is still valid — resetPersonState() empties
+                // the array it indexes, and the focusField call below would
+                // otherwise force the stale field to resign afterwards (crash).
+                focusController.endEditing()
                 draft.fieldValues = Dictionary(
                     uniqueKeysWithValues: draft.fields.map { field in
                         let preserved = draft.stickyFieldIDs.contains(field.id) ? draft.fieldValues[field.id] ?? "" : ""
