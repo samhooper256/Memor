@@ -136,6 +136,11 @@ final class QueryPreviewWindowState: ObservableObject {
     @Published private(set) var requestedPersonKind: PersonQueryKind?
     @Published private(set) var requestedPersonPartnershipID: Int64?
     @Published private(set) var requestedPersonOfficeID: Int64?
+    // Non-nil only for office-based built-in query previews from the Add
+    // Instance window, where the person has no row yet: the drafted holdings
+    // (and, for .office, the index of the previewed one) ride the request.
+    @Published private(set) var requestedPersonOfficeDrafts: [PersonOfficeDraft]?
+    @Published private(set) var requestedPersonOfficeDraftIndex: Int?
     @Published private(set) var requestNonce = UUID()
 
     func requestOpen(
@@ -150,6 +155,8 @@ final class QueryPreviewWindowState: ObservableObject {
         requestedPersonKind = nil
         requestedPersonPartnershipID = nil
         requestedPersonOfficeID = nil
+        requestedPersonOfficeDrafts = nil
+        requestedPersonOfficeDraftIndex = nil
         requestNonce = UUID()
     }
 
@@ -161,6 +168,8 @@ final class QueryPreviewWindowState: ObservableObject {
         requestedPersonKind = nil
         requestedPersonPartnershipID = nil
         requestedPersonOfficeID = nil
+        requestedPersonOfficeDrafts = nil
+        requestedPersonOfficeDraftIndex = nil
         requestNonce = UUID()
     }
 
@@ -173,6 +182,8 @@ final class QueryPreviewWindowState: ObservableObject {
         requestedPersonKind = kind
         requestedPersonPartnershipID = partnershipID
         requestedPersonOfficeID = officeID
+        requestedPersonOfficeDrafts = nil
+        requestedPersonOfficeDraftIndex = nil
         requestNonce = UUID()
     }
 
@@ -191,6 +202,31 @@ final class QueryPreviewWindowState: ObservableObject {
         requestedPersonKind = nil
         requestedPersonPartnershipID = nil
         requestedPersonOfficeID = nil
+        requestedPersonOfficeDrafts = nil
+        requestedPersonOfficeDraftIndex = nil
+        requestNonce = UUID()
+    }
+
+    /// Preview an office-based built-in query (.office / .allOffices) for an
+    /// unsaved person being composed in the Add Instance window: holdings and
+    /// field values come from the editor's draft, not the database, so
+    /// uncommitted edits render. `officeIndex` picks the previewed holding for
+    /// .office and is nil for .allOffices.
+    func requestOpenPersonOfficeDraft(
+        kind: PersonQueryKind,
+        offices: [PersonOfficeDraft],
+        officeIndex: Int?,
+        fieldValuesByName: [String: String]
+    ) {
+        requestedInstanceID = nil
+        requestedTypeID = nil
+        requestedQueryTypeID = nil
+        requestedFieldValuesByName = fieldValuesByName
+        requestedPersonKind = kind
+        requestedPersonPartnershipID = nil
+        requestedPersonOfficeID = nil
+        requestedPersonOfficeDrafts = offices
+        requestedPersonOfficeDraftIndex = officeIndex
         requestNonce = UUID()
     }
 }

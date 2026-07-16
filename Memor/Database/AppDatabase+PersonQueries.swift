@@ -656,6 +656,104 @@ extension AppDatabase {
         }
     }
 
+    /// Preview an Offices-section built-in query (.office / .allOffices) for an
+    /// UNSAVED person being composed in the Add Instance window: the holdings
+    /// come from the editor's draft instead of person_office, so uncommitted
+    /// office edits render. Office names resolve from the office table (drafted
+    /// holdings always reference existing offices) and succession peers are
+    /// persisted instances, but the person themself has no row yet — their name
+    /// in the per-office answer is the display field's {{FieldName}} placeholder,
+    /// resolved by the live field values the caller supplies via
+    /// `StudyQuery.withFieldValues` (fieldValuesByName is left empty here, like
+    /// fetchQueryTypePreview).
+    func fetchPersonOfficeDraftPreview(
+        kind: PersonQueryKind,
+        offices: [PersonOfficeDraft],
+        officeIndex: Int?
+    ) throws -> StudyQuery {
+        try dbQueue.read { db in
+            let personTypeID = try Self.fetchPersonTypeID(db: db)
+            let booleanFieldNames = Set(try String.fetchAll(
+                db,
+                sql: "SELECT name FROM field WHERE type_id = ? AND field_type = 'boolean'",
+                arguments: [personTypeID]
+            ))
+            let typeCSS = try String.fetchOne(
+                db,
+                sql: "SELECT css FROM \"type\" WHERE id = ?",
+                arguments: [personTypeID]
+            ) ?? ""
+            let template = try Self.personOfficeQueryHTML(db: db)
+            let holdings = try offices.map { office in
+                PersonOfficeHolding(
+                    personOfficeID: office.personOfficeID ?? 0,
+                    officeID: office.officeID,
+                    officeName: try Self.fetchOfficeName(db: db, officeID: office.officeID) ?? "#\(office.officeID)",
+                    whenBegan: office.whenBegan,
+                    whenEnded: office.whenEnded,
+                    note: office.note
+                )
+            }
+
+            let questionHTML: String
+            let body: String
+            let queryTypeName: String
+            switch kind {
+            case .office:
+                guard let officeIndex, holdings.indices.contains(officeIndex) else {
+                    throw DatabaseError(message: "Office holding not found.")
+                }
+                // Same display-field choice as fetchInstanceDisplayValue, but as
+                // a placeholder — the draft person's typed name substitutes in.
+                let displayFieldName = try String.fetchOne(
+                    db,
+                    sql: "SELECT name FROM field WHERE type_id = ? ORDER BY is_primary DESC, field_display_index ASC, id LIMIT 1",
+                    arguments: [personTypeID]
+                )
+                questionHTML = Self.renderedOfficeTemplate(template, holding: holdings[officeIndex])
+                body = try Self.officeSuccessionRowHTML(
+                    db: db,
+                    predecessorIDs: offices[officeIndex].predecessors,
+                    successorIDs: offices[officeIndex].successors,
+                    centerHTML: displayFieldName.map { "{{\($0)}}" } ?? ""
+                )
+                queryTypeName = "Office: \(holdings[officeIndex].officeName)"
+            case .allOffices:
+                // personID is only used for the childrenWith partner line, so 0
+                // is safe: the allOffices question is title + details block.
+                questionHTML = try Self.personQuestionHTML(db: db, personID: 0, kind: .allOffices, partnershipID: nil)
+                body = holdings.isEmpty
+                    ? Self.personNAHTML
+                    : Self.personAnswerLines(holdings.map { Self.renderedOfficeTemplate(template, holding: $0) })
+                queryTypeName = PersonQueryKind.allOffices.displayName
+            default:
+                throw DatabaseError(message: "Not an office-based built-in query.")
+            }
+
+            return StudyQuery(
+                instanceID: 0,
+                queryTypeID: 0,
+                interval: 0,
+                maxInterval: nil,
+                lastAnsweredTimestamp: nil,
+                queryState: .zero,
+                typeName: PERSON_TYPE_NAME,
+                queryTypeName: queryTypeName,
+                questionHTML: questionHTML,
+                answerHTML: uniteQuestionAndAnswerWithDefaultSeparator(
+                    questionHTML: "{{#QuestionContent}}",
+                    answerHTML: body
+                ),
+                typeCSS: Self.personBuiltinQueryDefaultCSS + "\n\n" + typeCSS,
+                fieldValuesByName: [:],
+                booleanFieldNames: booleanFieldNames,
+                personQueryKind: kind,
+                personPartnershipID: nil,
+                personOfficeID: kind == .office ? officeIndex.map { offices[$0].officeID } : nil
+            )
+        }
+    }
+
     /// The display name shown in query search / the editor checklist
     /// ("Mother", "Children with Alice", "Office: U.S. President", ...).
     nonisolated static func personQueryTypeName(
@@ -830,7 +928,22 @@ extension AppDatabase {
         centerHTML: String
     ) throws -> String {
         let peers = try fetchOfficeSuccessionPeers(db: db, instanceID: personID, officeID: officeID)
+        return try officeSuccessionRowHTML(
+            db: db,
+            predecessorIDs: peers.predecessors,
+            successorIDs: peers.successors,
+            centerHTML: centerHTML
+        )
+    }
 
+    /// The same three-panel row from explicit peer lists — the draft-preview
+    /// path supplies the editor's uncommitted predecessors/successors directly.
+    private nonisolated static func officeSuccessionRowHTML(
+        db: Database,
+        predecessorIDs: [Int64],
+        successorIDs: [Int64],
+        centerHTML: String
+    ) throws -> String {
         func panel(_ ids: [Int64]) throws -> String {
             guard !ids.isEmpty else { return personNAHTML }
             return personAnswerLines(try ids.map { try personEntryHTML(db: db, ref: .instance($0)) })
@@ -838,9 +951,9 @@ extension AppDatabase {
 
         return """
             <div class="office-succession">
-                <div class="office-succession-panel office-succession-preds">\(try panel(peers.predecessors))</div>
+                <div class="office-succession-panel office-succession-preds">\(try panel(predecessorIDs))</div>
                 <div class="office-succession-panel office-succession-holder">\(centerHTML)</div>
-                <div class="office-succession-panel office-succession-succs">\(try panel(peers.successors))</div>
+                <div class="office-succession-panel office-succession-succs">\(try panel(successorIDs))</div>
             </div>
             """
     }

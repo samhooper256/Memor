@@ -2654,7 +2654,11 @@ struct InstanceEditorWindowView: View {
     }
 
     private func openPersonQueryPreview(kind: PersonQueryKind, partnerEntryID: UUID?, officeEntryID: UUID?) {
-        guard mode == .edit, let loadedInstanceID = draft.loadedInstanceID else { return }
+        guard mode == .edit else {
+            openPersonOfficeDraftPreview(kind: kind, officeEntryID: officeEntryID)
+            return
+        }
+        guard let loadedInstanceID = draft.loadedInstanceID else { return }
         if kind == .childrenWith, personPartnershipID(forEntryID: partnerEntryID) == nil {
             showToast(message: "Save this person before previewing a new partner's query.", style: .error)
             return
@@ -2668,6 +2672,27 @@ struct InstanceEditorWindowView: View {
             kind: kind,
             partnershipID: personPartnershipID(forEntryID: partnerEntryID),
             officeID: personSavedOfficeID(forEntryID: officeEntryID)
+        )
+        openWindow(id: "query-preview")
+    }
+
+    /// Add-mode preview of an office-based built-in query (per-office or All
+    /// Offices), rendered from the draft's uncommitted offices + live field
+    /// values — the person has no instance row yet.
+    private func openPersonOfficeDraftPreview(kind: PersonQueryKind, officeEntryID: UUID?) {
+        guard kind == .office || kind == .allOffices else { return }
+        var officeIndex: Int?
+        if kind == .office {
+            // buildPersonRelationsDraft maps personOffices in order, so the
+            // entry's index addresses the same holding in the payload.
+            guard let index = draft.personOffices.firstIndex(where: { $0.id == officeEntryID }) else { return }
+            officeIndex = index
+        }
+        queryPreviewWindowState.requestOpenPersonOfficeDraft(
+            kind: kind,
+            offices: draft.buildPersonRelationsDraft().offices,
+            officeIndex: officeIndex,
+            fieldValuesByName: liveFieldValuesByName()
         )
         openWindow(id: "query-preview")
     }

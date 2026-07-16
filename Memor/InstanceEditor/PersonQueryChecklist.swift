@@ -170,7 +170,10 @@ struct PersonQueryChecklist: View {
                     .help("Enabled, but this query currently has an empty answer.")
             }
 
-            if mode == .edit {
+            // Edit mode previews every kind from the saved rows; Add mode
+            // previews only the office-based kinds, rendered from the draft's
+            // uncommitted holdings + field values.
+            if mode == .edit || row.kind == .office || row.kind == .allOffices {
                 Button {
                     onPreview(row.kind, row.partnerEntryID, row.officeEntryID)
                 } label: {

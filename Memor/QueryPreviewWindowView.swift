@@ -128,6 +128,15 @@ struct QueryPreviewWindowView: View {
         do {
             let baseQuery: StudyQuery
             if let personKind = windowState.requestedPersonKind,
+               let officeDrafts = windowState.requestedPersonOfficeDrafts {
+                // Office-based built-in query for an unsaved person (Add
+                // Instance window): holdings come from the editor's draft.
+                baseQuery = try appDatabase.fetchPersonOfficeDraftPreview(
+                    kind: personKind,
+                    offices: officeDrafts,
+                    officeIndex: windowState.requestedPersonOfficeDraftIndex
+                )
+            } else if let personKind = windowState.requestedPersonKind,
                let instanceID = windowState.requestedInstanceID {
                 // Built-in Person query: computed HTML.
                 baseQuery = try appDatabase.fetchPersonQueryPreview(
