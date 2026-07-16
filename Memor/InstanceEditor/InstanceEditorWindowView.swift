@@ -72,6 +72,7 @@ struct InstanceEditorWindowView: View {
     @State private var pointMapListSelection: Set<PointMapEntryRef> = []
     @State private var boundaryMapListSelection: Set<BoundaryMapEntryRef> = []
     @StateObject private var pointMapPointController = AddPointPopupController()
+    @StateObject private var movePointsPickerController = MovePointsPickerController()
     @State private var isBoundaryPickerPresented = false
     @State private var isIDCopyButtonHovered = false
     @State private var isBoundaryMapPickerPresented = false
@@ -147,6 +148,10 @@ struct InstanceEditorWindowView: View {
         }
         if pointMapPointController.isPresented {
             pointMapPointController.close()
+            return
+        }
+        if movePointsPickerController.isPresented {
+            movePointsPickerController.close()
             return
         }
         dismiss()
@@ -262,6 +267,7 @@ struct InstanceEditorWindowView: View {
             // Floating panels outlive the editor subtree (tab switch or window
             // close) unless closed explicitly.
             pointMapPointController.close()
+            movePointsPickerController.close()
             hyperlinkSearchController.close()
             typePickerController.close()
             tableSizePickerController.close()
@@ -550,6 +556,11 @@ struct InstanceEditorWindowView: View {
                                 Menu("Reset Queries") {
                                     Button("Forward") { resetPointMapEntriesDueDates(refs, isReverse: false) }
                                     Button("Reverse") { resetPointMapEntriesDueDates(refs, isReverse: true) }
+                                }
+                                // Moving also writes directly to the DB (the points are
+                                // re-parented immediately, keeping their queries' SRS state).
+                                Button("Move to a different PointMap…") {
+                                    presentMovePointsPicker(refs)
                                 }
                             }
                             Divider()
@@ -1024,6 +1035,67 @@ struct InstanceEditorWindowView: View {
             showToast(message: "Reset due dates for \(count) queries", style: .success)
         } catch {
             showToast(message: "Failed to reset due dates.", style: .error)
+        }
+    }
+
+    // Opens the "Move to a different PointMap…" picker for the selected points
+    // (Edit mode only). Snapshots the drafted point data up front so the move
+    // writes what the sidebar shows, unsaved edits included.
+    private func presentMovePointsPicker(_ refs: Set<PointMapEntryRef>) {
+        guard mode == .edit, !refs.isEmpty else { return }
+        let existingPoints = draft.pointMapExistingPoints.filter { refs.contains(.existing($0.id)) }
+        let newEntries = draft.pointMapNewPoints.filter { refs.contains(.new($0.localID)) }
+        guard !existingPoints.isEmpty || !newEntries.isEmpty else { return }
+        let maps = (try? appDatabase.fetchPointMapInstanceList()) ?? []
+        movePointsPickerController.present(
+            from: NSApp.keyWindow,
+            maps: maps,
+            currentInstanceID: draft.loadedInstanceID,
+            pointCount: existingPoints.count + newEntries.count
+        ) { target in
+            movePointMapEntries(existingPoints: existingPoints, newEntries: newEntries, to: target)
+        }
+    }
+
+    // Moves the points to the chosen PointMap immediately (no save needed):
+    // saved points are re-parented in the DB — their enabled queries keep their
+    // SRS state — and unsaved draft points are inserted into the target. The
+    // moved points then leave this editor's draft so a later save of the source
+    // instance doesn't touch them.
+    private func movePointMapEntries(
+        existingPoints: [PointMapPoint],
+        newEntries: [PointMapPointDraftEntry],
+        to target: PointMapInstanceListItem
+    ) {
+        let newDrafts = newEntries.map { entry in
+            AppDatabase.PointMapPointDraft(
+                name: entry.name,
+                latitude: entry.latitude,
+                longitude: entry.longitude,
+                forwardEnabled: entry.forwardEnabled,
+                reverseEnabled: entry.reverseEnabled,
+                hint: entry.hint
+            )
+        }
+        do {
+            try appDatabase.movePointMapPoints(
+                existingPoints: existingPoints,
+                newPoints: newDrafts,
+                toInstanceID: target.id
+            )
+            let existingIDs = Set(existingPoints.map(\.id))
+            let newLocalIDs = Set(newEntries.map(\.localID))
+            draft.pointMapExistingPoints.removeAll { existingIDs.contains($0.id) }
+            draft.pointMapNewPoints.removeAll { newLocalIDs.contains($0.localID) }
+            pointMapListSelection.subtract(
+                existingIDs.map(PointMapEntryRef.existing) + newLocalIDs.map(PointMapEntryRef.new)
+            )
+            NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
+            let count = existingPoints.count + newEntries.count
+            let noun = count == 1 ? "point" : "points"
+            showToast(message: "Moved \(count) \(noun) to \u{201C}\(target.title)\u{201D}.", style: .success)
+        } catch {
+            showToast(message: "Failed to move points.", style: .error)
         }
     }
 

@@ -3976,6 +3976,76 @@ struct AppDatabase {
         }
     }
 
+    // Every PointMap instance (id + title), for the editor's move-points picker.
+    func fetchPointMapInstanceList() throws -> [PointMapInstanceListItem] {
+        try dbQueue.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT instance_id, title
+                    FROM pointmap_instance
+                    ORDER BY title COLLATE NOCASE, instance_id
+                    """
+            ).map { row in
+                PointMapInstanceListItem(
+                    id: row["instance_id"] as Int64? ?? 0,
+                    title: row["title"] as String? ?? ""
+                )
+            }
+        }
+    }
+
+    // Moves points to another PointMap instance. Existing points are re-parented
+    // in place — their pointmap_query rows follow via point_id, so per-query SRS
+    // state (interval, last_answered_timestamp, query_state) is preserved — with
+    // the caller's drafted name/hint/coordinates and enabled directions applied,
+    // exactly what saving the source editor would have written. New (unsaved)
+    // draft points are inserted directly into the target. One transaction;
+    // throws if the target isn't a PointMap instance.
+    func movePointMapPoints(
+        existingPoints: [PointMapPoint],
+        newPoints: [PointMapPointDraft],
+        toInstanceID: Int64
+    ) throws {
+        guard !existingPoints.isEmpty || !newPoints.isEmpty else { return }
+        try dbQueue.write { db in
+            let isPointMapInstance = try Int.fetchOne(
+                db,
+                sql: "SELECT 1 FROM pointmap_instance WHERE instance_id = ?",
+                arguments: [toInstanceID]
+            ) != nil
+            guard isPointMapInstance else {
+                throw DatabaseError(message: "No PointMap instance with id \(toInstanceID).")
+            }
+
+            for point in existingPoints {
+                try db.execute(
+                    sql: """
+                        UPDATE pointmap_point
+                        SET instance_id = ?, name = ?, hint = ?, latitude = ?, longitude = ?
+                        WHERE id = ?
+                        """,
+                    arguments: [toInstanceID, point.name, point.hint, point.latitude, point.longitude, point.id]
+                )
+                try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: point.id, isReverse: false, enabled: point.forwardEnabled)
+                try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: point.id, isReverse: true, enabled: point.reverseEnabled)
+            }
+
+            for point in newPoints {
+                try db.execute(
+                    sql: """
+                        INSERT INTO pointmap_point (instance_id, name, hint, latitude, longitude)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                    arguments: [toInstanceID, point.name, point.hint, point.latitude, point.longitude]
+                )
+                let pointID = db.lastInsertedRowID
+                try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: pointID, isReverse: false, enabled: point.forwardEnabled)
+                try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: pointID, isReverse: true, enabled: point.reverseEnabled)
+            }
+        }
+    }
+
     // A map query's existence == that direction being enabled. Enabling inserts the
     // (parent, direction) row if missing (OR IGNORE preserves progress on a row that
     // already exists); disabling deletes it, discarding that direction's SRS

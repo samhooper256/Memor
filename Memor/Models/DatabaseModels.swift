@@ -85,6 +85,12 @@ struct PointMapInstanceWithPoints: Hashable {
     let boundaryIDs: [Int64]
 }
 
+/// One row of the move-points picker: a PointMap instance's id and title.
+struct PointMapInstanceListItem: Identifiable, Hashable {
+    let id: Int64
+    let title: String
+}
+
 struct BoundaryMapInstance: Hashable {
     let instanceID: Int64
     let title: String
