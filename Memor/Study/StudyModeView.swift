@@ -197,6 +197,17 @@ struct StudyModeView: View {
                         openWindow(id: "edit-instance")
                     },
                     onEditType: performEditType,
+                    onDuplicateInstance: {
+                        // Same reveal gate as Edit Current Instance (the filled-in Add
+                        // window would give away the answer). Built-ins are excluded
+                        // like the Search window's Duplicate: the Add editor doesn't
+                        // support duplicating Person or map instances.
+                        guard let currentQuery, isAnswerRevealed else { return }
+                        guard currentQuery.kind == .standard,
+                              currentQuery.typeName != PERSON_TYPE_NAME else { return }
+                        addInstanceWindowState.requestOpenForDuplication(sourceInstanceID: currentQuery.instanceID)
+                        openWindow(id: "add-instance")
+                    },
                     onArrowLinkShortcut: { key in
                         // Only after the answer is revealed; mirrors the link-click callbacks below.
                         guard isAnswerRevealed, let currentQuery else { return false }
@@ -781,6 +792,7 @@ private struct StudyModeKeyCommandHandler: NSViewRepresentable {
     let onShiftDown: () -> Void
     let onEditInstance: () -> Void
     let onEditType: () -> Void
+    let onDuplicateInstance: () -> Void
     let onArrowLinkShortcut: (LinkShortcutKey) -> Bool
 
     func makeNSView(context: Context) -> KeyCommandHandlingView {
@@ -793,6 +805,7 @@ private struct StudyModeKeyCommandHandler: NSViewRepresentable {
         view.onShiftDown = onShiftDown
         view.onEditInstance = onEditInstance
         view.onEditType = onEditType
+        view.onDuplicateInstance = onDuplicateInstance
         view.onArrowLinkShortcut = onArrowLinkShortcut
         return view
     }
@@ -806,6 +819,7 @@ private struct StudyModeKeyCommandHandler: NSViewRepresentable {
         nsView.onShiftDown = onShiftDown
         nsView.onEditInstance = onEditInstance
         nsView.onEditType = onEditType
+        nsView.onDuplicateInstance = onDuplicateInstance
         nsView.onArrowLinkShortcut = onArrowLinkShortcut
     }
 
@@ -818,6 +832,7 @@ private struct StudyModeKeyCommandHandler: NSViewRepresentable {
         var onShiftDown: (() -> Void)?
         var onEditInstance: (() -> Void)?
         var onEditType: (() -> Void)?
+        var onDuplicateInstance: (() -> Void)?
         var onArrowLinkShortcut: ((LinkShortcutKey) -> Bool)?
 
         private var keyDownMonitor: Any?
@@ -882,6 +897,10 @@ private struct StudyModeKeyCommandHandler: NSViewRepresentable {
                     }
                     if settings.binding(for: .studyEditType).matches(event) {
                         self.onEditType?()
+                        return nil
+                    }
+                    if settings.binding(for: .studyDuplicateInstance).matches(event) {
+                        self.onDuplicateInstance?()
                         return nil
                     }
 

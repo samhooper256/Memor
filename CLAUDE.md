@@ -216,6 +216,7 @@ navigates to the linked instance).
 | Study — Undo | ⌘Z |
 | Study — Edit current instance | E |
 | Study — Edit Type (exit Study, open the instance's type detail page) | ⌘⇧T |
+| Study — Duplicate current instance (open Add Instance prefilled; post-reveal, Object types only) | ⌘D |
 | Instance editor — Save | ⌘S |
 | Types page — Save current editor | ⌘S |
 | Query Search — Reset Due Dates | ⌘R |
