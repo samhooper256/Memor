@@ -72,7 +72,7 @@ struct InstanceEditorWindowView: View {
     @State private var pointMapListSelection: Set<PointMapEntryRef> = []
     @State private var boundaryMapListSelection: Set<BoundaryMapEntryRef> = []
     @StateObject private var pointMapPointController = AddPointPopupController()
-    @StateObject private var movePointsPickerController = MovePointsPickerController()
+    @StateObject private var movePointsPickerController = PickerPanelController()
     @State private var isBoundaryPickerPresented = false
     @State private var isIDCopyButtonHovered = false
     @State private var isBoundaryMapPickerPresented = false
@@ -1047,11 +1047,20 @@ struct InstanceEditorWindowView: View {
         let newEntries = draft.pointMapNewPoints.filter { refs.contains(.new($0.localID)) }
         guard !existingPoints.isEmpty || !newEntries.isEmpty else { return }
         let maps = (try? appDatabase.fetchPointMapInstanceList()) ?? []
+        let pointCount = existingPoints.count + newEntries.count
         movePointsPickerController.present(
             from: NSApp.keyWindow,
-            maps: maps,
-            currentInstanceID: draft.loadedInstanceID,
-            pointCount: existingPoints.count + newEntries.count
+            title: pointCount == 1 ? "Move 1 Point to…" : "Move \(pointCount) Points to…",
+            placeholder: "Search PointMaps…",
+            emptyText: "No matching PointMaps.",
+            items: maps.map { map in
+                PickerPanelItem(
+                    id: map.id,
+                    title: map.title.isEmpty ? "(untitled)" : map.title,
+                    detail: map.id == draft.loadedInstanceID ? "(current)" : nil,
+                    isSelectable: map.id != draft.loadedInstanceID
+                )
+            }
         ) { target in
             movePointMapEntries(existingPoints: existingPoints, newEntries: newEntries, to: target)
         }
@@ -1065,7 +1074,7 @@ struct InstanceEditorWindowView: View {
     private func movePointMapEntries(
         existingPoints: [PointMapPoint],
         newEntries: [PointMapPointDraftEntry],
-        to target: PointMapInstanceListItem
+        to target: PickerPanelItem
     ) {
         let newDrafts = newEntries.map { entry in
             AppDatabase.PointMapPointDraft(
