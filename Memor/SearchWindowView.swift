@@ -134,6 +134,9 @@ struct SearchWindowView: View {
     @State private var queryIDsPendingReset: Set<String> = []
     @State private var queryIDsPendingDelete: Set<String> = []
 
+    // Both tabs: the "Add to collection…" / "Remove from collection…" picker.
+    @StateObject private var collectionPickerController = PickerPanelController()
+
     private var collectionInAddMode: Collection? { windowState.addToCollection }
 
     private var resultsCount: Int {
@@ -281,6 +284,55 @@ struct SearchWindowView: View {
         return ids
     }
 
+    // MARK: - Add to / remove from collection
+
+    /// Opens the collection picker for "Add to collection…" / "Remove from
+    /// collection…". Every collection is listed, unfiltered by the selection's
+    /// current memberships — adds skip instances already in the collection and
+    /// removals of non-members are no-ops.
+    private func presentCollectionPicker(instanceIDs: Set<Int64>, adding: Bool) {
+        guard !instanceIDs.isEmpty else { return }
+        let collections = (try? appDatabase.fetchCollections()) ?? []
+        let count = instanceIDs.count
+        let noun = count == 1 ? "Instance" : "Instances"
+        collectionPickerController.present(
+            from: NSApp.keyWindow,
+            title: adding ? "Add \(count) \(noun) to…" : "Remove \(count) \(noun) from…",
+            placeholder: "Search collections…",
+            emptyText: "No matching collections.",
+            items: collections.map { PickerPanelItem(id: $0.id, title: $0.name) }
+        ) { collection in
+            Task {
+                await applyCollectionMembership(
+                    instanceIDs: instanceIDs,
+                    collectionID: collection.id,
+                    adding: adding
+                )
+            }
+        }
+    }
+
+    @MainActor
+    private func applyCollectionMembership(instanceIDs: Set<Int64>, collectionID: Int64, adding: Bool) async {
+        do {
+            if adding {
+                try appDatabase.addInstances(Array(instanceIDs), toCollectionID: collectionID)
+            } else {
+                try appDatabase.removeInstances(Array(instanceIDs), fromCollectionID: collectionID)
+            }
+            NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
+            windowState.notifyCollectionsDataChange()
+            if collectionInAddMode != nil {
+                await loadCollectionMembershipIfNeeded()
+            }
+            // Membership edits can change what a collection:-based search matches.
+            await runSearch(for: debouncedSearchQuery)
+            errorMessage = nil
+        } catch {
+            errorMessage = adding ? "Failed to add to collection." : "Failed to remove from collection."
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -338,6 +390,9 @@ struct SearchWindowView: View {
         }
         .onDisappear {
             debounceTask?.cancel()
+            // The floating picker panel outlives the view subtree unless
+            // closed explicitly.
+            collectionPickerController.close()
         }
         .onExitCommand {
             dismiss()
@@ -541,6 +596,12 @@ struct SearchWindowView: View {
                     noun: "instance",
                     instanceIDs: items
                 )
+                Button("Add to collection…") {
+                    presentCollectionPicker(instanceIDs: items, adding: true)
+                }
+                Button("Remove from collection…") {
+                    presentCollectionPicker(instanceIDs: items, adding: false)
+                }
             }
             if let selection = convertibleSelection(items) {
                 Button("Change Type") {
@@ -607,6 +668,12 @@ struct SearchWindowView: View {
                     noun: "query",
                     instanceIDs: queryInstanceIDs(forSelectedQueryIDs: items)
                 )
+                Button("Add to collection…") {
+                    presentCollectionPicker(instanceIDs: queryInstanceIDs(forSelectedQueryIDs: items), adding: true)
+                }
+                Button("Remove from collection…") {
+                    presentCollectionPicker(instanceIDs: queryInstanceIDs(forSelectedQueryIDs: items), adding: false)
+                }
                 Divider()
                 Button(items.count == 1 ? "Reset Due Date" : "Reset Due Dates") {
                     queryIDsPendingReset = items

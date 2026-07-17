@@ -1158,6 +1158,45 @@ struct AppDatabase {
         }
     }
 
+    // Batch variants (one transaction for a whole Search selection). Instances
+    // already in the collection are skipped — the join table has no unique
+    // constraint, so membership is guarded per insert like addInstance's.
+    func addInstances(_ instanceIDs: [Int64], toCollectionID collectionID: Int64) throws {
+        guard !instanceIDs.isEmpty else { return }
+        try dbQueue.write { db in
+            for instanceID in instanceIDs {
+                try db.execute(
+                    sql: """
+                        INSERT INTO instance_id_collection_id (instance_id, collection_id)
+                        SELECT ?, ?
+                        WHERE NOT EXISTS (
+                            SELECT 1
+                            FROM instance_id_collection_id
+                            WHERE instance_id = ? AND collection_id = ?
+                        )
+                        """,
+                    arguments: [instanceID, collectionID, instanceID, collectionID]
+                )
+            }
+        }
+    }
+
+    func removeInstances(_ instanceIDs: [Int64], fromCollectionID collectionID: Int64) throws {
+        guard !instanceIDs.isEmpty else { return }
+        try dbQueue.write { db in
+            let placeholders = instanceIDs.map { _ in "?" }.joined(separator: ", ")
+            var arguments: [DatabaseValueConvertible] = [collectionID]
+            arguments.append(contentsOf: instanceIDs)
+            try db.execute(
+                sql: """
+                    DELETE FROM instance_id_collection_id
+                    WHERE collection_id = ? AND instance_id IN (\(placeholders))
+                    """,
+                arguments: StatementArguments(arguments)
+            )
+        }
+    }
+
     func fetchCollectionChecklistItems(forTypeID typeID: Int64) throws -> [CollectionChecklistItem] {
         try dbQueue.read { db in
             let rows = try Row.fetchAll(
