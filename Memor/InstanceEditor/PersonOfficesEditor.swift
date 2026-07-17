@@ -183,113 +183,70 @@ private struct OfficeAddButton: View {
     let onSelectOffice: (_ officeID: Int64, _ officeName: String) -> Void
 
     @State private var isPickerPresented = false
+    @State private var pickerState: PickerPanelState?
 
     var body: some View {
         Button("Add Office") {
+            // A fresh state per open: blank search, offices re-fetched.
+            pickerState = makePickerState()
             isPickerPresented = true
         }
         .controlSize(.small)
         .popover(isPresented: $isPickerPresented, arrowEdge: .bottom) {
-            OfficePickerPopover(
-                appDatabase: appDatabase,
-                alreadySelectedOfficeIDs: alreadySelectedOfficeIDs,
-                onSelectOffice: { officeID, officeName in
-                    onSelectOffice(officeID, officeName)
+            if let pickerState {
+                PickerListView(state: pickerState)
+                    .padding(12)
+                    .frame(width: 300)
+            }
+        }
+    }
+
+    private func makePickerState() -> PickerPanelState {
+        let state = PickerPanelState(
+            title: "",
+            placeholder: "Search offices…",
+            emptyText: "No matching offices.",
+            // A live provider, not a fixed list: fetchOfficeCandidates LIMITs
+            // its results, so each keystroke re-queries the DB and the cap
+            // applies to the matches rather than to the whole office list.
+            itemsProvider: { query in
+                let candidates = (try? appDatabase.fetchOfficeCandidates(matching: query)) ?? []
+                return candidates.map { candidate in
+                    PickerPanelItem(
+                        id: candidate.id,
+                        title: candidate.name,
+                        isSelectable: !alreadySelectedOfficeIDs.contains(candidate.id)
+                    )
+                }
+            },
+            onSelect: { item in
+                onSelectOffice(item.id, item.title)
+                isPickerPresented = false
+            },
+            onClose: { isPickerPresented = false }
+        )
+        // Unlike bare names, office names must not duplicate — the create row
+        // hides when an exact (case-insensitive) match exists.
+        state.accessoryRowProvider = { [weak state] trimmed in
+            guard !trimmed.isEmpty,
+                  let state,
+                  !state.filteredItems.contains(where: { $0.title.caseInsensitiveCompare(trimmed) == .orderedSame })
+            else { return nil }
+            return PickerPanelAccessoryRow(title: "Create office \u{201C}\(trimmed)\u{201D}") { [weak state] in
+                // Creates the office row immediately (a draft entry needs a
+                // concrete office id, and other windows should see the new
+                // office live). If the draft is later discarded, a 0-holder
+                // office remains — visible and deletable in Manage Offices.
+                do {
+                    let officeID = try appDatabase.createOffice(name: trimmed)
+                    NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
+                    onSelectOffice(officeID, trimmed)
                     isPickerPresented = false
-                }
-            )
-        }
-    }
-}
-
-private struct OfficePickerPopover: View {
-    let appDatabase: AppDatabase
-    let alreadySelectedOfficeIDs: Set<Int64>
-    let onSelectOffice: (_ officeID: Int64, _ officeName: String) -> Void
-
-    @State private var searchText = ""
-    @State private var results: [OfficeCandidate] = []
-    @State private var errorMessage: String?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            TextField("Search offices…", text: $searchText)
-                .solidFocusField()
-
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if results.isEmpty {
-                        Text("No matching offices.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(.vertical, 6)
-                    } else {
-                        ForEach(results) { candidate in
-                            Button {
-                                onSelectOffice(candidate.id, candidate.name)
-                            } label: {
-                                Text(candidate.name)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 6)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(alreadySelectedOfficeIDs.contains(candidate.id))
-                            .opacity(alreadySelectedOfficeIDs.contains(candidate.id) ? 0.4 : 1)
-                        }
-                    }
-
-                    // Unlike bare names, office names must not duplicate — the
-                    // create row hides when an exact (case-insensitive) match exists.
-                    let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty,
-                       !results.contains(where: { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }) {
-                        Divider()
-                            .padding(.vertical, 4)
-                        Button {
-                            createOffice(named: trimmed)
-                        } label: {
-                            Label("Create office \u{201C}\(trimmed)\u{201D}", systemImage: "plus.circle")
-                                .foregroundStyle(Color.accentColor)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 6)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
+                } catch {
+                    state?.errorMessage = (error as? DatabaseError)?.message ?? "Failed to create office."
                 }
             }
-            .frame(height: 240)
-
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            }
         }
-        .padding(12)
-        .frame(width: 300)
-        .onAppear { performSearch() }
-        .onChange(of: searchText) { _, _ in performSearch() }
-    }
-
-    private func performSearch() {
-        results = (try? appDatabase.fetchOfficeCandidates(matching: searchText)) ?? []
-    }
-
-    /// Creates the office row immediately (a draft entry needs a concrete
-    /// office id, and other windows should see the new office live). If the
-    /// draft is later discarded, a 0-holder office remains — visible and
-    /// deletable in the Manage Offices window.
-    private func createOffice(named name: String) {
-        do {
-            let officeID = try appDatabase.createOffice(name: name)
-            NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
-            onSelectOffice(officeID, name)
-        } catch {
-            errorMessage = (error as? DatabaseError)?.message ?? "Failed to create office."
-        }
+        return state
     }
 }
