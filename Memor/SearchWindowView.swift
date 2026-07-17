@@ -238,6 +238,49 @@ struct SearchWindowView: View {
         return result
     }
 
+    // MARK: - Copy search query
+
+    // Above this many selected rows the copy-search-query item grays out
+    // instead of building an unwieldy `id:… OR id:…` expression.
+    private static let copySearchQuerySelectionLimit = 100
+
+    /// The "Copy search query for X instances/queries" context-menu item.
+    /// `selectionCount` is the number of selected rows (what the label and the
+    /// limit go by); `instanceIDs` are the instances the copied query matches —
+    /// on the Queries tab several selected queries can share one instance.
+    @ViewBuilder
+    private func copySearchQueryButton(
+        selectionCount: Int,
+        noun: String,
+        instanceIDs: Set<Int64>
+    ) -> some View {
+        if selectionCount > Self.copySearchQuerySelectionLimit {
+            Button("Copy search query (too many selected)") {}
+                .disabled(true)
+        } else {
+            let nounText = selectionCount == 1 ? noun : (noun == "query" ? "queries" : "\(noun)s")
+            Button("Copy search query for \(selectionCount) \(nounText)") {
+                let query = instanceIDs.sorted().map { "id:\($0)" }.joined(separator: " OR ")
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                pasteboard.setString(query, forType: .string)
+            }
+        }
+    }
+
+    /// Instance ids behind the selected Queries-tab rows. Resolved through
+    /// querySections' QuerySearchResult values (not by parsing the string row
+    /// ids), so Person built-ins ("p:…" ids) and map queries resolve too.
+    private func queryInstanceIDs(forSelectedQueryIDs items: Set<String>) -> Set<Int64> {
+        var ids: Set<Int64> = []
+        for section in querySections {
+            for query in section.queries where items.contains(query.id) {
+                ids.insert(query.instanceID)
+            }
+        }
+        return ids
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -492,6 +535,13 @@ struct SearchWindowView: View {
                     pasteboard.setString("\(instanceID)", forType: .string)
                 }
             }
+            if !items.isEmpty {
+                copySearchQueryButton(
+                    selectionCount: items.count,
+                    noun: "instance",
+                    instanceIDs: items
+                )
+            }
             if let selection = convertibleSelection(items) {
                 Button("Change Type") {
                     changeTypeWindowState.requestOpen(instanceIDs: selection.ids, sourceTypeID: selection.typeID)
@@ -552,6 +602,12 @@ struct SearchWindowView: View {
                 Divider()
             }
             if !items.isEmpty {
+                copySearchQueryButton(
+                    selectionCount: items.count,
+                    noun: "query",
+                    instanceIDs: queryInstanceIDs(forSelectedQueryIDs: items)
+                )
+                Divider()
                 Button(items.count == 1 ? "Reset Due Date" : "Reset Due Dates") {
                     queryIDsPendingReset = items
                     isResetDueDatesConfirmationPresented = true
