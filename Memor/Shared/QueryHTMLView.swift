@@ -87,11 +87,16 @@ func injectQueryCSS(into html: String, appDatabase: AppDatabase, typeCSS: String
         """
 }
 
-func buildRenderedQuestionHTML(appDatabase: AppDatabase, query: StudyQuery) throws -> String {
+func buildRenderedQuestionHTML(
+    appDatabase: AppDatabase,
+    query: StudyQuery,
+    collectionIDsOverride: Set<Int64>? = nil
+) throws -> String {
     let previewHTML = try generatePreviewHTMLForQuestion(
         appDatabase: appDatabase,
         questionHTML: query.questionHTML,
-        instanceID: query.instanceID
+        instanceID: query.instanceID,
+        collectionIDsOverride: collectionIDsOverride
     )
     let (substitutedHTML, typeCSS) = try substitutingPersonOffices(
         appDatabase: appDatabase, query: query, html: previewHTML
@@ -104,12 +109,17 @@ func buildRenderedQuestionHTML(appDatabase: AppDatabase, query: StudyQuery) thro
     return try injectQueryCSS(into: renderedHTML, appDatabase: appDatabase, typeCSS: typeCSS)
 }
 
-func buildRenderedAnswerHTML(appDatabase: AppDatabase, query: StudyQuery) throws -> String {
+func buildRenderedAnswerHTML(
+    appDatabase: AppDatabase,
+    query: StudyQuery,
+    collectionIDsOverride: Set<Int64>? = nil
+) throws -> String {
     let previewHTML = try generatePreviewHTMLForAnswer(
         appDatabase: appDatabase,
         questionHTML: query.questionHTML,
         answerHTML: query.answerHTML,
-        instanceID: query.instanceID
+        instanceID: query.instanceID,
+        collectionIDsOverride: collectionIDsOverride
     )
     let (substitutedHTML, typeCSS) = try substitutingPersonOffices(
         appDatabase: appDatabase, query: query, html: previewHTML

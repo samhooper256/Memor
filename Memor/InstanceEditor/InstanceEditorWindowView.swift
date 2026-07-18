@@ -2537,14 +2537,16 @@ struct InstanceEditorWindowView: View {
             queryPreviewWindowState.requestOpen(
                 instanceID: loadedInstanceID,
                 queryTypeID: queryTypeID,
-                fieldValuesByName: liveFieldValuesByName()
+                fieldValuesByName: liveFieldValuesByName(),
+                collectionIDs: draft.selectedCollectionIDs
             )
         case .add:
             guard let selectedTypeID = draft.selectedTypeID else { return }
             queryPreviewWindowState.requestOpenDraft(
                 typeID: selectedTypeID,
                 queryTypeID: queryTypeID,
-                fieldValuesByName: liveFieldValuesByName()
+                fieldValuesByName: liveFieldValuesByName(),
+                collectionIDs: draft.selectedCollectionIDs
             )
         }
         openWindow(id: "query-preview")
@@ -2765,7 +2767,8 @@ struct InstanceEditorWindowView: View {
             instanceID: loadedInstanceID,
             kind: kind,
             partnershipID: personPartnershipID(forEntryID: partnerEntryID),
-            officeID: personSavedOfficeID(forEntryID: officeEntryID)
+            officeID: personSavedOfficeID(forEntryID: officeEntryID),
+            collectionIDs: draft.selectedCollectionIDs
         )
         openWindow(id: "query-preview")
     }
@@ -2786,7 +2789,8 @@ struct InstanceEditorWindowView: View {
             kind: kind,
             offices: draft.buildPersonRelationsDraft().offices,
             officeIndex: officeIndex,
-            fieldValuesByName: liveFieldValuesByName()
+            fieldValuesByName: liveFieldValuesByName(),
+            collectionIDs: draft.selectedCollectionIDs
         )
         openWindow(id: "query-preview")
     }

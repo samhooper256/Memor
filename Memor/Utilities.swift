@@ -20,20 +20,19 @@ func uniteQuestionAndAnswerWithDefaultSeparator(questionHTML: String, answerHTML
 func generatePreviewHTMLForQuestion(
     appDatabase: AppDatabase,
     questionHTML: String,
-    instanceID: Int64? = nil
+    instanceID: Int64? = nil,
+    collectionIDsOverride: Set<Int64>? = nil
 ) throws -> String {
     let globalQueryHTML = try appDatabase.fetchGlobalQueryHTML()
 
     let collectionsToken = "{{#CollectionClasses}}"
     var html = globalQueryHTML
     if html.contains(collectionsToken) {
-        let classes: String
-        if let instanceID,
-           let ids = try? appDatabase.fetchCollectionIDs(forInstanceID: instanceID) {
-            classes = ids.sorted().map { "_col\($0)" }.joined(separator: " ")
-        } else {
-            classes = ""
-        }
+        let classes = resolveCollectionIDs(
+            appDatabase: appDatabase,
+            instanceID: instanceID,
+            override: collectionIDsOverride
+        ).map { "_col\($0)" }.joined(separator: " ")
         html = html.replacingOccurrences(of: collectionsToken, with: classes)
     }
 
@@ -41,7 +40,9 @@ func generatePreviewHTMLForQuestion(
         html = html.replacingCharacters(in: contentRange, with: questionHTML)
     }
 
-    let withCollectionIDs = substituteCollectionIDsToken(in: html, appDatabase: appDatabase, instanceID: instanceID)
+    let withCollectionIDs = substituteCollectionIDsToken(
+        in: html, appDatabase: appDatabase, instanceID: instanceID, override: collectionIDsOverride
+    )
     return substituteInstanceIDToken(in: withCollectionIDs, instanceID: instanceID)
 }
 
@@ -49,36 +50,52 @@ func generatePreviewHTMLForAnswer(
     appDatabase: AppDatabase,
     questionHTML: String,
     answerHTML: String,
-    instanceID: Int64? = nil
+    instanceID: Int64? = nil,
+    collectionIDsOverride: Set<Int64>? = nil
 ) throws -> String {
     let previewHTML = try generatePreviewHTMLForQuestion(
         appDatabase: appDatabase,
         questionHTML: answerHTML,
-        instanceID: instanceID
+        instanceID: instanceID,
+        collectionIDsOverride: collectionIDsOverride
     )
 
     let withQuestion = previewHTML.replacingOccurrences(of: "{{#QuestionContent}}", with: questionHTML)
     // Re-run the instance-scoped tokens: {{#QuestionContent}} may have spliced the
     // raw question HTML (with its own tokens) in after the first pass.
-    let withCollectionIDs = substituteCollectionIDsToken(in: withQuestion, appDatabase: appDatabase, instanceID: instanceID)
+    let withCollectionIDs = substituteCollectionIDsToken(
+        in: withQuestion, appDatabase: appDatabase, instanceID: instanceID, override: collectionIDsOverride
+    )
     return substituteInstanceIDToken(in: withCollectionIDs, instanceID: instanceID)
+}
+
+/// Collection membership for the {{#CollectionClasses}}/{{#CollectionIDs}}
+/// tokens, sorted ascending. The instance editor's Query Preview passes its
+/// draft's checked collections as the override so the tokens reflect unsaved
+/// checkbox state (and resolve at all for Add-mode drafts, which have no
+/// instance row); everything else falls back to the persisted membership.
+private func resolveCollectionIDs(
+    appDatabase: AppDatabase,
+    instanceID: Int64?,
+    override: Set<Int64>?
+) -> [Int64] {
+    if let override { return override.sorted() }
+    guard let instanceID,
+          let ids = try? appDatabase.fetchCollectionIDs(forInstanceID: instanceID) else { return [] }
+    return ids.sorted()
 }
 
 private func substituteCollectionIDsToken(
     in html: String,
     appDatabase: AppDatabase,
-    instanceID: Int64?
+    instanceID: Int64?,
+    override: Set<Int64>?
 ) -> String {
     let token = "{{#CollectionIDs}}"
     guard html.contains(token) else { return html }
 
-    let arrayLiteral: String
-    if let instanceID,
-       let ids = try? appDatabase.fetchCollectionIDs(forInstanceID: instanceID) {
-        arrayLiteral = "[" + ids.sorted().map(String.init).joined(separator: ",") + "]"
-    } else {
-        arrayLiteral = "[]"
-    }
+    let ids = resolveCollectionIDs(appDatabase: appDatabase, instanceID: instanceID, override: override)
+    let arrayLiteral = "[" + ids.map(String.init).joined(separator: ",") + "]"
     return html.replacingOccurrences(of: token, with: arrayLiteral)
 }
 

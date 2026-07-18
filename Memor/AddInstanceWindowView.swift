@@ -141,12 +141,17 @@ final class QueryPreviewWindowState: ObservableObject {
     // (and, for .office, the index of the previewed one) ride the request.
     @Published private(set) var requestedPersonOfficeDrafts: [PersonOfficeDraft]?
     @Published private(set) var requestedPersonOfficeDraftIndex: Int?
+    // Non-nil only for previews requested by the instance editor: the draft's
+    // currently-checked collections, so {{#CollectionClasses}}/{{#CollectionIDs}}
+    // reflect unsaved checkbox state instead of the persisted membership.
+    @Published private(set) var requestedCollectionIDs: Set<Int64>?
     @Published private(set) var requestNonce = UUID()
 
     func requestOpen(
         instanceID: Int64,
         queryTypeID: Int64,
-        fieldValuesByName: [String: String]? = nil
+        fieldValuesByName: [String: String]? = nil,
+        collectionIDs: Set<Int64>? = nil
     ) {
         requestedInstanceID = instanceID
         requestedTypeID = nil
@@ -157,6 +162,7 @@ final class QueryPreviewWindowState: ObservableObject {
         requestedPersonOfficeID = nil
         requestedPersonOfficeDrafts = nil
         requestedPersonOfficeDraftIndex = nil
+        requestedCollectionIDs = collectionIDs
         requestNonce = UUID()
     }
 
@@ -170,11 +176,18 @@ final class QueryPreviewWindowState: ObservableObject {
         requestedPersonOfficeID = nil
         requestedPersonOfficeDrafts = nil
         requestedPersonOfficeDraftIndex = nil
+        requestedCollectionIDs = nil
         requestNonce = UUID()
     }
 
     /// Preview one of a Person instance's built-in queries.
-    func requestOpenPersonQuery(instanceID: Int64, kind: PersonQueryKind, partnershipID: Int64?, officeID: Int64? = nil) {
+    func requestOpenPersonQuery(
+        instanceID: Int64,
+        kind: PersonQueryKind,
+        partnershipID: Int64?,
+        officeID: Int64? = nil,
+        collectionIDs: Set<Int64>? = nil
+    ) {
         requestedInstanceID = instanceID
         requestedTypeID = nil
         requestedQueryTypeID = nil
@@ -184,6 +197,7 @@ final class QueryPreviewWindowState: ObservableObject {
         requestedPersonOfficeID = officeID
         requestedPersonOfficeDrafts = nil
         requestedPersonOfficeDraftIndex = nil
+        requestedCollectionIDs = collectionIDs
         requestNonce = UUID()
     }
 
@@ -193,7 +207,8 @@ final class QueryPreviewWindowState: ObservableObject {
     func requestOpenDraft(
         typeID: Int64,
         queryTypeID: Int64,
-        fieldValuesByName: [String: String]
+        fieldValuesByName: [String: String],
+        collectionIDs: Set<Int64>? = nil
     ) {
         requestedInstanceID = nil
         requestedTypeID = typeID
@@ -204,6 +219,7 @@ final class QueryPreviewWindowState: ObservableObject {
         requestedPersonOfficeID = nil
         requestedPersonOfficeDrafts = nil
         requestedPersonOfficeDraftIndex = nil
+        requestedCollectionIDs = collectionIDs
         requestNonce = UUID()
     }
 
@@ -216,7 +232,8 @@ final class QueryPreviewWindowState: ObservableObject {
         kind: PersonQueryKind,
         offices: [PersonOfficeDraft],
         officeIndex: Int?,
-        fieldValuesByName: [String: String]
+        fieldValuesByName: [String: String],
+        collectionIDs: Set<Int64>? = nil
     ) {
         requestedInstanceID = nil
         requestedTypeID = nil
@@ -227,6 +244,7 @@ final class QueryPreviewWindowState: ObservableObject {
         requestedPersonOfficeID = nil
         requestedPersonOfficeDrafts = offices
         requestedPersonOfficeDraftIndex = officeIndex
+        requestedCollectionIDs = collectionIDs
         requestNonce = UUID()
     }
 }

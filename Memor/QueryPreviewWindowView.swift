@@ -175,7 +175,11 @@ struct QueryPreviewWindowView: View {
             if query.kind == .pointMap || query.kind == .boundaryMap {
                 renderedAnswerHTML = ""
             } else {
-                renderedAnswerHTML = try buildRenderedAnswerHTML(appDatabase: appDatabase, query: query)
+                renderedAnswerHTML = try buildRenderedAnswerHTML(
+                    appDatabase: appDatabase,
+                    query: query,
+                    collectionIDsOverride: windowState.requestedCollectionIDs
+                )
             }
             errorMessage = nil
         } catch {
