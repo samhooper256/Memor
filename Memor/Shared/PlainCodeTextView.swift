@@ -247,6 +247,14 @@ struct PlainCodeTextView: NSViewRepresentable {
     final class FocusTrackingTextView: NSTextView {
         var onFocusChange: ((Bool) -> Void)?
 
+        // Tab inserts four spaces in the HTML/CSS code editors. (Instance-field
+        // editors are a different class — InstanceTextView — where Tab is
+        // reserved for field navigation.) insertText keeps undo and the
+        // textDidChange -> highlighting pipeline working normally.
+        override func insertTab(_ sender: Any?) {
+            insertText("    ", replacementRange: selectedRange())
+        }
+
         override func becomeFirstResponder() -> Bool {
             let didBecomeFirstResponder = super.becomeFirstResponder()
             if didBecomeFirstResponder {
