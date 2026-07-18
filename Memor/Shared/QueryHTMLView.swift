@@ -187,7 +187,11 @@ func parseLinkedQueryID(from url: URL) -> (instanceID: Int64, queryTypeID: Int64
 }
 
 func rewriteLocalFileResourceURLs(in html: String) -> String {
-    guard let regex = try? NSRegularExpression(pattern: #"file://[^"'\\s>]+"#) else {
+    // Raw string: `\s` reaches ICU as the whitespace class. (It was `\\s` — a
+    // literal backslash plus the letter s — which truncated every match at the
+    // first "s" in the path; the rewrite only worked because the un-encoded
+    // tail happened to reassemble after the substitution.)
+    guard let regex = try? NSRegularExpression(pattern: #"file://[^"'\s>]+"#) else {
         return html
     }
 
