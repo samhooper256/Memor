@@ -145,6 +145,25 @@ private func substitutingPersonOffices(
 let localImageResourceScheme = "flashcards-local-image"
 let instanceLinkScheme = "id"
 
+/// Stable base URL for every card `loadHTMLString`. With `baseURL: nil` each
+/// card is an about:blank document with an EMPTY registrable domain, and
+/// WebKit's WebProcessCache refuses to cache such processes — so every card
+/// load spawned a fresh WebContent helper and tore down the old one (64
+/// helpers in one 67-minute study session; one spawn hit a RunningBoard
+/// registration flake and left a permanently blank card, 2026-07-18). A
+/// stable non-empty host makes consecutive loads same-site so one WebContent
+/// process is reused.
+///
+/// - This scheme must NEVER be registered via setURLSchemeHandler: WebKit
+///   forces a process swap when navigating to a registered scheme.
+/// - Same-origin side effect: all cards/previews share one (in-memory,
+///   ephemeral) storage bucket. No app-generated HTML uses storage.
+/// - If custom schemes turn out not to be process-cached (undocumented),
+///   flip this single line to `URL(string: "https://memor-card.invalid/")!`
+///   — decidePolicyFor matches this constant's scheme+host, nothing else
+///   changes. Verify local images still render before adopting the fallback.
+let queryHTMLBaseURL = URL(string: "memor-card://card/")!
+
 /// The single ephemeral data store shared by every WKWebView in the app (still
 /// non-persistent — nothing touches disk). Each `WKWebsiteDataStore.nonPersistent()`
 /// call mints a distinct store with its own networking session and defeats WebKit's
@@ -336,7 +355,7 @@ final class QueryWebContainerView: NSView {
         // flashing its images as they re-fetch through the local-image scheme handler.
         guard html != lastLoadedHTML else { return }
         lastLoadedHTML = html
-        webView.loadHTMLString(rewriteLocalFileResourceURLs(in: html), baseURL: nil)
+        webView.loadHTMLString(rewriteLocalFileResourceURLs(in: html), baseURL: queryHTMLBaseURL)
     }
 }
 
@@ -374,6 +393,26 @@ private final class QueryWebNavigationDelegate: NSObject, WKNavigationDelegate {
             return
         }
 
+        // User-authored RELATIVE hrefs resolve against queryHTMLBaseURL. Under
+        // the old nil baseURL they resolved against about:blank and went
+        // nowhere; keep that no-op behavior — allowing them would top-level
+        // navigate to a base-scheme URL with no handler and blank the card.
+        // Same-document fragment links stay allowed (in-page scroll). This
+        // branch must run BEFORE the external http/https branch so that with
+        // an https fallback base, base-relative links are cancelled here
+        // instead of opening a dead link in the browser.
+        if url.scheme?.lowercased() == queryHTMLBaseURL.scheme,
+           url.host?.lowercased() == queryHTMLBaseURL.host {
+            if url.fragment != nil,
+               let currentURL = webView.url,
+               urlStringIgnoringFragment(url) == urlStringIgnoringFragment(currentURL) {
+                decisionHandler(.allow)
+                return
+            }
+            decisionHandler(.cancel)
+            return
+        }
+
         // External web links open in the user's default browser, not in the web view.
         if let scheme = url.scheme?.lowercased(), ["http", "https", "mailto"].contains(scheme) {
             NSWorkspace.shared.open(url)
@@ -383,4 +422,10 @@ private final class QueryWebNavigationDelegate: NSObject, WKNavigationDelegate {
 
         decisionHandler(.allow)
     }
+}
+
+private func urlStringIgnoringFragment(_ url: URL) -> String {
+    var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+    components?.fragment = nil
+    return components?.string ?? url.absoluteString
 }
