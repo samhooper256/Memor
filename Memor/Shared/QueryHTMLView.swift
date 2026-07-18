@@ -304,6 +304,24 @@ final class QueryWebContainerView: NSView {
     private let imageSchemeHandler = LocalImageURLSchemeHandler()
     private let navigationDelegate = QueryWebNavigationDelegate()
     private var lastLoadedHTML: String?
+
+    // Recovery state. Every startLoad bumps loadGeneration (staleness token for
+    // the timers) and records the WKNavigation returned by loadHTMLString (the
+    // identity token for delegate callbacks — failures of cancelled link-click
+    // navigations must not trigger recovery of the page load).
+    private var currentNavigation: WKNavigation?
+    private var loadGeneration = 0
+    private var hasCommittedCurrentLoad = false
+    private var currentLoadStartedAt: Date?
+    private var retryCount = 0
+    private var commitWatchdog: DispatchWorkItem?
+    private var pendingRetry: DispatchWorkItem?
+    private var didBecomeActiveObserver: NSObjectProtocol?
+
+    private static let maxAutomaticRetries = 3
+    private static let commitTimeout: TimeInterval = 5
+    private static let retryDelays: [TimeInterval] = [0.25, 1.0, 4.0]
+
     var onInstanceLinkActivated: ((Int64) -> Void)? {
         didSet {
             navigationDelegate.onInstanceLinkActivated = onInstanceLinkActivated
@@ -329,11 +347,37 @@ final class QueryWebContainerView: NSView {
         webView.translatesAutoresizingMaskIntoConstraints = false
         webView.setValue(false, forKey: "drawsBackground")
         webView.navigationDelegate = navigationDelegate
-        navigationDelegate.onWebContentProcessTerminated = { [weak self] in
-            guard let self, let html = self.lastLoadedHTML else { return }
-            self.lastLoadedHTML = nil
-            self.loadHTML(html)
+
+        navigationDelegate.onNavigationCommitted = { [weak self] navigation in
+            guard let self, navigation === self.currentNavigation else { return }
+            self.hasCommittedCurrentLoad = true
+            // A committed load restores the full recovery budget — this is what
+            // lets WebKit's occasional memory-budget kill of the (long-lived,
+            // shared) WebContent process act as a self-recovering recycle.
+            self.retryCount = 0
+            self.commitWatchdog?.cancel()
         }
+        navigationDelegate.onNavigationFailed = { [weak self] navigation, error in
+            guard let self, navigation === self.currentNavigation else { return }
+            let nsError = error as NSError
+            // Superseded loads (NSURLErrorCancelled) and policy-cancelled
+            // navigations (WebKit 102, "frame load interrupted") are not
+            // failures; retrying on them would reload the card under the user.
+            if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled { return }
+            if nsError.domain == "WebKitErrorDomain", nsError.code == 102 { return }
+            self.scheduleRetry()
+        }
+        navigationDelegate.onWebContentProcessTerminated = { [weak self] in
+            self?.scheduleRetry()
+        }
+        didBecomeActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.retryIfLoadNeverCommitted()
+        }
+
         addSubview(webView)
 
         NSLayoutConstraint.activate([
@@ -349,13 +393,84 @@ final class QueryWebContainerView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    deinit {
+        commitWatchdog?.cancel()
+        pendingRetry?.cancel()
+        if let didBecomeActiveObserver {
+            NotificationCenter.default.removeObserver(didBecomeActiveObserver)
+        }
+    }
+
     func loadHTML(_ html: String) {
         // SwiftUI calls updateNSView (and thus loadHTML) on every unrelated state
         // change; reloading the same page would tear it down and re-commit it,
         // flashing its images as they re-fetch through the local-image scheme handler.
         guard html != lastLoadedHTML else { return }
         lastLoadedHTML = html
-        webView.loadHTMLString(rewriteLocalFileResourceURLs(in: html), baseURL: queryHTMLBaseURL)
+        retryCount = 0
+        startLoad(html)
+    }
+
+    // One load attempt — new content or a recovery retry. Recovery calls this
+    // directly, bypassing loadHTML's dedup guard: the guard exists to swallow
+    // SwiftUI update spam, not to block reloading a blank page.
+    private func startLoad(_ html: String) {
+        loadGeneration += 1
+        hasCommittedCurrentLoad = false
+        currentLoadStartedAt = Date()
+        pendingRetry?.cancel()
+        armCommitWatchdog(forGeneration: loadGeneration)
+        currentNavigation = webView.loadHTMLString(
+            rewriteLocalFileResourceURLs(in: html),
+            baseURL: queryHTMLBaseURL
+        )
+    }
+
+    // A load that never commits fires no delegate callback at all (observed
+    // 2026-07-18: a WebContent process RunningBoard never registered — alive
+    // but suspended, never painting). This timeout is the only recovery for
+    // that case. Staleness is handled by capturing the generation by value; a
+    // timer that outlives its load is a no-op.
+    private func armCommitWatchdog(forGeneration generation: Int) {
+        commitWatchdog?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.loadGeneration == generation,
+                  !self.hasCommittedCurrentLoad else { return }
+            self.scheduleRetry()
+        }
+        commitWatchdog = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.commitTimeout, execute: work)
+    }
+
+    private func scheduleRetry() {
+        guard lastLoadedHTML != nil, retryCount < Self.maxAutomaticRetries else { return }
+        let delay = Self.retryDelays[retryCount]
+        retryCount += 1
+        let generation = loadGeneration
+        let work = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.loadGeneration == generation,
+                  let html = self.lastLoadedHTML else { return }
+            self.startLoad(html)
+        }
+        pendingRetry?.cancel()
+        pendingRetry = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    // The 2026-07-18 manual recovery (switch apps and back), automated: if the
+    // newest load is uncommitted and stale, returning to the app retries with a
+    // fresh budget. Also covers recovery timers deferred by App Nap while the
+    // app was inactive. The age check keeps a healthy in-flight load from
+    // being clobbered.
+    private func retryIfLoadNeverCommitted() {
+        guard let html = lastLoadedHTML,
+              !hasCommittedCurrentLoad,
+              let startedAt = currentLoadStartedAt,
+              Date().timeIntervalSince(startedAt) >= Self.commitTimeout else { return }
+        retryCount = 0
+        startLoad(html)
     }
 }
 
@@ -363,11 +478,27 @@ private final class QueryWebNavigationDelegate: NSObject, WKNavigationDelegate {
     var onInstanceLinkActivated: ((Int64) -> Void)?
     var onQueryLinkActivated: ((Int64, Int64) -> Void)?
     var onWebContentProcessTerminated: (() -> Void)?
+    var onNavigationCommitted: ((WKNavigation?) -> Void)?
+    var onNavigationFailed: ((WKNavigation?, Error) -> Void)?
 
-    // If the web content process crashes, the container's dedup cache would
-    // otherwise suppress reloading the (now blank) page.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         onWebContentProcessTerminated?()
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        onNavigationCommitted?(navigation)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didFailProvisionalNavigation navigation: WKNavigation!,
+        withError error: Error
+    ) {
+        onNavigationFailed?(navigation, error)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        onNavigationFailed?(navigation, error)
     }
 
     func webView(
