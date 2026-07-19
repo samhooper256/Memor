@@ -97,7 +97,10 @@ struct PlainCodeTextView: NSViewRepresentable {
         textView.isVerticallyResizable = true
         textView.autoresizingMask = [.width]
         textView.textContainerInset = NSSize(width: 8, height: 8)
+        // The base look lives on the view (uniform in a plain-text view);
+        // highlighting is a color-only rendering overlay on top of it.
         textView.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        textView.textColor = .labelColor
         textView.string = text
         textView.onFocusChange = { isFocused in
             DispatchQueue.main.async {
@@ -124,7 +127,6 @@ struct PlainCodeTextView: NSViewRepresentable {
             // External reset (switching query types, Question/Answer, or type detail pages)
             // invalidates undo entries' ranges into the old text.
             textView.undoManager?.removeAllActions()
-            context.coordinator.applySyntaxHighlighting()
         }
 
         context.coordinator.highlightedTokens = highlightedTokens
@@ -144,8 +146,6 @@ struct PlainCodeTextView: NSViewRepresentable {
         var booleanFieldNames: Set<String>
         @Binding var isFocused: Bool
         weak var textView: NSTextView?
-        private let baseFont = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-        private let baseColor = NSColor.labelColor
 
         init(
             text: Binding<String>,
@@ -170,54 +170,71 @@ struct PlainCodeTextView: NSViewRepresentable {
             }
         }
 
+        // Highlighting is applied as RENDERING attributes (TextKit 2; temporary
+        // attributes under a TextKit 1 fallback), never as text-storage edits.
+        // The previous implementation rewrote storage attributes over the whole
+        // document on every keystroke, which invalidates the entire TextKit 2
+        // layout — the scroll position jumped while typing and invalidated-but-
+        // unrendered fragments stayed invisible until scrolled into. Rendering
+        // attributes affect drawing only, so this pass can never move the
+        // scroll or perturb layout. TextKit clears them for edited portions
+        // automatically; textDidChange re-applies the full set.
         func applySyntaxHighlighting() {
-            guard let textView, let textStorage = textView.textStorage else { return }
+            guard let textView else { return }
+            let coloredRanges = highlightRanges(in: textView.string)
 
-            let selectedRanges = textView.selectedRanges
-            let fullRange = NSRange(location: 0, length: textStorage.length)
-            let defaultAttributes: [NSAttributedString.Key: Any] = [
-                .font: baseFont,
-                .foregroundColor: baseColor
-            ]
+            if let textLayoutManager = textView.textLayoutManager,
+               let contentManager = textLayoutManager.textContentManager {
+                textLayoutManager.invalidateRenderingAttributes(for: textLayoutManager.documentRange)
+                for (range, color) in coloredRanges {
+                    guard let textRange = Self.textRange(for: range, in: contentManager) else { continue }
+                    textLayoutManager.setRenderingAttributes([.foregroundColor: color], for: textRange)
+                }
+            } else if let layoutManager = textView.layoutManager {
+                let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
+                layoutManager.setTemporaryAttributes([:], forCharacterRange: fullRange)
+                for (range, color) in coloredRanges {
+                    layoutManager.setTemporaryAttributes([.foregroundColor: color], forCharacterRange: range)
+                }
+            }
+        }
 
-            textStorage.beginEditing()
-            textStorage.setAttributes(defaultAttributes, range: fullRange)
+        // Later entries win where ranges overlap (placeholders over tokens),
+        // matching the old storage-attribute application order.
+        private func highlightRanges(in string: String) -> [(NSRange, NSColor)] {
+            var result: [(NSRange, NSColor)] = []
+            let nsString = string as NSString
 
             for highlightedToken in highlightedTokens where !highlightedToken.isEmpty {
-                let tokenNSString = textStorage.string as NSString
-                var searchRange = NSRange(location: 0, length: tokenNSString.length)
+                var searchRange = NSRange(location: 0, length: nsString.length)
 
                 while true {
-                    let matchRange = tokenNSString.range(of: highlightedToken, options: [], range: searchRange)
+                    let matchRange = nsString.range(of: highlightedToken, options: [], range: searchRange)
                     if matchRange.location == NSNotFound {
                         break
                     }
 
-                    textStorage.addAttribute(
-                        .foregroundColor,
-                        value: NSColor.systemPink,
-                        range: matchRange
-                    )
+                    result.append((matchRange, .systemPink))
 
                     let nextLocation = matchRange.location + matchRange.length
-                    searchRange = NSRange(location: nextLocation, length: tokenNSString.length - nextLocation)
+                    searchRange = NSRange(location: nextLocation, length: nsString.length - nextLocation)
                 }
             }
 
             if !fieldNames.isEmpty {
                 let placeholderRegex = try? NSRegularExpression(pattern: #"\{\{([^{}]+)\}\}"#)
-                let fullStringRange = NSRange(location: 0, length: textStorage.length)
-                placeholderRegex?.enumerateMatches(in: textStorage.string, range: fullStringRange) { match, _, _ in
+                let fullStringRange = NSRange(location: 0, length: nsString.length)
+                placeholderRegex?.enumerateMatches(in: string, range: fullStringRange) { match, _, _ in
                     guard
                         let match,
                         match.numberOfRanges >= 2,
                         match.range.location != NSNotFound,
-                        let range = Range(match.range(at: 1), in: textStorage.string)
+                        let range = Range(match.range(at: 1), in: string)
                     else {
                         return
                     }
 
-                    let content = String(textStorage.string[range])
+                    let content = String(string[range])
                     // Plain {{FieldName}} for any field, plus the Boolean-only colon
                     // forms {{BoolField:bit}} and {{BoolField:value_if_true:value_if_false}}
                     // (recognized by the part before the first colon being a boolean field).
@@ -231,16 +248,18 @@ struct PlainCodeTextView: NSViewRepresentable {
                     }
                     guard isPlaceholder else { return }
 
-                    textStorage.addAttribute(
-                        .foregroundColor,
-                        value: NSColor.systemBlue,
-                        range: match.range
-                    )
+                    result.append((match.range, .systemBlue))
                 }
             }
 
-            textStorage.endEditing()
-            textView.selectedRanges = selectedRanges
+            return result
+        }
+
+        private static func textRange(for range: NSRange, in contentManager: NSTextContentManager) -> NSTextRange? {
+            let documentStart = contentManager.documentRange.location
+            guard let start = contentManager.location(documentStart, offsetBy: range.location),
+                  let end = contentManager.location(start, offsetBy: range.length) else { return nil }
+            return NSTextRange(location: start, end: end)
         }
     }
 
