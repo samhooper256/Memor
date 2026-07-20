@@ -955,16 +955,17 @@ struct AppDatabase {
         }
     }
 
-    // A collection name may not start with a digit, so the `col:`/`collection:` search
-    // component can treat a leading-digit argument as a collection ID without ambiguity.
-    nonisolated static func collectionNameStartsWithDigit(_ name: String) -> Bool {
+    // A collection or type name may not start with a digit, so the
+    // `col:`/`collection:`/`type:`/`qt:` search components can treat a
+    // leading-digit argument as an ID without ambiguity.
+    nonisolated static func nameStartsWithDigit(_ name: String) -> Bool {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let first = trimmed.first else { return false }
         return first.isNumber
     }
 
     func createCollection(name: String) throws -> Collection {
-        if Self.collectionNameStartsWithDigit(name) {
+        if Self.nameStartsWithDigit(name) {
             throw DatabaseError(message: "A collection name cannot start with a digit.")
         }
         return try dbQueue.write { db in
@@ -992,7 +993,7 @@ struct AppDatabase {
     }
 
     func renameCollection(id: Int64, to newName: String) throws {
-        if Self.collectionNameStartsWithDigit(newName) {
+        if Self.nameStartsWithDigit(newName) {
             throw DatabaseError(message: "A collection name cannot start with a digit.")
         }
         try dbQueue.write { db in
@@ -3228,6 +3229,9 @@ struct AppDatabase {
             guard !trimmedName.isEmpty else {
                 throw DatabaseError(message: "Type name cannot be empty.")
             }
+            if Self.nameStartsWithDigit(trimmedName) {
+                throw DatabaseError(message: "A type name cannot start with a digit.")
+            }
             if try String.fetchOne(
                 db,
                 sql: "SELECT name FROM \"type\" WHERE name = ?",
@@ -4766,6 +4770,9 @@ struct AppDatabase {
     }
 
     func renameType(typeID: Int64, to newName: String) throws {
+        if Self.nameStartsWithDigit(newName) {
+            throw DatabaseError(message: "A type name cannot start with a digit.")
+        }
         try dbQueue.write { db in
             let isBuiltin = try Bool.fetchOne(
                 db,
@@ -6869,10 +6876,10 @@ struct AppDatabase {
             }
 
             // Parses a `qt:` argument of the form Type:QueryType or TypeID:QueryType.
-            // The type part may not contain a colon; the query-type part may. The type
-            // part is an ID only when it parses as an integer in full — unlike
-            // collections, type names are not barred from starting with a digit, so a
-            // leading-digit rule would make types like "3D Shapes" unreachable.
+            // The type part may not contain a colon; the query-type part may. A leading
+            // digit means a type ID, like parseCollectionComponent (type names can
+            // never start with a digit — enforced on create/rename — so this is
+            // unambiguous).
             static func parseQueryTypeComponent(argument: String) throws -> SearchExpression {
                 guard let colonIndex = argument.firstIndex(of: ":") else {
                     throw DatabaseError(message: "The qt: component requires a type and a query type separated by a colon, e.g. qt:Vocab:ToDefinition.")
@@ -6885,7 +6892,10 @@ struct AppDatabase {
                 guard !queryTypeName.isEmpty else {
                     throw DatabaseError(message: "The qt: component requires a query type name after the second colon.")
                 }
-                if let typeID = Int64(typeArgument) {
+                if let first = typeArgument.first, first.isNumber {
+                    guard let typeID = Int64(typeArgument) else {
+                        throw DatabaseError(message: "The qt: component requires a valid integer type ID.")
+                    }
                     return .queryTypeID(typeID: typeID, queryTypeName: queryTypeName)
                 }
                 return .queryType(typeName: typeArgument, queryTypeName: queryTypeName)

@@ -980,7 +980,7 @@ struct TypeDetailPageView: View {
             isRenameTypePopoverPresented = false
             errorMessage = nil
         } catch {
-            errorMessage = "Failed to rename type."
+            errorMessage = (error as? DatabaseError)?.message ?? "Failed to rename type."
         }
     }
 
