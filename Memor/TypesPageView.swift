@@ -334,6 +334,7 @@ private struct TypeRowView: View {
 
     @State private var isHovered = false
     @State private var isDeleteButtonHovered = false
+    @State private var isIDCopyButtonHovered = false
 
     private var instanceCountText: String {
         let noun = type.instanceCount == 1 ? "instance" : "instances"
@@ -381,21 +382,49 @@ private struct TypeRowView: View {
                         lineWidth: isHighlighted ? 2 : 1
                     )
 
-                if isHovered && !type.isBuiltin {
-                    Button(action: onDelete) {
-                        Image(systemName: "trash")
-                            .foregroundStyle(.red)
-                            .padding(8)
-                            .background(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(isDeleteButtonHovered ? Color.red.opacity(0.14) : Color.clear)
-                            )
+                if isHovered {
+                    HStack(spacing: 2) {
+                        if !type.isBuiltin {
+                            Button(action: onDelete) {
+                                Image(systemName: "trash")
+                                    .foregroundStyle(.red)
+                                    .padding(8)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .fill(isDeleteButtonHovered ? Color.red.opacity(0.14) : Color.clear)
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                            .onHover { hovering in
+                                isDeleteButtonHovered = hovering
+                            }
+                        }
+
+                        Text("ID: \(type.id)")
+                            .font(.system(.body, design: .monospaced))
+                            .textSelection(.enabled)
+                            .padding(.leading, 6)
+
+                        Button {
+                            let pasteboard = NSPasteboard.general
+                            pasteboard.clearContents()
+                            pasteboard.setString(String(type.id), forType: .string)
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                                .padding(8)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(isIDCopyButtonHovered ? Color.secondary.opacity(0.18) : Color.clear)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .help("Copy ID")
+                        .padding(.leading, 4)
+                        .onHover { hovering in
+                            isIDCopyButtonHovered = hovering
+                        }
                     }
-                    .buttonStyle(.plain)
                     .padding(8)
-                    .onHover { hovering in
-                        isDeleteButtonHovered = hovering
-                    }
                 }
             }
         }
@@ -411,6 +440,7 @@ private struct TypeRowView: View {
             case .ended:
                 isHovered = false
                 isDeleteButtonHovered = false
+                isIDCopyButtonHovered = false
             }
         }
     }

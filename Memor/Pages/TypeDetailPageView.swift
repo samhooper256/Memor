@@ -41,6 +41,7 @@ struct TypeDetailPageView: View {
     @State private var errorMessage: String?
     @State private var previewHTML = ""
     @State private var previewErrorMessage: String?
+    @State private var isIDCopyButtonHovered = false
     // The preview hosts a WKWebView, whose synchronous creation (~hundreds of ms
     // the first time) would otherwise block the navigation into this page. Mount
     // it one runloop after the page's first paint so the transition feels instant.
@@ -124,6 +125,35 @@ struct TypeDetailPageView: View {
         }
     }
 
+    // Trailing "ID: N" + copy button shared by both header variants, matching
+    // the Collections detail header.
+    @ViewBuilder
+    private var typeIDBadge: some View {
+        Spacer(minLength: 0)
+
+        Text("ID: \(type.id)")
+            .font(.system(.body, design: .monospaced))
+            .textSelection(.enabled)
+
+        Button {
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(String(type.id), forType: .string)
+        } label: {
+            Image(systemName: "doc.on.doc")
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(isIDCopyButtonHovered ? Color.secondary.opacity(0.18) : Color.clear)
+                )
+        }
+        .buttonStyle(.plain)
+        .help("Copy ID")
+        .onHover { hovering in
+            isIDCopyButtonHovered = hovering
+        }
+    }
+
     private var builtinTypeBody: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -134,9 +164,14 @@ struct TypeDetailPageView: View {
                 .buttonStyle(.plain)
                 .keyboardShortcut(.escape, modifiers: [])
 
-                Text(type.name)
-                    .font(.largeTitle)
-                    .fontWeight(.semibold)
+                HStack(spacing: 12) {
+                    Text(type.name)
+                        .font(.largeTitle)
+                        .fontWeight(.semibold)
+
+                    typeIDBadge
+                }
+                .frame(maxWidth: .infinity)
 
                 Text("Built-in type — not editable")
                     .font(.title3)
@@ -226,7 +261,10 @@ struct TypeDetailPageView: View {
                         }
                     }
                     }
+
+                    typeIDBadge
                 }
+                .frame(maxWidth: .infinity)
 
                 DescriptionEditor(text: $description)
                     .onChange(of: description) { _, newValue in
