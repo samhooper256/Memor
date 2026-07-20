@@ -40,8 +40,10 @@ extension AppDatabase {
     /// outcome is row-dependent.
     ///
     /// Sound because the only folded leaves compile to row-independent SQL:
-    /// `.type` becomes `? = ? COLLATE NOCASE` over two bound constants, and
-    /// `.new` becomes the constant `0` in the map condition builders. `qt:`
+    /// `.type`/`.typeID` become bound-constant compares (or, for `.typeID` in
+    /// the map builders, an uncorrelated constant subquery — nil `typeID`
+    /// defers those to SQL), and `.new` becomes the constant `0` in the map
+    /// condition builders. `qt:`
     /// folds only its type part (a bound-constant compare in every builder);
     /// a type match returns nil because the query-type part (name/kind/office/
     /// direction) is row-dependent. `typeID` is the scanned type's row ID when
@@ -63,6 +65,9 @@ extension AppDatabase {
                 return nil
             case .type(let searchedTypeName):
                 return sqliteNocaseEquals(typeName, searchedTypeName)
+            case .typeID(let searchedTypeID):
+                guard let typeID else { return nil }
+                return typeID == searchedTypeID
             case .queryType(let searchedTypeName, _):
                 return sqliteNocaseEquals(typeName, searchedTypeName) ? nil : false
             case .queryTypeID(let searchedTypeID, _):

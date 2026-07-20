@@ -137,7 +137,7 @@ Components:
 - Space-separated components combined with AND
 - `literal:text` - field contains text
 - `collection:name` or `col:name` - instance in named collection
-- `type:name` - instance of named type
+- `type:name` or `type:ID` - instance of the named type, or of the type with this numeric ID (leading digit = ID; type names, like collection names, cannot start with a digit)
 - `qt:type:queryType` - query type scoped to a type: instance search = instances of the type with that query type enabled; query search = that query type's queries. Type may be a name or numeric ID (leading digit = ID; type names, like collection names, cannot start with a digit — enforced on create/rename); queryType matches user-defined query type names, Person built-in query names (Mother, Children with, an office's name, All Offices, …), and map Forward/Reverse. Gated by `allowsTypeCollectionId` like `type:`/`col:`/`id:`. Examples: `qt:Vocab:ToDefinition`, `qt:Person:Mother`, quoted `"qt:Person:All Offices"`.
 - `id:number` - the single instance with this ID
 - `:noqueries` - **instance search only** - instances with no queries enabled (Person built-in queries count). Enforced by the `allowsNoQueries` flag threaded through `parseSearchExpression`.

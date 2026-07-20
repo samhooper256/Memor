@@ -45,6 +45,10 @@ private let sharedSearchHelpComponents: [SearchHelpComponent] = [
         description: "Restrict to items of the named type."
     ),
     SearchHelpComponent(
+        segments: [("type:", searchOperatorColor), ("ID", nil)],
+        description: "Restrict to items of the type with this numeric ID, e.g. type:5. (Type names can't start with a digit, so this is unambiguous.)"
+    ),
+    SearchHelpComponent(
         segments: [("qt:", searchOperatorColor), ("type:query", nil)],
         description: "Restrict to the named query type on the named type, e.g. qt:Vocab:ToDefinition. In instance search this matches instances of the type with that query type enabled; in query search, that query type's queries. The type may be a name or numeric ID. Person built-in query names (Mother, Children with, an office's name, All Offices, …) and map Forward/Reverse count as query type names."
     ),

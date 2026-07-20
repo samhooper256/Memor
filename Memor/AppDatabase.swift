@@ -53,6 +53,7 @@ struct AppDatabase {
         case collection(String)
         case collectionID(Int64)
         case type(String)
+        case typeID(Int64)
         case id(Int64)
         case queryType(typeName: String, queryTypeName: String)
         case queryTypeID(typeID: Int64, queryTypeName: String)
@@ -5458,6 +5459,10 @@ struct AppDatabase {
             var arguments = StatementArguments()
             arguments += [POINTMAP_TYPE_NAME, searchedTypeName]
             return ("? = ? COLLATE NOCASE", arguments)
+        case .typeID(let searchedTypeID):
+            var arguments = StatementArguments()
+            arguments += [searchedTypeID, POINTMAP_TYPE_NAME]
+            return (Self.mapTypeIDCompareSQL, arguments)
         case .collection(let collectionName):
             var arguments = StatementArguments()
             arguments += [collectionName]
@@ -6033,6 +6038,10 @@ struct AppDatabase {
             var arguments = StatementArguments()
             arguments += [BOUNDARYMAP_TYPE_NAME, searchedTypeName]
             return ("? = ? COLLATE NOCASE", arguments)
+        case .typeID(let searchedTypeID):
+            var arguments = StatementArguments()
+            arguments += [searchedTypeID, BOUNDARYMAP_TYPE_NAME]
+            return (Self.mapTypeIDCompareSQL, arguments)
         case .collection(let collectionName):
             var arguments = StatementArguments()
             arguments += [collectionName]
@@ -6825,11 +6834,7 @@ struct AppDatabase {
                     guard allowsTypeCollectionId else {
                         throw DatabaseError(message: "The type: component cannot be used when searching points and boundaries.")
                     }
-                    let typeName = String(token.dropFirst("type:".count))
-                    guard !typeName.isEmpty else {
-                        throw DatabaseError(message: "The type: component requires a type name.")
-                    }
-                    return .type(typeName)
+                    return try Self.parseTypeComponent(argument: String(token.dropFirst("type:".count)))
                 } else if token.hasPrefix("id:") {
                     guard allowsTypeCollectionId else {
                         throw DatabaseError(message: "The id: component cannot be used when searching points and boundaries.")
@@ -6873,6 +6878,22 @@ struct AppDatabase {
                     return .collectionID(collectionID)
                 }
                 return .collection(argument)
+            }
+
+            // Parses a `type:` argument. A leading digit means a type ID (e.g.
+            // `type:5`); otherwise it's a type name. Type names can never start
+            // with a digit (enforced on create/rename), so this is unambiguous.
+            static func parseTypeComponent(argument: String) throws -> SearchExpression {
+                guard !argument.isEmpty else {
+                    throw DatabaseError(message: "The type: component requires a type name or ID.")
+                }
+                if let first = argument.first, first.isNumber {
+                    guard let typeID = Int64(argument) else {
+                        throw DatabaseError(message: "The type: component requires a valid integer type ID.")
+                    }
+                    return .typeID(typeID)
+                }
+                return .type(argument)
             }
 
             // Parses a `qt:` argument of the form Type:QueryType or TypeID:QueryType.
@@ -7032,6 +7053,11 @@ struct AppDatabase {
             var arguments = StatementArguments()
             arguments += [typeName, searchedTypeName]
             return ("? = ? COLLATE NOCASE", arguments)
+
+        case .typeID(let searchedTypeID):
+            var arguments = StatementArguments()
+            arguments += [typeID, searchedTypeID]
+            return ("? = ?", arguments)
 
         case .id(let instanceID):
             var arguments = StatementArguments()
@@ -7233,7 +7259,7 @@ struct AppDatabase {
         guard let expression else { return [] }
 
         switch expression {
-        case .literal, .type, .id, .noQueries, .new, .collectionID, .queryType, .queryTypeID:
+        case .literal, .type, .typeID, .id, .noQueries, .new, .collectionID, .queryType, .queryTypeID:
             return []
         case .collection(let collectionName):
             return [collectionName]
