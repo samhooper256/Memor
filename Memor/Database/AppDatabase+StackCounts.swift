@@ -41,12 +41,18 @@ extension AppDatabase {
     ///
     /// Sound because the only folded leaves compile to row-independent SQL:
     /// `.type` becomes `? = ? COLLATE NOCASE` over two bound constants, and
-    /// `.new` becomes the constant `0` in the map condition builders. Unknown
+    /// `.new` becomes the constant `0` in the map condition builders. `qt:`
+    /// folds only its type part (a bound-constant compare in every builder);
+    /// a type match returns nil because the query-type part (name/kind/office/
+    /// direction) is row-dependent. `typeID` is the scanned type's row ID when
+    /// known (nil for the map scans — the numeric `qt:` variant then falls
+    /// back to its SQL `is_builtin` EXISTS instead of pruning). Unknown
     /// over-approximates {true, false, NULL}, and the Kleene connectives below
     /// agree with SQL three-valued logic on the known cases.
     nonisolated static func staticTruthValue(
         of expression: SearchExpression?,
         typeName: String,
+        typeID: Int64?,
         newIsAlwaysFalse: Bool
     ) -> Bool? {
         guard let expression else { return true }
@@ -57,6 +63,11 @@ extension AppDatabase {
                 return nil
             case .type(let searchedTypeName):
                 return sqliteNocaseEquals(typeName, searchedTypeName)
+            case .queryType(let searchedTypeName, _):
+                return sqliteNocaseEquals(typeName, searchedTypeName) ? nil : false
+            case .queryTypeID(let searchedTypeID, _):
+                guard let typeID else { return nil }
+                return typeID == searchedTypeID ? nil : false
             case .new:
                 return newIsAlwaysFalse ? false : nil
             case .and(let left, let right):
@@ -234,7 +245,7 @@ extension AppDatabase {
                     JOIN query
                         ON query.instance_id = instance_table.id
                     """
-                switch Self.staticTruthValue(of: expression, typeName: typeInfo.typeName, newIsAlwaysFalse: false) {
+                switch Self.staticTruthValue(of: expression, typeName: typeInfo.typeName, typeID: typeInfo.typeID, newIsAlwaysFalse: false) {
                 case .some(false):
                     continue
                 case .some(true):
@@ -243,6 +254,7 @@ extension AppDatabase {
                     let condition = makeQuerySearchConditions(
                         tableAlias: "instance_table",
                         typeName: typeInfo.typeName,
+                        typeID: typeInfo.typeID,
                         fieldIndices: typeInfo.allFieldIndices,
                         expression: expression
                     )
@@ -256,7 +268,7 @@ extension AppDatabase {
                 let personFrom = """
                     FROM \(Self.personQueryJoinFrom(personTypeID: personTypeInfo.typeID))
                     """
-                switch Self.staticTruthValue(of: expression, typeName: PERSON_TYPE_NAME, newIsAlwaysFalse: false) {
+                switch Self.staticTruthValue(of: expression, typeName: PERSON_TYPE_NAME, typeID: personTypeInfo.typeID, newIsAlwaysFalse: false) {
                 case .some(false):
                     break
                 case .some(true):
@@ -265,6 +277,7 @@ extension AppDatabase {
                     let condition = makeQuerySearchConditions(
                         tableAlias: "instance_table",
                         typeName: personTypeInfo.typeName,
+                        typeID: personTypeInfo.typeID,
                         fieldIndices: personTypeInfo.allFieldIndices,
                         expression: expression,
                         srsAlias: "pq"
@@ -279,13 +292,13 @@ extension AppDatabase {
                 JOIN pointmap_instance AS pi
                     ON pi.instance_id = pp.instance_id
                 """
-            switch Self.staticTruthValue(of: expression, typeName: POINTMAP_TYPE_NAME, newIsAlwaysFalse: true) {
+            switch Self.staticTruthValue(of: expression, typeName: POINTMAP_TYPE_NAME, typeID: nil, newIsAlwaysFalse: true) {
             case .some(false):
                 break
             case .some(true):
                 try collect(fromClause: pointMapFrom, srsAlias: "pp", matchSQL: "1", matchArguments: StatementArguments())
             case .none:
-                let condition = makePointMapSearchConditions(expression: expression, pointAlias: "pp", instanceAlias: "pi", includePointName: true)
+                let condition = makePointMapSearchConditions(expression: expression, pointAlias: "pp", instanceAlias: "pi", directionalAlias: "pp", includePointName: true)
                 try collect(fromClause: pointMapFrom, srsAlias: "pp", matchSQL: condition.sql, matchArguments: condition.arguments)
             }
 
@@ -297,13 +310,13 @@ extension AppDatabase {
                 JOIN boundary AS b
                     ON b.id = bq.boundary_id
                 """
-            switch Self.staticTruthValue(of: expression, typeName: BOUNDARYMAP_TYPE_NAME, newIsAlwaysFalse: true) {
+            switch Self.staticTruthValue(of: expression, typeName: BOUNDARYMAP_TYPE_NAME, typeID: nil, newIsAlwaysFalse: true) {
             case .some(false):
                 break
             case .some(true):
                 try collect(fromClause: boundaryMapFrom, srsAlias: "bq", matchSQL: "1", matchArguments: StatementArguments())
             case .none:
-                let condition = makeBoundaryMapSearchConditions(expression: expression, attachmentAlias: "bq", instanceAlias: "bi", boundaryAlias: "b", includeBoundaryName: true)
+                let condition = makeBoundaryMapSearchConditions(expression: expression, attachmentAlias: "bq", instanceAlias: "bi", boundaryAlias: "b", directionalAlias: "bq", includeBoundaryName: true)
                 try collect(fromClause: boundaryMapFrom, srsAlias: "bq", matchSQL: condition.sql, matchArguments: condition.arguments)
             }
 
@@ -380,6 +393,7 @@ extension AppDatabase {
                 switch Self.staticTruthValue(
                     of: expression,
                     typeName: typeInfo.typeName,
+                    typeID: typeInfo.typeID,
                     newIsAlwaysFalse: false
                 ) {
                 case .some(false):
@@ -390,6 +404,7 @@ extension AppDatabase {
                     let condition = makeQuerySearchConditions(
                         tableAlias: "instance_table",
                         typeName: typeInfo.typeName,
+                        typeID: typeInfo.typeID,
                         fieldIndices: typeInfo.allFieldIndices,
                         expression: expression
                     )
@@ -420,6 +435,7 @@ extension AppDatabase {
                 switch Self.staticTruthValue(
                     of: expression,
                     typeName: PERSON_TYPE_NAME,
+                    typeID: personTypeInfo.typeID,
                     newIsAlwaysFalse: false
                 ) {
                 case .some(false):
@@ -430,6 +446,7 @@ extension AppDatabase {
                     let condition = makeQuerySearchConditions(
                         tableAlias: "instance_table",
                         typeName: personTypeInfo.typeName,
+                        typeID: personTypeInfo.typeID,
                         fieldIndices: personTypeInfo.allFieldIndices,
                         expression: expression,
                         srsAlias: "pq"
@@ -455,6 +472,7 @@ extension AppDatabase {
             switch Self.staticTruthValue(
                 of: expression,
                 typeName: POINTMAP_TYPE_NAME,
+                typeID: nil,
                 newIsAlwaysFalse: true
             ) {
             case .some(false):
@@ -466,6 +484,7 @@ extension AppDatabase {
                     expression: expression,
                     pointAlias: "pp",
                     instanceAlias: "pi",
+                    directionalAlias: "pp",
                     includePointName: true
                 )
                 pointMapGroups.append((groupIndex, condition.sql, condition.arguments))
@@ -474,6 +493,7 @@ extension AppDatabase {
             switch Self.staticTruthValue(
                 of: expression,
                 typeName: BOUNDARYMAP_TYPE_NAME,
+                typeID: nil,
                 newIsAlwaysFalse: true
             ) {
             case .some(false):
@@ -486,6 +506,7 @@ extension AppDatabase {
                     attachmentAlias: "bq",
                     instanceAlias: "bi",
                     boundaryAlias: "b",
+                    directionalAlias: "bq",
                     includeBoundaryName: true
                 )
                 boundaryMapGroups.append((groupIndex, condition.sql, condition.arguments))

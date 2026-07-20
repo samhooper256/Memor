@@ -54,11 +54,21 @@ struct AppDatabase {
         case collectionID(Int64)
         case type(String)
         case id(Int64)
+        case queryType(typeName: String, queryTypeName: String)
+        case queryTypeID(typeID: Int64, queryTypeName: String)
         case noQueries
         case new
         case and(SearchExpression, SearchExpression)
         case or(SearchExpression, SearchExpression)
         case not(SearchExpression)
+    }
+
+    // What kind of row a search condition is evaluated against. Only `qt:`
+    // compiles differently per context; every other component is row-kind-agnostic.
+    nonisolated enum SearchConditionContext {
+        case instances       // rows are instances of the scanned type table
+        case standardQueries // rows are `query` rows joined to the scanned type
+        case personQueries   // rows are person_query rows (srsAlias "pq")
     }
 
     private struct CollectionInstanceTypeInfo: FetchableRecord, Decodable {
@@ -1511,6 +1521,7 @@ struct AppDatabase {
             expression: expression,
             pointAlias: "pp",
             instanceAlias: "pi",
+            directionalAlias: nil,
             includePointName: false
         )
         let whereClause = searchConditions.sql.isEmpty ? "" : "\nWHERE \(searchConditions.sql)"
@@ -1676,6 +1687,7 @@ struct AppDatabase {
                 expression: parsedQuery.expression,
                 pointAlias: "pp",
                 instanceAlias: "pi",
+                directionalAlias: nil,
                 includePointName: true
             )
             let pointWhere = pointConditions.sql.isEmpty ? "" : "\nWHERE \(pointConditions.sql)"
@@ -1725,6 +1737,7 @@ struct AppDatabase {
                 attachmentAlias: "bq",
                 instanceAlias: "bi",
                 boundaryAlias: "b",
+                directionalAlias: nil,
                 includeBoundaryName: true
             )
             let boundaryWhere = boundaryConditions.sql.isEmpty ? "" : "\nWHERE \(boundaryConditions.sql)"
@@ -1782,6 +1795,7 @@ struct AppDatabase {
             expression: expression,
             pointAlias: "pp",
             instanceAlias: "pi",
+            directionalAlias: "pp",
             includePointName: true
         )
         let whereClause = searchConditions.sql.isEmpty ? "" : "\nWHERE \(searchConditions.sql)"
@@ -1839,6 +1853,7 @@ struct AppDatabase {
                 let searchConditions = makeQuerySearchConditions(
                     tableAlias: tableAlias,
                     typeName: typeInfo.typeName,
+                    typeID: typeInfo.typeID,
                     fieldIndices: typeInfo.allFieldIndices,
                     expression: parsedQuery.expression
                 )
@@ -1864,6 +1879,7 @@ struct AppDatabase {
                     let personConditions = makeQuerySearchConditions(
                         tableAlias: tableAlias,
                         typeName: typeInfo.typeName,
+                        typeID: typeInfo.typeID,
                         fieldIndices: typeInfo.allFieldIndices,
                         expression: parsedQuery.expression,
                         srsAlias: "pq"
@@ -1890,6 +1906,7 @@ struct AppDatabase {
                 expression: parsedQuery.expression,
                 pointAlias: "pp",
                 instanceAlias: "pi",
+                directionalAlias: "pointmap_query",
                 includePointName: true
             )
             let pointMapWhere = pointMapConditions.sql.isEmpty ? "1" : pointMapConditions.sql
@@ -1899,12 +1916,13 @@ struct AppDatabase {
                     SET query_state = 0,
                         last_answered_timestamp = NULL,
                         interval = 0
-                    WHERE point_id IN (
-                        SELECT pp.id
+                    WHERE EXISTS (
+                        SELECT 1
                         FROM pointmap_point AS pp
                         JOIN pointmap_instance AS pi
                             ON pi.instance_id = pp.instance_id
-                        WHERE \(pointMapWhere)
+                        WHERE pp.id = pointmap_query.point_id
+                            AND \(pointMapWhere)
                     )
                     """,
                 arguments: pointMapConditions.arguments
@@ -1915,6 +1933,7 @@ struct AppDatabase {
                 attachmentAlias: "bq",
                 instanceAlias: "bi",
                 boundaryAlias: "b",
+                directionalAlias: "boundarymap_query",
                 includeBoundaryName: true
             )
             let boundaryMapWhere = boundaryMapConditions.sql.isEmpty ? "1" : boundaryMapConditions.sql
@@ -1924,14 +1943,15 @@ struct AppDatabase {
                     SET query_state = 0,
                         last_answered_timestamp = NULL,
                         interval = 0
-                    WHERE attachment_id IN (
-                        SELECT bq.id
+                    WHERE EXISTS (
+                        SELECT 1
                         FROM boundarymap_attachment AS bq
                         JOIN boundarymap_instance AS bi
                             ON bi.instance_id = bq.instance_id
                         JOIN boundary AS b
                             ON b.id = bq.boundary_id
-                        WHERE \(boundaryMapWhere)
+                        WHERE bq.id = boundarymap_query.attachment_id
+                            AND \(boundaryMapWhere)
                     )
                     """,
                 arguments: boundaryMapConditions.arguments
@@ -2736,6 +2756,7 @@ struct AppDatabase {
                 let conditions = makeInstanceSearchConditions(
                     tableAlias: tableAlias,
                     typeName: typeInfo.typeName,
+                    typeID: typeInfo.typeID,
                     fieldIndices: typeInfo.allFieldIndices,
                     expression: parsedQuery.expression
                 )
@@ -2807,6 +2828,7 @@ struct AppDatabase {
             expression: expression,
             pointAlias: "pp",
             instanceAlias: "pi",
+            directionalAlias: nil,
             includePointName: false
         )
         let whereClause = searchConditions.sql.isEmpty ? "" : "\nWHERE \(searchConditions.sql)"
@@ -4977,6 +4999,7 @@ struct AppDatabase {
         let searchConditions = makeInstanceSearchConditions(
             tableAlias: tableAlias,
             typeName: typeInfo.typeName,
+            typeID: typeInfo.typeID,
             fieldIndices: typeInfo.allFieldIndices,
             expression: parsedQuery.expression
         )
@@ -5010,6 +5033,7 @@ struct AppDatabase {
         let searchConditions = makeInstanceSearchConditions(
             tableAlias: tableAlias,
             typeName: typeInfo.typeName,
+            typeID: typeInfo.typeID,
             fieldIndices: typeInfo.allFieldIndices,
             expression: parsedQuery.expression
         )
@@ -5056,6 +5080,7 @@ struct AppDatabase {
         let searchConditions = makeQuerySearchConditions(
             tableAlias: tableAlias,
             typeName: typeInfo.typeName,
+            typeID: typeInfo.typeID,
             fieldIndices: typeInfo.allFieldIndices,
             expression: parsedQuery.expression
         )
@@ -5099,6 +5124,7 @@ struct AppDatabase {
         let searchConditions = makeQuerySearchConditions(
             tableAlias: tableAlias,
             typeName: typeInfo.typeName,
+            typeID: typeInfo.typeID,
             fieldIndices: typeInfo.allFieldIndices,
             expression: parsedQuery.expression
         )
@@ -5139,6 +5165,7 @@ struct AppDatabase {
         let searchConditions = makeQuerySearchConditions(
             tableAlias: tableAlias,
             typeName: typeInfo.typeName,
+            typeID: typeInfo.typeID,
             fieldIndices: typeInfo.allFieldIndices,
             expression: parsedQuery.expression
         )
@@ -5182,6 +5209,7 @@ struct AppDatabase {
         let searchConditions = makeQuerySearchConditions(
             tableAlias: tableAlias,
             typeName: typeInfo.typeName,
+            typeID: typeInfo.typeID,
             fieldIndices: typeInfo.allFieldIndices,
             expression: parsedQuery.expression
         )
@@ -5292,6 +5320,7 @@ struct AppDatabase {
         let searchConditions = makeQuerySearchConditions(
             tableAlias: tableAlias,
             typeName: typeInfo.typeName,
+            typeID: typeInfo.typeID,
             fieldIndices: typeInfo.allFieldIndices,
             expression: parsedQuery.expression
         )
@@ -5388,10 +5417,16 @@ struct AppDatabase {
         let title: String
     }
 
+    // `directionalAlias` is non-nil when the scanned rows are directional query
+    // rows and names the alias exposing `is_reverse`; it is nil when scanning
+    // instances or map elements, where `qt:` instead compiles to an enablement
+    // EXISTS (`qt:` is parse-rejected in element search, so the nil case only
+    // matters for instance search).
     nonisolated private func makePointMapSearchCondition(
         _ expression: SearchExpression,
         pointAlias: String,
         instanceAlias: String,
+        directionalAlias: String?,
         includePointName: Bool
     ) -> (sql: String, arguments: StatementArguments) {
         switch expression {
@@ -5467,20 +5502,46 @@ struct AppDatabase {
         case .new:
             // :new is standard-query-only; exclude all PointMap rows.
             return ("0", StatementArguments())
+        case .queryType(let searchedTypeName, let searchedQueryTypeName):
+            var typeCompareArguments = StatementArguments()
+            typeCompareArguments += [POINTMAP_TYPE_NAME, searchedTypeName]
+            return Self.makeMapQueryTypeCondition(
+                typeCompareSQL: "? = ? COLLATE NOCASE",
+                typeCompareArguments: typeCompareArguments,
+                searchedQueryTypeName: searchedQueryTypeName,
+                queryTable: "pointmap_query",
+                elementTable: "pointmap_point",
+                elementIDColumn: "point_id",
+                instanceAlias: instanceAlias,
+                directionalAlias: directionalAlias
+            )
+        case .queryTypeID(let searchedTypeID, let searchedQueryTypeName):
+            var typeCompareArguments = StatementArguments()
+            typeCompareArguments += [searchedTypeID, POINTMAP_TYPE_NAME]
+            return Self.makeMapQueryTypeCondition(
+                typeCompareSQL: Self.mapTypeIDCompareSQL,
+                typeCompareArguments: typeCompareArguments,
+                searchedQueryTypeName: searchedQueryTypeName,
+                queryTable: "pointmap_query",
+                elementTable: "pointmap_point",
+                elementIDColumn: "point_id",
+                instanceAlias: instanceAlias,
+                directionalAlias: directionalAlias
+            )
         case .and(let left, let right):
-            let l = makePointMapSearchCondition(left, pointAlias: pointAlias, instanceAlias: instanceAlias, includePointName: includePointName)
-            let r = makePointMapSearchCondition(right, pointAlias: pointAlias, instanceAlias: instanceAlias, includePointName: includePointName)
+            let l = makePointMapSearchCondition(left, pointAlias: pointAlias, instanceAlias: instanceAlias, directionalAlias: directionalAlias, includePointName: includePointName)
+            let r = makePointMapSearchCondition(right, pointAlias: pointAlias, instanceAlias: instanceAlias, directionalAlias: directionalAlias, includePointName: includePointName)
             var args = l.arguments
             args += r.arguments
             return ("(\(l.sql)) AND (\(r.sql))", args)
         case .or(let left, let right):
-            let l = makePointMapSearchCondition(left, pointAlias: pointAlias, instanceAlias: instanceAlias, includePointName: includePointName)
-            let r = makePointMapSearchCondition(right, pointAlias: pointAlias, instanceAlias: instanceAlias, includePointName: includePointName)
+            let l = makePointMapSearchCondition(left, pointAlias: pointAlias, instanceAlias: instanceAlias, directionalAlias: directionalAlias, includePointName: includePointName)
+            let r = makePointMapSearchCondition(right, pointAlias: pointAlias, instanceAlias: instanceAlias, directionalAlias: directionalAlias, includePointName: includePointName)
             var args = l.arguments
             args += r.arguments
             return ("(\(l.sql)) OR (\(r.sql))", args)
         case .not(let inner):
-            let i = makePointMapSearchCondition(inner, pointAlias: pointAlias, instanceAlias: instanceAlias, includePointName: includePointName)
+            let i = makePointMapSearchCondition(inner, pointAlias: pointAlias, instanceAlias: instanceAlias, directionalAlias: directionalAlias, includePointName: includePointName)
             return ("NOT (\(i.sql))", i.arguments)
         }
     }
@@ -5489,6 +5550,7 @@ struct AppDatabase {
         expression: SearchExpression?,
         pointAlias: String,
         instanceAlias: String,
+        directionalAlias: String?,
         includePointName: Bool
     ) -> (sql: String, arguments: StatementArguments) {
         guard let expression else {
@@ -5498,7 +5560,61 @@ struct AppDatabase {
             expression,
             pointAlias: pointAlias,
             instanceAlias: instanceAlias,
+            directionalAlias: directionalAlias,
             includePointName: includePointName
+        )
+    }
+
+    // The map builders never receive the map type's row ID, so the ID variant
+    // of `qt:` resolves it in SQL the way fetchPointMapTypeID does (name +
+    // is_builtin) — a constant uncorrelated subquery. Args: [searchedTypeID,
+    // map type name].
+    nonisolated private static let mapTypeIDCompareSQL = """
+        EXISTS (SELECT 1 FROM "type" WHERE "type".id = ? AND "type".name = ? AND "type".is_builtin = 1)
+        """
+
+    // `qt:`'s second argument for the map families: "Forward"/"Reverse"
+    // (NOCASE). Anything else matches no map queries.
+    nonisolated private static func mapDirectionIsReverse(_ queryTypeName: String) -> Bool? {
+        if sqliteNocaseEquals(queryTypeName, "Forward") { return false }
+        if sqliteNocaseEquals(queryTypeName, "Reverse") { return true }
+        return nil
+    }
+
+    // The `qt:` body shared by the two map builders. Directional scans compare
+    // the row's own is_reverse; instance scans check that the direction is
+    // enabled on any of the instance's points/attachments (row existence per
+    // direction = enabled, mirroring `.noQueries`).
+    nonisolated private static func makeMapQueryTypeCondition(
+        typeCompareSQL: String,
+        typeCompareArguments: StatementArguments,
+        searchedQueryTypeName: String,
+        queryTable: String,
+        elementTable: String,
+        elementIDColumn: String,
+        instanceAlias: String,
+        directionalAlias: String?
+    ) -> (sql: String, arguments: StatementArguments) {
+        guard let isReverse = mapDirectionIsReverse(searchedQueryTypeName) else {
+            return ("0", StatementArguments())
+        }
+        if let directionalAlias {
+            return (
+                "(\(typeCompareSQL) AND \(directionalAlias).is_reverse = \(isReverse ? 1 : 0))",
+                typeCompareArguments
+            )
+        }
+        return (
+            """
+            (\(typeCompareSQL) AND EXISTS (
+                SELECT 1
+                FROM \(queryTable)
+                JOIN \(elementTable) ON \(elementTable).id = \(queryTable).\(elementIDColumn)
+                WHERE \(elementTable).instance_id = \(instanceAlias).instance_id
+                    AND \(queryTable).is_reverse = \(isReverse ? 1 : 0)
+            ))
+            """,
+            typeCompareArguments
         )
     }
 
@@ -5512,6 +5628,7 @@ struct AppDatabase {
             expression: parsedQuery.expression,
             pointAlias: "pp",
             instanceAlias: "pi",
+            directionalAlias: "pp",
             includePointName: true
         )
         var arguments = searchConditions.arguments
@@ -5641,6 +5758,7 @@ struct AppDatabase {
             expression: parsedQuery.expression,
             pointAlias: "pp",
             instanceAlias: "pi",
+            directionalAlias: "pp",
             includePointName: true
         )
         var arguments = searchConditions.arguments
@@ -5675,6 +5793,7 @@ struct AppDatabase {
             expression: parsedQuery.expression,
             pointAlias: "pp",
             instanceAlias: "pi",
+            directionalAlias: "pp",
             includePointName: true
         )
         let whereClause = searchConditions.sql.isEmpty ? "" : "\nWHERE \(searchConditions.sql)"
@@ -5727,6 +5846,7 @@ struct AppDatabase {
             expression: parsedQuery.expression,
             pointAlias: "pp",
             instanceAlias: "pi",
+            directionalAlias: "pp",
             includePointName: true
         )
         var arguments = searchConditions.arguments
@@ -5875,11 +5995,13 @@ struct AppDatabase {
         }
     }
 
+    // `directionalAlias`: see makePointMapSearchCondition.
     nonisolated private func makeBoundaryMapSearchCondition(
         _ expression: SearchExpression,
         attachmentAlias: String,
         instanceAlias: String,
         boundaryAlias: String,
+        directionalAlias: String?,
         includeBoundaryName: Bool
     ) -> (sql: String, arguments: StatementArguments) {
         switch expression {
@@ -5955,20 +6077,46 @@ struct AppDatabase {
         case .new:
             // :new is standard-query-only; exclude all BoundaryMap rows.
             return ("0", StatementArguments())
+        case .queryType(let searchedTypeName, let searchedQueryTypeName):
+            var typeCompareArguments = StatementArguments()
+            typeCompareArguments += [BOUNDARYMAP_TYPE_NAME, searchedTypeName]
+            return Self.makeMapQueryTypeCondition(
+                typeCompareSQL: "? = ? COLLATE NOCASE",
+                typeCompareArguments: typeCompareArguments,
+                searchedQueryTypeName: searchedQueryTypeName,
+                queryTable: "boundarymap_query",
+                elementTable: "boundarymap_attachment",
+                elementIDColumn: "attachment_id",
+                instanceAlias: instanceAlias,
+                directionalAlias: directionalAlias
+            )
+        case .queryTypeID(let searchedTypeID, let searchedQueryTypeName):
+            var typeCompareArguments = StatementArguments()
+            typeCompareArguments += [searchedTypeID, BOUNDARYMAP_TYPE_NAME]
+            return Self.makeMapQueryTypeCondition(
+                typeCompareSQL: Self.mapTypeIDCompareSQL,
+                typeCompareArguments: typeCompareArguments,
+                searchedQueryTypeName: searchedQueryTypeName,
+                queryTable: "boundarymap_query",
+                elementTable: "boundarymap_attachment",
+                elementIDColumn: "attachment_id",
+                instanceAlias: instanceAlias,
+                directionalAlias: directionalAlias
+            )
         case .and(let left, let right):
-            let l = makeBoundaryMapSearchCondition(left, attachmentAlias: attachmentAlias, instanceAlias: instanceAlias, boundaryAlias: boundaryAlias, includeBoundaryName: includeBoundaryName)
-            let r = makeBoundaryMapSearchCondition(right, attachmentAlias: attachmentAlias, instanceAlias: instanceAlias, boundaryAlias: boundaryAlias, includeBoundaryName: includeBoundaryName)
+            let l = makeBoundaryMapSearchCondition(left, attachmentAlias: attachmentAlias, instanceAlias: instanceAlias, boundaryAlias: boundaryAlias, directionalAlias: directionalAlias, includeBoundaryName: includeBoundaryName)
+            let r = makeBoundaryMapSearchCondition(right, attachmentAlias: attachmentAlias, instanceAlias: instanceAlias, boundaryAlias: boundaryAlias, directionalAlias: directionalAlias, includeBoundaryName: includeBoundaryName)
             var args = l.arguments
             args += r.arguments
             return ("(\(l.sql)) AND (\(r.sql))", args)
         case .or(let left, let right):
-            let l = makeBoundaryMapSearchCondition(left, attachmentAlias: attachmentAlias, instanceAlias: instanceAlias, boundaryAlias: boundaryAlias, includeBoundaryName: includeBoundaryName)
-            let r = makeBoundaryMapSearchCondition(right, attachmentAlias: attachmentAlias, instanceAlias: instanceAlias, boundaryAlias: boundaryAlias, includeBoundaryName: includeBoundaryName)
+            let l = makeBoundaryMapSearchCondition(left, attachmentAlias: attachmentAlias, instanceAlias: instanceAlias, boundaryAlias: boundaryAlias, directionalAlias: directionalAlias, includeBoundaryName: includeBoundaryName)
+            let r = makeBoundaryMapSearchCondition(right, attachmentAlias: attachmentAlias, instanceAlias: instanceAlias, boundaryAlias: boundaryAlias, directionalAlias: directionalAlias, includeBoundaryName: includeBoundaryName)
             var args = l.arguments
             args += r.arguments
             return ("(\(l.sql)) OR (\(r.sql))", args)
         case .not(let inner):
-            let i = makeBoundaryMapSearchCondition(inner, attachmentAlias: attachmentAlias, instanceAlias: instanceAlias, boundaryAlias: boundaryAlias, includeBoundaryName: includeBoundaryName)
+            let i = makeBoundaryMapSearchCondition(inner, attachmentAlias: attachmentAlias, instanceAlias: instanceAlias, boundaryAlias: boundaryAlias, directionalAlias: directionalAlias, includeBoundaryName: includeBoundaryName)
             return ("NOT (\(i.sql))", i.arguments)
         }
     }
@@ -5978,6 +6126,7 @@ struct AppDatabase {
         attachmentAlias: String,
         instanceAlias: String,
         boundaryAlias: String,
+        directionalAlias: String?,
         includeBoundaryName: Bool
     ) -> (sql: String, arguments: StatementArguments) {
         guard let expression else {
@@ -5988,6 +6137,7 @@ struct AppDatabase {
             attachmentAlias: attachmentAlias,
             instanceAlias: instanceAlias,
             boundaryAlias: boundaryAlias,
+            directionalAlias: directionalAlias,
             includeBoundaryName: includeBoundaryName
         )
     }
@@ -6005,6 +6155,7 @@ struct AppDatabase {
             attachmentAlias: "bq",
             instanceAlias: "bi",
             boundaryAlias: "b",
+            directionalAlias: nil,
             includeBoundaryName: false
         )
         let whereClause = searchConditions.sql.isEmpty ? "" : "\nWHERE \(searchConditions.sql)"
@@ -6035,6 +6186,7 @@ struct AppDatabase {
             attachmentAlias: "bq",
             instanceAlias: "bi",
             boundaryAlias: "b",
+            directionalAlias: "bq",
             includeBoundaryName: true
         )
         let whereClause = searchConditions.sql.isEmpty ? "" : "\nWHERE \(searchConditions.sql)"
@@ -6092,6 +6244,7 @@ struct AppDatabase {
             attachmentAlias: "bq",
             instanceAlias: "bi",
             boundaryAlias: "b",
+            directionalAlias: nil,
             includeBoundaryName: false
         )
         let whereClause = searchConditions.sql.isEmpty ? "" : "\nWHERE \(searchConditions.sql)"
@@ -6136,6 +6289,7 @@ struct AppDatabase {
             attachmentAlias: "bq",
             instanceAlias: "bi",
             boundaryAlias: "b",
+            directionalAlias: "bq",
             includeBoundaryName: true
         )
         var arguments = searchConditions.arguments
@@ -6238,6 +6392,7 @@ struct AppDatabase {
             attachmentAlias: "bq",
             instanceAlias: "bi",
             boundaryAlias: "b",
+            directionalAlias: "bq",
             includeBoundaryName: true
         )
         var arguments = searchConditions.arguments
@@ -6268,6 +6423,7 @@ struct AppDatabase {
             attachmentAlias: "bq",
             instanceAlias: "bi",
             boundaryAlias: "b",
+            directionalAlias: "bq",
             includeBoundaryName: true
         )
         let whereClause = searchConditions.sql.isEmpty ? "" : "\nWHERE \(searchConditions.sql)"
@@ -6323,6 +6479,7 @@ struct AppDatabase {
             attachmentAlias: "bq",
             instanceAlias: "bi",
             boundaryAlias: "b",
+            directionalAlias: "bq",
             includeBoundaryName: true
         )
         var arguments = searchConditions.arguments
@@ -6678,6 +6835,11 @@ struct AppDatabase {
                         throw DatabaseError(message: "The id: component requires an integer ID.")
                     }
                     return .id(id)
+                } else if token.hasPrefix("qt:") {
+                    guard allowsTypeCollectionId else {
+                        throw DatabaseError(message: "The qt: component cannot be used when searching points and boundaries.")
+                    }
+                    return try Self.parseQueryTypeComponent(argument: String(token.dropFirst("qt:".count)))
                 } else if !token.contains(":") {
                     return .literal(token)
                 } else {
@@ -6705,6 +6867,29 @@ struct AppDatabase {
                 }
                 return .collection(argument)
             }
+
+            // Parses a `qt:` argument of the form Type:QueryType or TypeID:QueryType.
+            // The type part may not contain a colon; the query-type part may. The type
+            // part is an ID only when it parses as an integer in full — unlike
+            // collections, type names are not barred from starting with a digit, so a
+            // leading-digit rule would make types like "3D Shapes" unreachable.
+            static func parseQueryTypeComponent(argument: String) throws -> SearchExpression {
+                guard let colonIndex = argument.firstIndex(of: ":") else {
+                    throw DatabaseError(message: "The qt: component requires a type and a query type separated by a colon, e.g. qt:Vocab:ToDefinition.")
+                }
+                let typeArgument = String(argument[..<colonIndex])
+                let queryTypeName = String(argument[argument.index(after: colonIndex)...])
+                guard !typeArgument.isEmpty else {
+                    throw DatabaseError(message: "The qt: component requires a type name or ID before the second colon.")
+                }
+                guard !queryTypeName.isEmpty else {
+                    throw DatabaseError(message: "The qt: component requires a query type name after the second colon.")
+                }
+                if let typeID = Int64(typeArgument) {
+                    return .queryTypeID(typeID: typeID, queryTypeName: queryTypeName)
+                }
+                return .queryType(typeName: typeArgument, queryTypeName: queryTypeName)
+            }
         }
 
         var parser = Parser(tokens: tokens, allowsNoQueries: allowsNoQueries, allowsNew: allowsNew, allowsTypeCollectionId: allowsTypeCollectionId)
@@ -6718,22 +6903,28 @@ struct AppDatabase {
     private func makeInstanceSearchConditions(
         tableAlias: String,
         typeName: String,
+        typeID: Int64,
         fieldIndices: [Int],
         expression: SearchExpression?
     ) -> (sql: String, arguments: StatementArguments) {
         makeSearchConditions(
             tableAlias: tableAlias,
             typeName: typeName,
+            typeID: typeID,
             fieldIndices: fieldIndices,
-            expression: expression
+            expression: expression,
+            context: .instances
         )
     }
 
     // `srsAlias` names the table/alias carrying the SRS columns (`query` for
-    // standard rows, `pq` for the person_query scans) — only `:new` uses it.
+    // standard rows, `pq` for the person_query scans) — `:new` uses it, and
+    // `qt:` derives the row-kind context from it ("pq" is the documented
+    // person_query seam, see personQueryJoinFrom).
     nonisolated func makeQuerySearchConditions(
         tableAlias: String,
         typeName: String,
+        typeID: Int64,
         fieldIndices: [Int],
         expression: SearchExpression?,
         srsAlias: String = "query"
@@ -6741,18 +6932,22 @@ struct AppDatabase {
         makeSearchConditions(
             tableAlias: tableAlias,
             typeName: typeName,
+            typeID: typeID,
             fieldIndices: fieldIndices,
             expression: expression,
-            srsAlias: srsAlias
+            srsAlias: srsAlias,
+            context: srsAlias == "pq" ? .personQueries : .standardQueries
         )
     }
 
     nonisolated private func makeSearchConditions(
         tableAlias: String,
         typeName: String,
+        typeID: Int64,
         fieldIndices: [Int],
         expression: SearchExpression?,
-        srsAlias: String = "query"
+        srsAlias: String = "query",
+        context: SearchConditionContext
     ) -> (sql: String, arguments: StatementArguments) {
         guard let expression else {
             return ("", StatementArguments())
@@ -6762,8 +6957,10 @@ struct AppDatabase {
             expression,
             tableAlias: tableAlias,
             typeName: typeName,
+            typeID: typeID,
             fieldIndices: fieldIndices,
-            srsAlias: srsAlias
+            srsAlias: srsAlias,
+            context: context
         )
     }
 
@@ -6771,8 +6968,10 @@ struct AppDatabase {
         _ expression: SearchExpression,
         tableAlias: String,
         typeName: String,
+        typeID: Int64,
         fieldIndices: [Int],
-        srsAlias: String = "query"
+        srsAlias: String = "query",
+        context: SearchConditionContext
     ) -> (sql: String, arguments: StatementArguments) {
         switch expression {
         case .literal(let literal):
@@ -6829,6 +7028,32 @@ struct AppDatabase {
             arguments += [instanceID]
             return ("\(tableAlias).id = ?", arguments)
 
+        case .queryType(let searchedTypeName, let searchedQueryTypeName):
+            var typeCompareArguments = StatementArguments()
+            typeCompareArguments += [typeName, searchedTypeName]
+            return makeQueryTypeCondition(
+                typeCompareSQL: "? = ? COLLATE NOCASE",
+                typeCompareArguments: typeCompareArguments,
+                searchedQueryTypeName: searchedQueryTypeName,
+                tableAlias: tableAlias,
+                typeID: typeID,
+                srsAlias: srsAlias,
+                context: context
+            )
+
+        case .queryTypeID(let searchedTypeID, let searchedQueryTypeName):
+            var typeCompareArguments = StatementArguments()
+            typeCompareArguments += [typeID, searchedTypeID]
+            return makeQueryTypeCondition(
+                typeCompareSQL: "? = ?",
+                typeCompareArguments: typeCompareArguments,
+                searchedQueryTypeName: searchedQueryTypeName,
+                tableAlias: tableAlias,
+                typeID: typeID,
+                srsAlias: srsAlias,
+                context: context
+            )
+
         case .noQueries:
             // Built-in Person relationship queries count as queries too; other
             // types never have person_query rows, so the extra clause is inert.
@@ -6852,23 +7077,118 @@ struct AppDatabase {
             return ("\(srsAlias).interval = 0", StatementArguments())
 
         case .and(let leftExpression, let rightExpression):
-            let left = makeSearchCondition(leftExpression, tableAlias: tableAlias, typeName: typeName, fieldIndices: fieldIndices, srsAlias: srsAlias)
-            let right = makeSearchCondition(rightExpression, tableAlias: tableAlias, typeName: typeName, fieldIndices: fieldIndices, srsAlias: srsAlias)
+            let left = makeSearchCondition(leftExpression, tableAlias: tableAlias, typeName: typeName, typeID: typeID, fieldIndices: fieldIndices, srsAlias: srsAlias, context: context)
+            let right = makeSearchCondition(rightExpression, tableAlias: tableAlias, typeName: typeName, typeID: typeID, fieldIndices: fieldIndices, srsAlias: srsAlias, context: context)
             var arguments = left.arguments
             arguments += right.arguments
             return ("(\(left.sql)) AND (\(right.sql))", arguments)
 
         case .or(let leftExpression, let rightExpression):
-            let left = makeSearchCondition(leftExpression, tableAlias: tableAlias, typeName: typeName, fieldIndices: fieldIndices, srsAlias: srsAlias)
-            let right = makeSearchCondition(rightExpression, tableAlias: tableAlias, typeName: typeName, fieldIndices: fieldIndices, srsAlias: srsAlias)
+            let left = makeSearchCondition(leftExpression, tableAlias: tableAlias, typeName: typeName, typeID: typeID, fieldIndices: fieldIndices, srsAlias: srsAlias, context: context)
+            let right = makeSearchCondition(rightExpression, tableAlias: tableAlias, typeName: typeName, typeID: typeID, fieldIndices: fieldIndices, srsAlias: srsAlias, context: context)
             var arguments = left.arguments
             arguments += right.arguments
             return ("(\(left.sql)) OR (\(right.sql))", arguments)
 
         case .not(let innerExpression):
-            let inner = makeSearchCondition(innerExpression, tableAlias: tableAlias, typeName: typeName, fieldIndices: fieldIndices, srsAlias: srsAlias)
+            let inner = makeSearchCondition(innerExpression, tableAlias: tableAlias, typeName: typeName, typeID: typeID, fieldIndices: fieldIndices, srsAlias: srsAlias, context: context)
             return ("NOT (\(inner.sql))", inner.arguments)
         }
+    }
+
+    // The `qt:` body shared by the name and ID variants — only the type-part
+    // compare differs. Per context: instance rows check enablement (a `query`
+    // row of a matching query type, OR a matching person_query row — the
+    // person clause is inert for non-Person types, same precedent as
+    // `.noQueries`); standard query rows check their own query_type via a
+    // self-contained EXISTS (several surfaces join `query` but not
+    // `query_type`); person_query rows check kind/office.
+    nonisolated private func makeQueryTypeCondition(
+        typeCompareSQL: String,
+        typeCompareArguments: StatementArguments,
+        searchedQueryTypeName: String,
+        tableAlias: String,
+        typeID: Int64,
+        srsAlias: String,
+        context: SearchConditionContext
+    ) -> (sql: String, arguments: StatementArguments) {
+        switch context {
+        case .instances:
+            let personPredicate = Self.personQueryTypePredicate(
+                queryTypeName: searchedQueryTypeName,
+                alias: "person_query"
+            )
+            var arguments = typeCompareArguments
+            arguments += [typeID, searchedQueryTypeName]
+            arguments += personPredicate.arguments
+            return (
+                """
+                (\(typeCompareSQL) AND (
+                    EXISTS (
+                        SELECT 1
+                        FROM query
+                        JOIN query_type
+                            ON query_type.id = query.query_type_id
+                        WHERE query.instance_id = \(tableAlias).id
+                            AND query_type.type_id = ?
+                            AND query_type.name = ? COLLATE NOCASE
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM person_query
+                        WHERE person_query.instance_id = \(tableAlias).id
+                            AND \(personPredicate.sql)
+                    )
+                ))
+                """,
+                arguments
+            )
+
+        case .standardQueries:
+            var arguments = typeCompareArguments
+            arguments += [typeID, searchedQueryTypeName]
+            return (
+                """
+                (\(typeCompareSQL) AND EXISTS (
+                    SELECT 1
+                    FROM query_type
+                    WHERE query_type.id = \(srsAlias).query_type_id
+                        AND query_type.type_id = ?
+                        AND query_type.name = ? COLLATE NOCASE
+                ))
+                """,
+                arguments
+            )
+
+        case .personQueries:
+            let personPredicate = Self.personQueryTypePredicate(
+                queryTypeName: searchedQueryTypeName,
+                alias: srsAlias
+            )
+            var arguments = typeCompareArguments
+            arguments += personPredicate.arguments
+            return ("(\(typeCompareSQL) AND \(personPredicate.sql))", arguments)
+        }
+    }
+
+    // The person_query predicate for a `qt:` second argument. A fixed
+    // PersonQueryKind display name (NOCASE) matches that kind — "Children with"
+    // matches every partnership's query and "Office" every holding's — and an
+    // office name (NOCASE) matches that office's per-office queries. The
+    // alternatives are OR'd, so a name that is both matches either.
+    nonisolated static func personQueryTypePredicate(
+        queryTypeName: String,
+        alias: String
+    ) -> (sql: String, arguments: StatementArguments) {
+        var arguments = StatementArguments()
+        var alternatives: [String] = []
+        if let kind = PersonQueryKind.allCases.first(where: { sqliteNocaseEquals($0.displayName, queryTypeName) }) {
+            alternatives.append("\(alias).kind = ?")
+            arguments += [kind.rawValue]
+        }
+        alternatives.append("(\(alias).kind = ? AND \(alias).office_id IN (SELECT id FROM office WHERE name = ? COLLATE NOCASE))")
+        arguments += [PersonQueryKind.office.rawValue, queryTypeName]
+        return ("(\(alternatives.joined(separator: " OR ")))", arguments)
     }
 
     nonisolated func validateCollectionSearchComponents(
@@ -6903,7 +7223,7 @@ struct AppDatabase {
         guard let expression else { return [] }
 
         switch expression {
-        case .literal, .type, .id, .noQueries, .new, .collectionID:
+        case .literal, .type, .id, .noQueries, .new, .collectionID, .queryType, .queryTypeID:
             return []
         case .collection(let collectionName):
             return [collectionName]

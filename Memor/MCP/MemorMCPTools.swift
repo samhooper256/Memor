@@ -1482,6 +1482,12 @@ enum MemorMCPTools {
         - literal:text — match items with a field containing text (case-insensitive substring). \
         A bare word with no prefix works the same way.
         - type:name — restrict to items of the named type.
+        - qt:type:queryType — restrict to the query type named queryType on the given type \
+        (instance search: instances of the type with that query type enabled; query search: \
+        that query type's queries), e.g. qt:Vocab:ToDefinition. The type may be a name or \
+        numeric ID. Person built-in query names (Mother, Children with, an office's name, \
+        All Offices, …) and map Forward/Reverse count as query type names: qt:Person:Mother, \
+        "qt:Person:All Offices", qt:PointMap:Forward.
         - collection:name (or col:name) — restrict to items in the named collection.
         - col:ID (or collection:ID) — restrict to items in the collection with this numeric ID, e.g. col:67. \
         A leading-digit argument is read as an ID; collection names can never start with a digit, so this is unambiguous.
@@ -1901,7 +1907,7 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "search_instances",
-                description: "Search instances using Memor's instance search language: space-separated components combined with AND (literal:text, type:name, collection:name / col:name (or col:ID by collection ID), id:number, :noqueries, OR, NOT, parentheses, double quotes for spaces; empty string matches all) — call describe_search_syntax for full documentation. Results are grouped by type with per-type total_count/truncated; at most `limit` instances are returned overall (default 50). Set include_field_values to also return each instance's full field values (Object instances only).",
+                description: "Search instances using Memor's instance search language: space-separated components combined with AND (literal:text, type:name, qt:type:queryType (instances of the type with the named query type enabled — user-defined, Person built-in, or map Forward/Reverse query names), collection:name / col:name (or col:ID by collection ID), id:number, :noqueries, OR, NOT, parentheses, double quotes for spaces; empty string matches all) — call describe_search_syntax for full documentation. Results are grouped by type with per-type total_count/truncated; at most `limit` instances are returned overall (default 50). Set include_field_values to also return each instance's full field values (Object instances only).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -2285,7 +2291,7 @@ enum MemorMCPTools {
 
             Tool(
                 name: "search_queries",
-                description: "Search queries (individual flashcards) using Memor's query search language — the same language Stack `search` expressions use, so a Stack's search returns exactly that Stack's queries. Components: literal:text, type:name, collection:name / col:name (or col:ID by collection ID), id:number, :new, OR, NOT, parentheses, double quotes for spaces; empty string matches all. Call describe_search_syntax for full documentation. Results are grouped by type with per-type total_count/truncated; at most `limit` queries are returned overall (default 50). For map queries, query_type_id is a point/attachment ID and is_reverse distinguishes the reverse card.",
+                description: "Search queries (individual flashcards) using Memor's query search language — the same language Stack `search` expressions use, so a Stack's search returns exactly that Stack's queries. Components: literal:text, type:name, qt:type:queryType (that query type's queries on the named type — user-defined, Person built-in, or map Forward/Reverse query names), collection:name / col:name (or col:ID by collection ID), id:number, :new, OR, NOT, parentheses, double quotes for spaces; empty string matches all. Call describe_search_syntax for full documentation. Results are grouped by type with per-type total_count/truncated; at most `limit` queries are returned overall (default 50). For map queries, query_type_id is a point/attachment ID and is_reverse distinguishes the reverse card.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([

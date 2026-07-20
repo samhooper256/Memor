@@ -8,7 +8,7 @@
 import AppKit
 import SwiftUI
 
-private let searchOperatorRegex = try! NSRegularExpression(pattern: #"\b(literal|col|collection|type|id):"#)
+private let searchOperatorRegex = try! NSRegularExpression(pattern: #"\b(literal|col|collection|type|qt|id):"#)
 private let searchFlagRegex = try! NSRegularExpression(pattern: #":noqueries\b"#)
 private let searchNewFlagRegex = try! NSRegularExpression(pattern: #":new\b"#)
 private let searchLogicalOperatorRegex = try! NSRegularExpression(pattern: #"\b(OR|NOT)\b"#)

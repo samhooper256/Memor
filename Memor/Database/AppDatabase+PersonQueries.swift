@@ -264,6 +264,7 @@ extension AppDatabase {
         let searchConditions = makeQuerySearchConditions(
             tableAlias: "instance_table",
             typeName: typeInfo.typeName,
+            typeID: typeInfo.typeID,
             fieldIndices: typeInfo.allFieldIndices,
             expression: parsedQuery.expression,
             srsAlias: "pq"
@@ -360,6 +361,7 @@ extension AppDatabase {
         let searchConditions = makeQuerySearchConditions(
             tableAlias: "instance_table",
             typeName: typeInfo.typeName,
+            typeID: typeInfo.typeID,
             fieldIndices: typeInfo.allFieldIndices,
             expression: parsedQuery.expression,
             srsAlias: "pq"
@@ -396,6 +398,7 @@ extension AppDatabase {
         let searchConditions = makeQuerySearchConditions(
             tableAlias: "instance_table",
             typeName: typeInfo.typeName,
+            typeID: typeInfo.typeID,
             fieldIndices: typeInfo.allFieldIndices,
             expression: parsedQuery.expression,
             srsAlias: "pq"
