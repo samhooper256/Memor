@@ -480,6 +480,10 @@ struct InstanceTextView: NSViewRepresentable {
         let onMoveToNextField: () -> Void
         let onMoveToPreviousField: () -> Void
         weak var textView: NSTextView?
+        /// Last height reported to SwiftUI; a decrease means the text view is
+        /// vacating a strip of the clip view that must be repainted (see
+        /// updateContentHeight).
+        private var lastContentHeight: CGFloat?
         private let baseFont = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
         private let baseColor = NSColor.labelColor
         private static let htmlTagRegex = try! NSRegularExpression(pattern: #"</?[a-zA-Z][^>]*>"#)
@@ -548,6 +552,24 @@ struct InstanceTextView: NSViewRepresentable {
             layoutManager.ensureLayout(for: textContainer)
             let usedHeight = layoutManager.usedRect(for: textContainer).height
             let contentHeight = ceil(usedHeight + (textView.textContainerInset.height * 2))
+            // When the laid-out height SHRINKS (deleting/joining lines, undo,
+            // un-soft-wrapping after a width change), the vertically-resizable
+            // text view shrinks to fit and the strip it vacates belongs to the
+            // transparent clip view, which nothing repaints — the old bottom
+            // line lingers there as a ghost (same artifact updateNSView fixes
+            // for external text replacement). The 64pt minimum field height
+            // keeps that strip on-screen for short content, and SwiftUI never
+            // relayouts below the floor, so invalidate synchronously here —
+            // this method is the choke point every shrink path already calls
+            // (textDidChange, the scroll view's layout hook, updateNSView).
+            if let lastContentHeight, contentHeight < lastContentHeight {
+                textView.needsDisplay = true
+                if let scrollView = textView.enclosingScrollView {
+                    scrollView.contentView.needsDisplay = true
+                    scrollView.needsDisplay = true
+                }
+            }
+            lastContentHeight = contentHeight
             DispatchQueue.main.async { [onContentHeightChange] in
                 onContentHeightChange(contentHeight)
             }
