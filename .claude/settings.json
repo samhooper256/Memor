@@ -19,6 +19,8 @@
       "Bash(find:*)",
       "Bash(curl:*)",
       "Bash(perl:*)",
+      "Bash(sort:*)",
+      "Bash(uniq:*)",
       "Bash(ls:*)",
       "Bash(diff:*)",
       "Bash(cd:*)",
