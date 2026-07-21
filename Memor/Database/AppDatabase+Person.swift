@@ -310,8 +310,8 @@ extension AppDatabase {
                 if let id = child.child.instanceID { referencedIDs.insert(id) }
             }
             for office in relations.offices {
-                referencedIDs.formUnion(office.predecessors)
-                referencedIDs.formUnion(office.successors)
+                referencedIDs.formUnion(office.predecessors.compactMap(\.instanceID))
+                referencedIDs.formUnion(office.successors.compactMap(\.instanceID))
             }
 
             var displayNames: [Int64: String] = [:]
@@ -1089,8 +1089,8 @@ extension AppDatabase {
             // office in both directions.
             for holding in currentHoldings where !draftOfficeIDs.contains(holding.officeID) {
                 let peers = try Self.fetchOfficeSuccessionPeers(db: db, instanceID: personID, officeID: holding.officeID)
-                for peer in Set(peers.predecessors + peers.successors) {
-                    changes.insert(PersonRelationChange(instanceID: peer, kind: .office(officeID: holding.officeID)))
+                for peerID in Set((peers.predecessors + peers.successors).compactMap(\.instanceID)) {
+                    changes.insert(PersonRelationChange(instanceID: peerID, kind: .office(officeID: holding.officeID)))
                 }
                 try db.execute(
                     sql: "DELETE FROM person_query WHERE instance_id = ? AND kind = 'office' AND office_id = ?",
@@ -1137,10 +1137,12 @@ extension AppDatabase {
             }
 
             // Succession edges, per draft holding, predecessors and successors
-            // symmetric. An added edge to a peer who doesn't yet hold the office
-            // AUTO-ADDS the holding (empty fields, end of the peer's order) —
-            // the composite FK requires it, and the linked person did hold the
-            // office by definition.
+            // symmetric. An added edge to an INSTANCE peer who doesn't yet hold
+            // the office AUTO-ADDS the holding (empty fields, end of the peer's
+            // order) — the composite FK requires it, and the linked person did
+            // hold the office by definition. Bare-name peers anchor to this
+            // person's holding alone: no reciprocity, no AUTO-ADD, no peer
+            // change entry.
             func ensurePeerHolding(_ peerID: Int64, officeID: Int64) throws {
                 try db.execute(
                     sql: """
@@ -1166,31 +1168,73 @@ extension AppDatabase {
                     let currentSet = Set(current)
                     let draftedSet = Set(drafted)
                     for peer in drafted where !currentSet.contains(peer) {
-                        try ensurePeerHolding(peer, officeID: officeID)
-                        try db.execute(
-                            sql: """
-                                INSERT OR IGNORE INTO person_office_succession (office_id, predecessor_id, successor_id)
-                                VALUES (?, ?, ?)
-                                """,
-                            arguments: isPredecessorSide
-                                ? [officeID, peer, personID]
-                                : [officeID, personID, peer]
-                        )
+                        switch peer {
+                        case .instance(let peerID):
+                            try ensurePeerHolding(peerID, officeID: officeID)
+                            try db.execute(
+                                sql: """
+                                    INSERT OR IGNORE INTO person_office_succession (office_id, predecessor_id, successor_id)
+                                    VALUES (?, ?, ?)
+                                    """,
+                                arguments: isPredecessorSide
+                                    ? [officeID, peerID, personID]
+                                    : [officeID, personID, peerID]
+                            )
+                            changes.insert(PersonRelationChange(instanceID: peerID, kind: .office(officeID: officeID)))
+                        case .bare(let name):
+                            if isPredecessorSide {
+                                try db.execute(
+                                    sql: """
+                                        INSERT OR IGNORE INTO person_office_succession (office_id, predecessor_bare, successor_id)
+                                        VALUES (?, ?, ?)
+                                        """,
+                                    arguments: [officeID, name, personID]
+                                )
+                            } else {
+                                try db.execute(
+                                    sql: """
+                                        INSERT OR IGNORE INTO person_office_succession (office_id, predecessor_id, successor_bare)
+                                        VALUES (?, ?, ?)
+                                        """,
+                                    arguments: [officeID, personID, name]
+                                )
+                            }
+                        }
                         changes.insert(PersonRelationChange(instanceID: personID, kind: .office(officeID: officeID)))
-                        changes.insert(PersonRelationChange(instanceID: peer, kind: .office(officeID: officeID)))
                     }
                     for peer in current where !draftedSet.contains(peer) {
-                        try db.execute(
-                            sql: """
-                                DELETE FROM person_office_succession
-                                WHERE office_id = ? AND predecessor_id = ? AND successor_id = ?
-                                """,
-                            arguments: isPredecessorSide
-                                ? [officeID, peer, personID]
-                                : [officeID, personID, peer]
-                        )
+                        switch peer {
+                        case .instance(let peerID):
+                            try db.execute(
+                                sql: """
+                                    DELETE FROM person_office_succession
+                                    WHERE office_id = ? AND predecessor_id = ? AND successor_id = ?
+                                    """,
+                                arguments: isPredecessorSide
+                                    ? [officeID, peerID, personID]
+                                    : [officeID, personID, peerID]
+                            )
+                            changes.insert(PersonRelationChange(instanceID: peerID, kind: .office(officeID: officeID)))
+                        case .bare(let name):
+                            if isPredecessorSide {
+                                try db.execute(
+                                    sql: """
+                                        DELETE FROM person_office_succession
+                                        WHERE office_id = ? AND predecessor_bare = ? AND successor_id = ?
+                                        """,
+                                    arguments: [officeID, name, personID]
+                                )
+                            } else {
+                                try db.execute(
+                                    sql: """
+                                        DELETE FROM person_office_succession
+                                        WHERE office_id = ? AND predecessor_id = ? AND successor_bare = ?
+                                        """,
+                                    arguments: [officeID, personID, name]
+                                )
+                            }
+                        }
                         changes.insert(PersonRelationChange(instanceID: personID, kind: .office(officeID: officeID)))
-                        changes.insert(PersonRelationChange(instanceID: peer, kind: .office(officeID: officeID)))
                     }
                 }
             }
@@ -1301,9 +1345,6 @@ extension AppDatabase {
         }
         for child in relations.ungroupedChildren { collect(child.child, isChild: true) }
 
-        for name in bareNames where name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            throw DatabaseError(message: "A name-only entry cannot be blank.")
-        }
         if instanceRefs.contains(personID) {
             throw DatabaseError(message: "A person cannot be their own relative.")
         }
@@ -1333,18 +1374,23 @@ extension AppDatabase {
             throw DatabaseError(message: "The same office cannot be added to a person twice.")
         }
         for office in relations.offices {
-            if office.predecessors.contains(personID) || office.successors.contains(personID) {
+            if (office.predecessors + office.successors).contains(.instance(personID)) {
                 throw DatabaseError(message: "A person cannot be their own predecessor or successor.")
             }
+            // Exact duplicates per side are blocked for bare names too — the
+            // partial unique indexes would silently drop the second edge and
+            // break the save's full-state contract.
             if office.predecessors.count != Set(office.predecessors).count
                 || office.successors.count != Set(office.successors).count {
-                throw DatabaseError(message: "The same person cannot be listed as a predecessor or successor twice for one office.")
+                throw DatabaseError(message: "The same person or name cannot be listed as a predecessor or successor twice for one office.")
             }
             if let personOfficeID = office.personOfficeID, !currentPersonOfficeIDs.contains(personOfficeID) {
                 throw DatabaseError(message: "Unknown office entry for this person.")
             }
-            instanceRefs.append(contentsOf: office.predecessors)
-            instanceRefs.append(contentsOf: office.successors)
+            for ref in office.predecessors + office.successors { collect(ref) }
+        }
+        for name in bareNames where name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw DatabaseError(message: "A name-only entry cannot be blank.")
         }
         if !draftOfficeIDs.isEmpty {
             let idList = Set(draftOfficeIDs).map(String.init).joined(separator: ", ")
@@ -1629,9 +1675,11 @@ extension AppDatabase {
                             JOIN person_partnership pp ON pp.id = ppc.partnership_id
                             WHERE (pp.a_id = ?1 OR pp.b_id = ?1) AND ppc.child_id IS NOT NULL
                         UNION
-                        SELECT successor_id FROM person_office_succession WHERE predecessor_id = ?1
+                        SELECT successor_id FROM person_office_succession
+                            WHERE predecessor_id = ?1 AND successor_id IS NOT NULL
                         UNION
-                        SELECT predecessor_id FROM person_office_succession WHERE successor_id = ?1
+                        SELECT predecessor_id FROM person_office_succession
+                            WHERE successor_id = ?1 AND predecessor_id IS NOT NULL
                     )
                     """,
                 arguments: [instanceID]
@@ -1668,7 +1716,8 @@ extension AppDatabase {
                                    WHERE (pp2.a_id = i.instance_id OR pp2.b_id = i.instance_id)
                                      AND ppc.child_id IS NOT NULL)
                         OR EXISTS (SELECT 1 FROM person_office_succession s
-                                   WHERE s.predecessor_id = i.instance_id OR s.successor_id = i.instance_id)
+                                   WHERE (s.predecessor_id = i.instance_id AND s.successor_id IS NOT NULL)
+                                      OR (s.successor_id = i.instance_id AND s.predecessor_id IS NOT NULL))
                       )
                     """,
                 arguments: [personTypeID]
@@ -1678,18 +1727,17 @@ extension AppDatabase {
 
     /// Converts every reference to `instanceID` on OTHER people into a
     /// bare-name entry (display name, fallback "Unknown"), preserving family
-    /// structure, groupings, and children_with SRS state. Returns the affected-
-    /// query change set. Must run before the generic instance delete.
-    ///
-    /// Office succession links have no bare-name form: the peers' edges (and
-    /// this person's holdings/queries) die by FK cascade when the instance row
-    /// is deleted — only their change-set entries are gathered here.
+    /// structure, groupings, children_with SRS state, and office succession
+    /// links (an instance peer's edge keeps the fact as a bare name). Returns
+    /// the affected-query change set. Must run before the generic instance
+    /// delete (this person's own holdings/queries die by FK cascade there).
     nonisolated static func deletePersonRelations(db: Database, instanceID: Int64) throws -> Set<PersonRelationChange> {
         let name = try displayNameOrUnknown(db: db, instanceID: instanceID)
         var changes: Set<PersonRelationChange> = []
 
         // Gather the affected-query set BEFORE mutating.
-        // Office succession peers: their per-office answers lose this person.
+        // Office succession peers: their per-office answers change (this
+        // person's entry becomes a bare name). Bare endpoints have no peer.
         let successionRows = try Row.fetchAll(
             db,
             sql: """
@@ -1700,9 +1748,10 @@ extension AppDatabase {
             arguments: [instanceID]
         )
         for row in successionRows {
-            let predecessorID = row["predecessor_id"] as Int64
-            let successorID = row["successor_id"] as Int64
+            let predecessorID = row["predecessor_id"] as Int64?
+            let successorID = row["successor_id"] as Int64?
             let peer = predecessorID == instanceID ? successorID : predecessorID
+            guard let peer else { continue }
             changes.insert(PersonRelationChange(instanceID: peer, kind: .office(officeID: row["office_id"])))
         }
 
@@ -1815,6 +1864,36 @@ extension AppDatabase {
         try db.execute(
             sql: "UPDATE person_direct_child SET child_id = NULL, child_bare = ? WHERE child_id = ?",
             arguments: [name, instanceID]
+        )
+
+        // 7. Office succession: edges whose OTHER endpoint is an instance keep
+        // the fact as a bare name (OR IGNORE skips one that would duplicate an
+        // existing bare edge); whatever still references X afterwards had a
+        // bare other side — a bare-bare edge has no owner, so it's deleted.
+        // Doing this here (not via cascade) keeps peers' answers intact.
+        try db.execute(
+            sql: """
+                UPDATE OR IGNORE person_office_succession
+                SET predecessor_id = NULL, predecessor_bare = ?
+                WHERE predecessor_id = ? AND successor_id IS NOT NULL
+                """,
+            arguments: [name, instanceID]
+        )
+        try db.execute(
+            sql: "DELETE FROM person_office_succession WHERE predecessor_id = ?",
+            arguments: [instanceID]
+        )
+        try db.execute(
+            sql: """
+                UPDATE OR IGNORE person_office_succession
+                SET successor_id = NULL, successor_bare = ?
+                WHERE successor_id = ? AND predecessor_id IS NOT NULL
+                """,
+            arguments: [name, instanceID]
+        )
+        try db.execute(
+            sql: "DELETE FROM person_office_succession WHERE successor_id = ?",
+            arguments: [instanceID]
         )
         // X's own person_query rows die via the instance_id_type_id FK cascade.
 

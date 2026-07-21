@@ -664,7 +664,8 @@ extension AppDatabase {
     /// come from the editor's draft instead of person_office, so uncommitted
     /// office edits render. Office names resolve from the office table (drafted
     /// holdings always reference existing offices) and succession peers are
-    /// persisted instances, but the person themself has no row yet — their name
+    /// persisted instances or bare names, but the person themself has no row
+    /// yet — their name
     /// in the per-office answer is the display field's {{FieldName}} placeholder,
     /// resolved by the live field values the caller supplies via
     /// `StudyQuery.withFieldValues` (fieldValuesByName is left empty here, like
@@ -716,8 +717,8 @@ extension AppDatabase {
                 questionHTML = Self.renderedOfficeTemplate(template, holding: holdings[officeIndex])
                 body = try Self.officeSuccessionRowHTML(
                     db: db,
-                    predecessorIDs: offices[officeIndex].predecessors,
-                    successorIDs: offices[officeIndex].successors,
+                    predecessors: offices[officeIndex].predecessors,
+                    successors: offices[officeIndex].successors,
                     centerHTML: displayFieldName.map { "{{\($0)}}" } ?? ""
                 )
                 queryTypeName = "Office: \(holdings[officeIndex].officeName)"
@@ -933,30 +934,32 @@ extension AppDatabase {
         let peers = try fetchOfficeSuccessionPeers(db: db, instanceID: personID, officeID: officeID)
         return try officeSuccessionRowHTML(
             db: db,
-            predecessorIDs: peers.predecessors,
-            successorIDs: peers.successors,
+            predecessors: peers.predecessors,
+            successors: peers.successors,
             centerHTML: centerHTML
         )
     }
 
     /// The same three-panel row from explicit peer lists — the draft-preview
     /// path supplies the editor's uncommitted predecessors/successors directly.
+    /// Instance peers render as id: links, bare names as plain spans (like
+    /// every other relationship answer entry).
     private nonisolated static func officeSuccessionRowHTML(
         db: Database,
-        predecessorIDs: [Int64],
-        successorIDs: [Int64],
+        predecessors: [PersonRef],
+        successors: [PersonRef],
         centerHTML: String
     ) throws -> String {
-        func panel(_ ids: [Int64]) throws -> String {
-            guard !ids.isEmpty else { return personNAHTML }
-            return personAnswerLines(try ids.map { try personEntryHTML(db: db, ref: .instance($0)) })
+        func panel(_ refs: [PersonRef]) throws -> String {
+            guard !refs.isEmpty else { return personNAHTML }
+            return personAnswerLines(try refs.map { try personEntryHTML(db: db, ref: $0) })
         }
 
         return """
             <div class="office-succession">
-                <div class="office-succession-panel office-succession-preds">\(try panel(predecessorIDs))</div>
+                <div class="office-succession-panel office-succession-preds">\(try panel(predecessors))</div>
                 <div class="office-succession-panel office-succession-holder">\(centerHTML)</div>
-                <div class="office-succession-panel office-succession-succs">\(try panel(successorIDs))</div>
+                <div class="office-succession-panel office-succession-succs">\(try panel(successors))</div>
             </div>
             """
     }

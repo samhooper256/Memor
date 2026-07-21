@@ -634,9 +634,10 @@ enum MemorMCPTools {
         throw MemorMCPToolError(message: "`\(argumentLabel)` must be {\"instance_id\": n}, {\"name\": \"...\"}, or null.")
     }
 
-    /// Parses a child entry: an integer instance id, a bare-name string, or the
-    /// object form used by slots.
-    private static func parsePersonChildRef(_ value: Value, argumentLabel: String) throws -> PersonRef {
+    /// Parses one entry of a person list (children, predecessors, successors):
+    /// an integer instance id, a bare-name string, or the object form used by
+    /// slots.
+    private static func parsePersonListRef(_ value: Value, argumentLabel: String) throws -> PersonRef {
         if let id = value.intValue { return .instance(Int64(id)) }
         if let name = value.stringValue { return .bare(name) }
         if let obj = value.objectValue {
@@ -644,6 +645,19 @@ enum MemorMCPTools {
             if let nameValue = obj["name"], let name = nameValue.stringValue { return .bare(name) }
         }
         throw MemorMCPToolError(message: "Every entry in `\(argumentLabel)` must be an instance id, a name string, or {\"instance_id\"}/{\"name\"}.")
+    }
+
+    /// Parses an optional array of person list entries (nil = key absent).
+    private static func parsePersonRefArray(
+        _ item: [String: Value],
+        key: String,
+        label: String
+    ) throws -> [PersonRef]? {
+        guard let value = item[key] else { return nil }
+        guard let values = value.arrayValue else {
+            throw MemorMCPToolError(message: "`\(label).\(key)` must be an array of instance ids and/or name strings.")
+        }
+        return try values.map { try parsePersonListRef($0, argumentLabel: "\(label).\(key)") }
     }
 
     /// Full-state relationship editor: a present key replaces that slot; an
@@ -697,7 +711,7 @@ enum MemorMCPTools {
                 var children: [PersonChildDraft]
                 if let childValues = item["children"]?.arrayValue {
                     children = try childValues.map {
-                        PersonChildDraft(rowID: nil, child: try parsePersonChildRef($0, argumentLabel: "\(label).children"))
+                        PersonChildDraft(rowID: nil, child: try parsePersonListRef($0, argumentLabel: "\(label).children"))
                     }
                 } else {
                     children = existing?.children ?? []
@@ -718,7 +732,7 @@ enum MemorMCPTools {
 
         if let childValues = arguments["ungrouped_children"]?.arrayValue {
             relations.ungroupedChildren = try childValues.map {
-                PersonChildDraft(rowID: nil, child: try parsePersonChildRef($0, argumentLabel: "ungrouped_children"))
+                PersonChildDraft(rowID: nil, child: try parsePersonListRef($0, argumentLabel: "ungrouped_children"))
             }
         }
 
@@ -770,8 +784,9 @@ enum MemorMCPTools {
     /// ordered list of holdings (an omitted office is REMOVED, deleting its
     /// per-office query SRS and this person's succession links for it).
     /// Items name an EXISTING office by office_id or office_name; absent
-    /// sub-keys inherit from the current holding. Linking a predecessor/
-    /// successor AUTO-ADDS that office to the linked person.
+    /// sub-keys inherit from the current holding. Predecessors/successors are
+    /// instance ids and/or bare-name strings; linking an INSTANCE peer
+    /// AUTO-ADDS that office to them (bare names carry no reciprocity).
     private static func updatePersonOffices(
         arguments: [String: Value],
         appDatabase: AppDatabase
@@ -811,8 +826,8 @@ enum MemorMCPTools {
                 whenBegan: try item.optionalString("when_began") ?? existing?.whenBegan ?? "",
                 whenEnded: try item.optionalString("when_ended") ?? existing?.whenEnded ?? "",
                 note: try item.optionalString("note") ?? existing?.note ?? "",
-                predecessors: try item.optionalInt64Array("predecessors") ?? existing?.predecessors ?? [],
-                successors: try item.optionalInt64Array("successors") ?? existing?.successors ?? [],
+                predecessors: try parsePersonRefArray(item, key: "predecessors", label: label) ?? existing?.predecessors ?? [],
+                successors: try parsePersonRefArray(item, key: "successors", label: label) ?? existing?.successors ?? [],
                 isQueryEnabled: try item.optionalBool("query_enabled") ?? existing?.isQueryEnabled ?? false
             ))
         }
@@ -1891,7 +1906,7 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "delete_instance",
-                description: "Delete an instance by ID. This removes the instance from all collections and deletes its queries. Deleting a Person converts every reference to them on other people (partner entries, parent slots, children) into a bare-name entry, preserving the family structure.",
+                description: "Delete an instance by ID. This removes the instance from all collections and deletes its queries. Deleting a Person converts every reference to them on other people (partner entries, parent slots, children, office predecessor/successor links) into a bare-name entry, preserving the family and succession structure.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object(["instance_id": int64Number]),
@@ -1948,7 +1963,7 @@ enum MemorMCPTools {
 
             Tool(
                 name: "update_person_offices",
-                description: "Edit a Person instance's office holdings. `offices` is the COMPLETE ordered list: an omitted office is REMOVED from this person (deleting its per-office query's SRS progress and this person's succession links for it — irreversible). Each item names an EXISTING office via exactly one of office_id / office_name (case-insensitive; unknown names are an error — offices are never created implicitly, use create_office first). Optional per item: when_began, when_ended, note (freetext; absent keys keep the current holding's values), predecessors, successors (COMPLETE arrays of Person instance ids for that office; absent keeps current; reciprocity is automatic — if A precedes B then B succeeds A — and linking a person who doesn't hold the office AUTO-ADDS it to them with empty fields), and query_enabled (the per-office built-in query; default keeps current / false for new holdings). Returns the person's updated relations (including offices) plus reset_query_count (non-zero when the Person type's reset-on-connection-change option is on).",
+                description: "Edit a Person instance's office holdings. `offices` is the COMPLETE ordered list: an omitted office is REMOVED from this person (deleting its per-office query's SRS progress and this person's succession links for it — irreversible). Each item names an EXISTING office via exactly one of office_id / office_name (case-insensitive; unknown names are an error — offices are never created implicitly, use create_office first). Optional per item: when_began, when_ended, note (freetext; absent keys keep the current holding's values), predecessors, successors (COMPLETE ordered arrays for that office; absent keeps current; each entry is a Person instance id or a bare-name string for someone without an instance. Instance links are reciprocal — if A precedes B then B succeeds A — and linking a person who doesn't hold the office AUTO-ADDS it to them with empty fields; bare names live only on this person's side, carry no reciprocity, and cannot repeat within one side), and query_enabled (the per-office built-in query; default keeps current / false for new holdings). Returns the person's updated relations (including offices) plus reset_query_count (non-zero when the Person type's reset-on-connection-change option is on).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -1964,8 +1979,14 @@ enum MemorMCPTools {
                                     "when_began": stringValue,
                                     "when_ended": stringValue,
                                     "note": stringValue,
-                                    "predecessors": int64Array,
-                                    "successors": int64Array,
+                                    "predecessors": .object([
+                                        "type": .string("array"),
+                                        "description": .string("Ordered predecessors for that office: instance ids and/or bare name strings.")
+                                    ]),
+                                    "successors": .object([
+                                        "type": .string("array"),
+                                        "description": .string("Ordered successors for that office: instance ids and/or bare name strings.")
+                                    ]),
                                     "query_enabled": boolValue
                                 ])
                             ])
@@ -2680,8 +2701,8 @@ private struct PersonRelationsDTO: Encodable {
                 whenBegan: office.whenBegan,
                 whenEnded: office.whenEnded,
                 note: office.note,
-                predecessors: office.predecessors.map { PersonRefDTO(.instance($0), displayNames: displayNames) },
-                successors: office.successors.map { PersonRefDTO(.instance($0), displayNames: displayNames) },
+                predecessors: office.predecessors.map { PersonRefDTO($0, displayNames: displayNames) },
+                successors: office.successors.map { PersonRefDTO($0, displayNames: displayNames) },
                 queryEnabled: office.isQueryEnabled
             )
         }

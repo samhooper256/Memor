@@ -241,32 +241,37 @@ extension AppDatabase {
         }
     }
 
-    /// One person's predecessors/successors in one office, each in edge-creation
-    /// order (edge row ids are stable — the save engine only inserts/deletes
-    /// exact edges, never rewrites surviving ones).
+    /// One person's predecessors/successors in one office — instance refs and
+    /// bare names — each in edge-creation order (edge row ids are stable — the
+    /// save engine only inserts/deletes exact edges, never rewrites surviving
+    /// ones). Bare-endpoint edges appear only in the instance endpoint's view.
     nonisolated static func fetchOfficeSuccessionPeers(
         db: Database,
         instanceID: Int64,
         officeID: Int64
-    ) throws -> (predecessors: [Int64], successors: [Int64]) {
-        let predecessors = try Int64.fetchAll(
+    ) throws -> (predecessors: [PersonRef], successors: [PersonRef]) {
+        func ref(id: Int64?, bare: String?) -> PersonRef {
+            if let id { return .instance(id) }
+            return .bare(bare ?? "")
+        }
+        let predecessors = try Row.fetchAll(
             db,
             sql: """
-                SELECT predecessor_id FROM person_office_succession
+                SELECT predecessor_id, predecessor_bare FROM person_office_succession
                 WHERE office_id = ? AND successor_id = ?
                 ORDER BY id
                 """,
             arguments: [officeID, instanceID]
-        )
-        let successors = try Int64.fetchAll(
+        ).map { ref(id: $0["predecessor_id"], bare: $0["predecessor_bare"]) }
+        let successors = try Row.fetchAll(
             db,
             sql: """
-                SELECT successor_id FROM person_office_succession
+                SELECT successor_id, successor_bare FROM person_office_succession
                 WHERE office_id = ? AND predecessor_id = ?
                 ORDER BY id
                 """,
             arguments: [officeID, instanceID]
-        )
+        ).map { ref(id: $0["successor_id"], bare: $0["successor_bare"]) }
         return (predecessors, successors)
     }
 }

@@ -2710,7 +2710,7 @@ struct InstanceEditorWindowView: View {
         if isPersonSelected, let instanceID = draft.loadedInstanceID,
            let connections = try? appDatabase.hasPersonConnections(instanceID: instanceID),
            connections > 0 {
-            message += " This person is linked to \(connections) other \(connections == 1 ? "person" : "people"): relationship references become plain names, and office succession links are removed."
+            message += " This person is linked to \(connections) other \(connections == 1 ? "person" : "people"): relationship and office succession references become plain names."
         }
         return message
     }
@@ -2858,8 +2858,8 @@ struct InstanceEditorWindowView: View {
                 whenBeganText: office.whenBegan,
                 whenEndedText: office.whenEnded,
                 noteText: office.note,
-                predecessorIDs: office.predecessors,
-                successorIDs: office.successors,
+                predecessors: office.predecessors,
+                successors: office.successors,
                 isOfficeQueryEnabled: office.isQueryEnabled
             )
             if office.isQueryEnabled,

@@ -94,17 +94,18 @@ nonisolated struct PersonPartnerDraft: Hashable {
 }
 
 /// One office holding on a Person, as edited (and as fetched).
-/// `predecessors`/`successors` are Person INSTANCE ids only (no bare names),
-/// in edge-creation order. `personOfficeID` is the person_office row id
-/// (nil = newly added; kept rows are UPDATEd in place).
+/// `predecessors`/`successors` are instance-or-bare-name entries in
+/// edge-creation order (bare names carry no reciprocity and never AUTO-ADD a
+/// holding). `personOfficeID` is the person_office row id (nil = newly added;
+/// kept rows are UPDATEd in place).
 nonisolated struct PersonOfficeDraft: Hashable {
     var personOfficeID: Int64?
     var officeID: Int64
     var whenBegan: String = ""
     var whenEnded: String = ""
     var note: String = ""
-    var predecessors: [Int64] = []
-    var successors: [Int64] = []
+    var predecessors: [PersonRef] = []
+    var successors: [PersonRef] = []
     /// Whether this person's per-office built-in query is enabled.
     var isQueryEnabled: Bool = false
 }

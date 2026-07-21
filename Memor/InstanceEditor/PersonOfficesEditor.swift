@@ -3,11 +3,12 @@
 //  Memor
 //
 //  The Person instance editor's Offices panel: ordered office cards (office
-//  chip, WhenBegan/WhenEnded/Note text fields, predecessor/successor links to
-//  other Person instances) plus the office picker popover, which suggests
-//  existing offices by name and can create a new one inline. Every card
-//  references an existing office row; predecessor/successor links are
-//  instance-only (no bare names) and reciprocal by construction on save.
+//  chip, WhenBegan/WhenEnded/Note text fields, predecessor/successor entries)
+//  plus the office picker popover, which suggests existing offices by name and
+//  can create a new one inline. Every card references an existing office row.
+//  Predecessors/successors are Person instances (reciprocal by construction on
+//  save) or bare names (free text with no reciprocity), like the relationship
+//  slots.
 //
 
 import AppKit
@@ -128,8 +129,8 @@ struct PersonOfficesEditor: View {
                     .solidFocusField()
             }
 
-            successionRow(title: "Predecessors", ids: office.predecessorIDs)
-            successionRow(title: "Successors", ids: office.successorIDs)
+            successionRow(title: "Predecessors", refs: office.predecessors)
+            successionRow(title: "Successors", refs: office.successors)
         }
         .padding(8)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.6))
@@ -140,7 +141,7 @@ struct PersonOfficesEditor: View {
         }
     }
 
-    private func successionRow(title: String, ids: Binding<[Int64]>) -> some View {
+    private func successionRow(title: String, refs: Binding<[PersonRef]>) -> some View {
         // One flow: the title, Add button, and chips share the first line and
         // only wrap when the card runs out of width.
         FlowLayout(spacing: 6) {
@@ -150,28 +151,40 @@ struct PersonOfficesEditor: View {
             PersonAddButton(
                 appDatabase: appDatabase,
                 excludingInstanceID: draft.loadedInstanceID,
-                alreadySelected: Set(ids.wrappedValue),
-                allowsBareNames: false,
+                alreadySelected: Set(refs.wrappedValue.compactMap(\.instanceID)),
                 onSelectInstance: { candidate in
                     draft.personDisplayNamesByID[candidate.id] = candidate.displayValue
                     draft.personSexesByID[candidate.id] = candidate.sex
-                    ids.wrappedValue.append(candidate.id)
+                    refs.wrappedValue.append(.instance(candidate.id))
                 },
-                onSelectBareName: { _ in }
+                onSelectBareName: { name in
+                    // Exact duplicates per side are rejected by the save (they
+                    // would collide in the DB), so don't let one into the draft;
+                    // ForEach ids also stay unique this way.
+                    let ref = PersonRef.bare(name)
+                    if !refs.wrappedValue.contains(ref) {
+                        refs.wrappedValue.append(ref)
+                    }
+                }
             )
-            ForEach(ids.wrappedValue, id: \.self) { personID in
+            ForEach(refs.wrappedValue, id: \.self) { ref in
                 PersonChip(
-                    label: personLabel(personID),
-                    isBareName: false,
-                    onRemove: { ids.wrappedValue.removeAll { $0 == personID } }
+                    label: refLabel(ref),
+                    isBareName: ref.bareName != nil,
+                    onRemove: { refs.wrappedValue.removeAll { $0 == ref } }
                 )
             }
         }
     }
 
-    private func personLabel(_ personID: Int64) -> String {
-        let name = (draft.personDisplayNamesByID[personID] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return name.isEmpty ? "#\(personID)" : name
+    private func refLabel(_ ref: PersonRef) -> String {
+        switch ref {
+        case .instance(let personID):
+            let name = (draft.personDisplayNamesByID[personID] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return name.isEmpty ? "#\(personID)" : name
+        case .bare(let name):
+            return name
+        }
     }
 }
 

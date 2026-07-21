@@ -42,7 +42,8 @@ struct PersonPartnerDraftEntry: Identifiable, Hashable {
 /// One office card in the Person editor. `holdingID` is the persisted
 /// person_office row id (nil until first save); `officeID` always references
 /// an existing office row — offices are created in the DB before entering a
-/// draft. Predecessors/successors are Person instance ids only (no bare names).
+/// draft. Predecessors/successors are Person instances or bare names, like
+/// the relationship slots.
 struct PersonOfficeDraftEntry: Identifiable, Hashable {
     let id = UUID()
     var holdingID: Int64?
@@ -51,8 +52,8 @@ struct PersonOfficeDraftEntry: Identifiable, Hashable {
     var whenBeganText = ""
     var whenEndedText = ""
     var noteText = ""
-    var predecessorIDs: [Int64] = []
-    var successorIDs: [Int64] = []
+    var predecessors: [PersonRef] = []
+    var successors: [PersonRef] = []
     var isOfficeQueryEnabled = false
     /// Edit-mode SRS display for the per-office query (nil = never seen).
     var officeQueryInterval: Int64?
@@ -164,8 +165,8 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
                     whenBegan: entry.whenBeganText,
                     whenEnded: entry.whenEndedText,
                     note: entry.noteText,
-                    predecessors: entry.predecessorIDs,
-                    successors: entry.successorIDs,
+                    predecessors: entry.predecessors,
+                    successors: entry.successors,
                     isQueryEnabled: entry.isOfficeQueryEnabled
                 )
             }

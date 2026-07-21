@@ -450,26 +450,60 @@ extension AppDatabase {
 
             // One row per directed succession fact, stored ONCE (reciprocity by
             // construction, like person_partnership): "predecessor precedes
-            // successor in office". The composite FKs to person_office mean an
-            // edge can only exist while BOTH endpoints hold the office, and
-            // deleting a holding, an office, or a person cascades its edges.
-            // (X,A,B) and (X,B,A) may coexist (Cleveland/Harrison); exact
-            // duplicate edges and self-links cannot.
-            try db.execute(sql: """
-                CREATE TABLE IF NOT EXISTS person_office_succession (
+            // successor in office". Each endpoint is a Person instance OR a
+            // bare name (exactly one of id/bare per side); at least one side
+            // must be an instance — that side owns the edge (a bare peer has
+            // no view of its own). The composite FKs to person_office mean an
+            // INSTANCE endpoint can only exist while that person holds the
+            // office (a NULL id disables its FK), and deleting a holding, an
+            // office, or a person cascades its edges. (X,A,B) and (X,B,A) may
+            // coexist (Cleveland/Harrison); exact duplicate edges (including
+            // bare ones, via the two partial unique indexes) and self-links
+            // cannot. The definition body is shared with the one-off rebuild
+            // below so the two can't drift.
+            let successionTableBody = """
                     id INTEGER PRIMARY KEY,
                     office_id INTEGER NOT NULL
                         REFERENCES office(id) ON DELETE CASCADE,
-                    predecessor_id INTEGER NOT NULL,
-                    successor_id INTEGER NOT NULL,
+                    predecessor_id INTEGER,
+                    predecessor_bare TEXT,
+                    successor_id INTEGER,
+                    successor_bare TEXT,
+                    CHECK ((predecessor_id IS NULL) != (predecessor_bare IS NULL)),
+                    CHECK ((successor_id IS NULL) != (successor_bare IS NULL)),
+                    CHECK (predecessor_id IS NOT NULL OR successor_id IS NOT NULL),
                     CHECK (predecessor_id != successor_id),
                     UNIQUE (office_id, predecessor_id, successor_id),
                     FOREIGN KEY (predecessor_id, office_id)
                         REFERENCES person_office(instance_id, office_id) ON DELETE CASCADE,
                     FOREIGN KEY (successor_id, office_id)
                         REFERENCES person_office(instance_id, office_id) ON DELETE CASCADE
+                """
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS person_office_succession (
+                \(successionTableBody)
                 ) STRICT
                 """)
+            // Bare-name endpoints were added July 2026. Databases from before
+            // then have NOT NULL endpoint ids and no bare columns; neither
+            // nullability nor table CHECKs can be ALTERed in, so rebuild once,
+            // preserving row ids (peers render in edge-creation order). The
+            // dropped indexes are recreated just below.
+            let successionColumns = try Row.fetchAll(db, sql: "PRAGMA table_info(person_office_succession)")
+                .map { $0["name"] as String }
+            if !successionColumns.contains("predecessor_bare") {
+                try db.execute(sql: """
+                    CREATE TABLE person_office_succession_new (
+                    \(successionTableBody)
+                    ) STRICT
+                    """)
+                try db.execute(sql: """
+                    INSERT INTO person_office_succession_new (id, office_id, predecessor_id, successor_id)
+                    SELECT id, office_id, predecessor_id, successor_id FROM person_office_succession
+                    """)
+                try db.execute(sql: "DROP TABLE person_office_succession")
+                try db.execute(sql: "ALTER TABLE person_office_succession_new RENAME TO person_office_succession")
+            }
             try db.execute(sql: """
                 CREATE INDEX IF NOT EXISTS idx_person_office_succession_pred
                     ON person_office_succession(predecessor_id, office_id)
@@ -477,6 +511,18 @@ extension AppDatabase {
             try db.execute(sql: """
                 CREATE INDEX IF NOT EXISTS idx_person_office_succession_succ
                     ON person_office_succession(successor_id, office_id)
+                """)
+            // UNIQUE treats NULLs as distinct, so the table-level UNIQUE only
+            // covers instance-instance edges; these cover the two bare shapes.
+            try db.execute(sql: """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_person_office_succession_unique_bare_pred
+                    ON person_office_succession(office_id, predecessor_bare, successor_id)
+                    WHERE predecessor_id IS NULL
+                """)
+            try db.execute(sql: """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_person_office_succession_unique_bare_succ
+                    ON person_office_succession(office_id, predecessor_id, successor_bare)
+                    WHERE successor_id IS NULL
                 """)
 
             // Built-in Person queries (Mother/Father/Parents/Adoptive Mother/

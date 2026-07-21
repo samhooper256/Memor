@@ -425,9 +425,6 @@ struct PersonAddButton: View {
     let appDatabase: AppDatabase
     let excludingInstanceID: Int64?
     let alreadySelected: Set<Int64>
-    /// Whether the picker offers the "Add as name" free-text row. Relationship
-    /// slots accept bare names; office succession links do not.
-    var allowsBareNames = true
     let onSelectInstance: (PersonCandidate) -> Void
     let onSelectBareName: (String) -> Void
 
@@ -443,7 +440,6 @@ struct PersonAddButton: View {
                 appDatabase: appDatabase,
                 excludingInstanceID: excludingInstanceID,
                 alreadySelected: alreadySelected,
-                allowsBareNames: allowsBareNames,
                 onSelectInstance: { candidate in
                     onSelectInstance(candidate)
                     isPickerPresented = false
@@ -464,7 +460,6 @@ private struct PersonPickerPopover: View {
     let appDatabase: AppDatabase
     let excludingInstanceID: Int64?
     let alreadySelected: Set<Int64>
-    var allowsBareNames = true
     let onSelectInstance: (PersonCandidate) -> Void
     let onSelectBareName: (String) -> Void
     let onCancel: () -> Void
@@ -485,7 +480,7 @@ private struct PersonPickerPopover: View {
     /// (already-used ones are skipped) then the "Add as name" row.
     private var navigableRowIDs: [String] {
         var ids = results.filter { !alreadySelected.contains($0.id) }.map { String($0.id) }
-        if allowsBareNames, !trimmedSearchText.isEmpty {
+        if !trimmedSearchText.isEmpty {
             ids.append(Self.bareNameRowID)
         }
         return ids
@@ -518,7 +513,7 @@ private struct PersonPickerPopover: View {
                             }
                         }
 
-                        if allowsBareNames, !trimmedSearchText.isEmpty {
+                        if !trimmedSearchText.isEmpty {
                             Divider()
                                 .padding(.vertical, 4)
                             bareNameRow
@@ -621,7 +616,7 @@ private struct PersonPickerPopover: View {
     private func chooseHighlightedRow() {
         guard let highlightedRowID else { return }
         if highlightedRowID == Self.bareNameRowID {
-            guard allowsBareNames, !trimmedSearchText.isEmpty else { return }
+            guard !trimmedSearchText.isEmpty else { return }
             onSelectBareName(trimmedSearchText)
         } else if let id = Int64(highlightedRowID),
                   let candidate = results.first(where: { $0.id == id }),
