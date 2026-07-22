@@ -6,11 +6,18 @@ Auto-approves a command when every segment of a compound command
 allow rule from .claude/settings.json / .claude/settings.local.json,
 or is an sqlite3 invocation.
 
-Anything the splitter can't safely analyze (command substitution,
-backticks, subshells, brace groups, backgrounding with &, heredocs)
-produces NO decision, which falls back to Claude Code's normal
-permission flow. A segment matching a deny rule also produces no
-decision.
+Heredocs with a QUOTED delimiter (<<'EOF' / <<"EOF") are handled:
+the body expands nothing, so it is pure data for the receiving
+command — equivalent to piping a fixed string, which the allow rules
+already permit. The body is stripped and the command line is vetted
+normally. Unquoted-delimiter heredocs ($(...) in the body would
+execute) still produce no decision.
+
+Anything else the splitter can't safely analyze (command
+substitution, backticks, subshells, brace groups, backgrounding
+with &) produces NO decision, which falls back to Claude Code's
+normal permission flow. A segment matching a deny rule also produces
+no decision.
 """
 
 import json
@@ -96,7 +103,44 @@ def split_compound(command):
         if c == "$" and command[i:i + 2] == "$(":
             return None
         if c == "<" and command[i:i + 2] == "<<":
-            return None  # heredoc bodies aren't commands we can vet
+            if command[i:i + 3] == "<<<":
+                buf.append("<<<")
+                i += 3
+                continue  # herestring word is data; quote/$( checks still apply
+            # Heredoc: only a quoted delimiter keeps the body inert.
+            j = i + 2
+            if command[j:j + 1] == "-":
+                j += 1
+            while command[j:j + 1] in (" ", "\t"):
+                j += 1
+            quote = command[j:j + 1]
+            if quote not in ("'", '"'):
+                return None  # unquoted delimiter: body would expand $(...)
+            k = command.find(quote, j + 1)
+            delim = command[j + 1:k] if k != -1 else ""
+            if not delim or command[k + 1:k + 2] not in ("", " ", "\t", "\n"):
+                return None
+            nl = command.find("\n", k + 1)
+            if nl == -1 or "<<" in command[k + 1:nl]:
+                return None  # no body line / second heredoc on the line
+            strip_tabs = command[i + 2:i + 3] == "-"
+            pos, end = nl + 1, None
+            while end is None:
+                line_end = command.find("\n", pos)
+                stop = line_end if line_end != -1 else len(command)
+                line = command[pos:stop]
+                if (line.lstrip("\t") if strip_tabs else line) == delim:
+                    end = stop
+                elif line_end == -1:
+                    return None  # unterminated heredoc
+                else:
+                    pos = line_end + 1
+            # Drop the body + terminator; keep vetting the command line.
+            buf.append(command[i:k + 1])
+            command = command[:nl + 1] + command[end:]
+            n = len(command)
+            i = k + 1
+            continue
         if c == "&":
             if command[i:i + 2] == "&&":
                 parts.append("".join(buf))
