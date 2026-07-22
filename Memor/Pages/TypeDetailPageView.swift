@@ -51,7 +51,6 @@ struct TypeDetailPageView: View {
     @State private var newFieldType: FieldKind = .text
     @State private var fieldPendingDeletion: TypeField?
     @State private var fieldPendingRename: TypeField?
-    @State private var isRenameFieldPopoverPresented = false
     @State private var renamedFieldName = ""
     @State private var displayedTypeName = ""
     @State private var description: String = ""
@@ -288,9 +287,8 @@ struct TypeDetailPageView: View {
                     FieldsSectionView(
                         fields: fields,
                         onEditField: { field in
-                            fieldPendingRename = field
                             renamedFieldName = field.name
-                            isRenameFieldPopoverPresented = true
+                            fieldPendingRename = field
                         },
                         onDeleteField: { field in
                             fieldPendingDeletion = field
@@ -301,8 +299,7 @@ struct TypeDetailPageView: View {
                     )
 
                     RenameFieldPopoverAnchor(
-                        fieldPendingRename: fieldPendingRename,
-                        isRenameFieldPopoverPresented: $isRenameFieldPopoverPresented,
+                        fieldPendingRename: $fieldPendingRename,
                         renamedFieldName: $renamedFieldName,
                         isFieldNameFocused: $isAddFieldNameFocused,
                         onSubmit: { field in
@@ -311,7 +308,6 @@ struct TypeDetailPageView: View {
                             }
                         },
                         onCancel: {
-                            isRenameFieldPopoverPresented = false
                             fieldPendingRename = nil
                         }
                     )
@@ -1207,7 +1203,6 @@ struct TypeDetailPageView: View {
                     isPrimary: existingField.isPrimary
                 )
             }
-            isRenameFieldPopoverPresented = false
             fieldPendingRename = nil
             errorMessage = nil
         } catch {
@@ -1449,8 +1444,10 @@ private struct FieldsSectionView: View {
 }
 
 private struct RenameFieldPopoverAnchor: View {
-    let fieldPendingRename: TypeField?
-    @Binding var isRenameFieldPopoverPresented: Bool
+    // Item-based presentation (see the popover rule in CLAUDE.md): keying the
+    // popover on the pending field itself makes an empty-content presentation
+    // unrepresentable. Dismissal = nil-ing the binding.
+    @Binding var fieldPendingRename: TypeField?
     @Binding var renamedFieldName: String
     let isFieldNameFocused: FocusState<Bool>.Binding
     let onSubmit: (TypeField) -> Void
@@ -1459,42 +1456,40 @@ private struct RenameFieldPopoverAnchor: View {
     var body: some View {
         Color.clear
             .frame(width: 1, height: 1)
-            .popover(isPresented: $isRenameFieldPopoverPresented, arrowEdge: .bottom) {
-                if let fieldPendingRename {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Edit Field")
-                            .font(.headline)
+            .popover(item: $fieldPendingRename, arrowEdge: .bottom) { fieldPendingRename in
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Edit Field")
+                        .font(.headline)
 
-                        TextField("Field Name", text: $renamedFieldName)
-                            .solidFocusField()
-                            .focused(isFieldNameFocused)
-                            .onSubmit {
-                                onSubmit(fieldPendingRename)
-                            }
-
-                        Text("You can change this later.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        HStack {
-                            Spacer()
-
-                            Button("Cancel") {
-                                onCancel()
-                            }
-
-                            Button("Save") {
-                                onSubmit(fieldPendingRename)
-                            }
-                            .keyboardShortcut(.defaultAction)
-                            .disabled(renamedFieldName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    TextField("Field Name", text: $renamedFieldName)
+                        .solidFocusField()
+                        .focused(isFieldNameFocused)
+                        .onSubmit {
+                            onSubmit(fieldPendingRename)
                         }
+
+                    Text("You can change this later.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    HStack {
+                        Spacer()
+
+                        Button("Cancel") {
+                            onCancel()
+                        }
+
+                        Button("Save") {
+                            onSubmit(fieldPendingRename)
+                        }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(renamedFieldName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
-                    .padding(16)
-                    .frame(width: 280)
-                    .onAppear {
-                        isFieldNameFocused.wrappedValue = true
-                    }
+                }
+                .padding(16)
+                .frame(width: 280)
+                .onAppear {
+                    isFieldNameFocused.wrappedValue = true
                 }
             }
     }
