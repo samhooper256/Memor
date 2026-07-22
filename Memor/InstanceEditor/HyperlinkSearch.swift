@@ -42,15 +42,17 @@ final class HyperlinkSearchController: ObservableObject {
     private var popupState: HyperlinkSearchPopupState?
 
     func present(appDatabase: AppDatabase, from textView: InstanceTextView.CommandAwareTextView) {
+        // A zero-length selection (bare caret) is allowed: the popup opens
+        // with a blank search box and the chosen link is inserted empty, with
+        // the caret placed between the tags (see insertHyperlink).
         let selectedRange = textView.selectedRange()
-        guard selectedRange.length > 0,
-              let stringRange = Range(selectedRange, in: textView.string) else {
+        guard let stringRange = Range(selectedRange, in: textView.string) else {
             NSSound.beep()
             return
         }
 
         let selectedText = String(textView.string[stringRange])
-        let initialQuery = makeInitialQuery(for: selectedText)
+        let initialQuery = selectedText.isEmpty ? "" : makeInitialQuery(for: selectedText)
         let anchorRect = textView.firstRect(forCharacterRange: selectedRange, actualRange: nil)
         let selectionContext = HyperlinkSelectionContext(
             textView: textView,
@@ -117,7 +119,8 @@ final class HyperlinkSearchController: ObservableObject {
             return
         }
 
-        let hyperlink = #"<a href="\#(href)">\#(selectionContext.selectedText)</a>"#
+        let openingTag = #"<a href="\#(href)">"#
+        let hyperlink = openingTag + selectionContext.selectedText + "</a>"
         let selectedRange = selectionContext.selectedRange
         guard NSMaxRange(selectedRange) <= textView.string.utf16.count else {
             close()
@@ -127,7 +130,11 @@ final class HyperlinkSearchController: ObservableObject {
         close()
         textView.window?.makeFirstResponder(textView)
 
-        let caretLocation = selectedRange.location + (hyperlink as NSString).length
+        // Empty link text (⌘K at a bare caret): land the caret between the
+        // tags so the user types the text next; otherwise after the </a>.
+        let caretLocation = selectionContext.selectedText.isEmpty
+            ? selectedRange.location + (openingTag as NSString).length
+            : selectedRange.location + (hyperlink as NSString).length
         textView.insertText(hyperlink, replacementRange: selectedRange)
         textView.setSelectedRange(NSRange(location: caretLocation, length: 0))
 
