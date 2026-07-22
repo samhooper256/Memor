@@ -243,6 +243,12 @@ final class PickerPanelState: NSObject, ObservableObject, NSWindowDelegate {
     }
 }
 
+/// Per-instance identity (the AnyObject default ObjectIdentifier id) so a
+/// fresh state can drive item-based popover presentation. Required explicitly:
+/// NSObject subclasses don't satisfy Identifiable generic requirements on
+/// their own.
+extension PickerPanelState: Identifiable {}
+
 /// The picker interior — search field, navigable list, optional accessory row
 /// and error line. Embeddable in an anchored popover (the Offices picker) as
 /// well as the centered panel chrome below.

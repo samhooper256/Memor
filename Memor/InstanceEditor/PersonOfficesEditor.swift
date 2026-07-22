@@ -195,22 +195,24 @@ private struct OfficeAddButton: View {
     let alreadySelectedOfficeIDs: Set<Int64>
     let onSelectOffice: (_ officeID: Int64, _ officeName: String) -> Void
 
-    @State private var isPickerPresented = false
+    // Item-based presentation, NOT isPresented + `if let` content: gating the
+    // whole popover body on separately-written optional @State can evaluate
+    // against a nil snapshot and present an EmptyView popover (a tiny empty
+    // circle). Keying presentation on the state itself makes that
+    // unrepresentable. Dismissal = nil-ing this (outside clicks do it via the
+    // binding).
     @State private var pickerState: PickerPanelState?
 
     var body: some View {
         Button("Add Office") {
             // A fresh state per open: blank search, offices re-fetched.
             pickerState = makePickerState()
-            isPickerPresented = true
         }
         .controlSize(.small)
-        .popover(isPresented: $isPickerPresented, arrowEdge: .bottom) {
-            if let pickerState {
-                PickerListView(state: pickerState)
-                    .padding(12)
-                    .frame(width: 300)
-            }
+        .popover(item: $pickerState, arrowEdge: .bottom) { state in
+            PickerListView(state: state)
+                .padding(12)
+                .frame(width: 300)
         }
     }
 
@@ -234,9 +236,9 @@ private struct OfficeAddButton: View {
             },
             onSelect: { item in
                 onSelectOffice(item.id, item.title)
-                isPickerPresented = false
+                pickerState = nil
             },
-            onClose: { isPickerPresented = false }
+            onClose: { pickerState = nil }
         )
         // Unlike bare names, office names must not duplicate — the create row
         // hides when an exact (case-insensitive) match exists.
@@ -254,8 +256,10 @@ private struct OfficeAddButton: View {
                     let officeID = try appDatabase.createOffice(name: trimmed)
                     NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
                     onSelectOffice(officeID, trimmed)
-                    isPickerPresented = false
+                    pickerState = nil
                 } catch {
+                    // errorMessage only — the popover must stay open on a
+                    // failed create so the red error line shows.
                     state?.errorMessage = (error as? DatabaseError)?.message ?? "Failed to create office."
                 }
             }
