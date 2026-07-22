@@ -65,6 +65,10 @@ private let sharedSearchHelpComponents: [SearchHelpComponent] = [
         description: "Restrict to items in the collection with this numeric ID, e.g. col:67. (collection:ID works too. Collection names can't start with a digit, so this is unambiguous.)"
     ),
     SearchHelpComponent(
+        segments: [("office:", searchOperatorColor), ("name", nil)],
+        description: "Restrict to Person instances that hold the named office (in query search, all of those instances' queries), e.g. \"office:U.S. President\". Matches by holding, whether or not the office's built-in query is enabled — use qt:Person:officeName for enabled office queries only. Office names are matched case-insensitively; there is no ID form (office names may start with a digit)."
+    ),
+    SearchHelpComponent(
         segments: [("id:", searchOperatorColor), ("number", nil)],
         description: "Restrict to the single instance with this ID."
     ),

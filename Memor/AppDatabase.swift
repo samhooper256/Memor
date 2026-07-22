@@ -57,6 +57,7 @@ struct AppDatabase {
         case id(Int64)
         case queryType(typeName: String, queryTypeName: String)
         case queryTypeID(typeID: Int64, queryTypeName: String)
+        case office(String)
         case noQueries
         case new
         case and(SearchExpression, SearchExpression)
@@ -1459,6 +1460,10 @@ struct AppDatabase {
                 Self.collectionNames(in: parsedQuery.expression),
                 db: db
             )
+            try validateOfficeSearchComponents(
+                Self.officeNames(in: parsedQuery.expression),
+                db: db
+            )
 
             let typeInfos = try fetchInstanceSearchTypeInfos(db: db)
             var sections: [InstanceSearchSection] = []
@@ -1553,6 +1558,10 @@ struct AppDatabase {
                 Self.collectionNames(in: parsedQuery.expression),
                 db: db
             )
+            try validateOfficeSearchComponents(
+                Self.officeNames(in: parsedQuery.expression),
+                db: db
+            )
 
             let typeInfos = try fetchInstanceSearchTypeInfos(db: db)
             var allNodes: [GraphNode] = []
@@ -1596,6 +1605,10 @@ struct AppDatabase {
         return try dbQueue.read { db in
             try validateCollectionSearchComponents(
                 Self.collectionNames(in: parsedQuery.expression),
+                db: db
+            )
+            try validateOfficeSearchComponents(
+                Self.officeNames(in: parsedQuery.expression),
                 db: db
             )
 
@@ -1844,6 +1857,10 @@ struct AppDatabase {
         try dbQueue.write { db in
             try validateCollectionSearchComponents(
                 Self.collectionNames(in: parsedQuery.expression),
+                db: db
+            )
+            try validateOfficeSearchComponents(
+                Self.officeNames(in: parsedQuery.expression),
                 db: db
             )
 
@@ -2145,6 +2162,7 @@ struct AppDatabase {
 
         return try dbQueue.read { db in
             try validateCollectionSearchComponents(Self.collectionNames(in: parsedQuery.expression), db: db)
+            try validateOfficeSearchComponents(Self.officeNames(in: parsedQuery.expression), db: db)
 
             let typeInfos = try fetchInstanceSearchTypeInfos(db: db)
             var blueQueries: [StudyQuery] = []
@@ -2257,6 +2275,7 @@ struct AppDatabase {
 
         return try dbQueue.read { db in
             try validateCollectionSearchComponents(Self.collectionNames(in: parsedQuery.expression), db: db)
+            try validateOfficeSearchComponents(Self.officeNames(in: parsedQuery.expression), db: db)
 
             let typeInfos = try fetchInstanceSearchTypeInfos(db: db)
             var pools: [StudySelectionPool] = try typeInfos.compactMap { typeInfo in
@@ -2690,6 +2709,10 @@ struct AppDatabase {
             if let parsedQuery {
                 try validateCollectionSearchComponents(
                     Self.collectionNames(in: parsedQuery.expression),
+                    db: db
+                )
+                try validateOfficeSearchComponents(
+                    Self.officeNames(in: parsedQuery.expression),
                     db: db
                 )
             }
@@ -5514,6 +5537,9 @@ struct AppDatabase {
         case .new:
             // :new is standard-query-only; exclude all PointMap rows.
             return ("0", StatementArguments())
+        case .office:
+            // Office holdings are Person-only; no PointMap row can match.
+            return ("0", StatementArguments())
         case .queryType(let searchedTypeName, let searchedQueryTypeName):
             var typeCompareArguments = StatementArguments()
             typeCompareArguments += [POINTMAP_TYPE_NAME, searchedTypeName]
@@ -6092,6 +6118,9 @@ struct AppDatabase {
             )
         case .new:
             // :new is standard-query-only; exclude all BoundaryMap rows.
+            return ("0", StatementArguments())
+        case .office:
+            // Office holdings are Person-only; no BoundaryMap row can match.
             return ("0", StatementArguments())
         case .queryType(let searchedTypeName, let searchedQueryTypeName):
             var typeCompareArguments = StatementArguments()
@@ -6852,6 +6881,18 @@ struct AppDatabase {
                         throw DatabaseError(message: "The qt: component cannot be used when searching points and boundaries.")
                     }
                     return try Self.parseQueryTypeComponent(argument: String(token.dropFirst("qt:".count)))
+                } else if token.hasPrefix("office:") {
+                    guard allowsTypeCollectionId else {
+                        throw DatabaseError(message: "The office: component cannot be used when searching points and boundaries.")
+                    }
+                    // Name only — no ID variant: unlike type/collection names,
+                    // office names MAY start with a digit, so office:123 must
+                    // read as a name and an ID form would be ambiguous.
+                    let officeName = String(token.dropFirst("office:".count))
+                    guard !officeName.isEmpty else {
+                        throw DatabaseError(message: "The office: component requires an office name.")
+                    }
+                    return .office(officeName)
                 } else if !token.contains(":") {
                     return .literal(token)
                 } else {
@@ -7090,6 +7131,29 @@ struct AppDatabase {
                 context: context
             )
 
+        case .office(let officeName):
+            // Matches by HOLDING (person_office), not by per-office query
+            // enablement — the qt: office-name form covers that. Holdings live
+            // only on Person instances, so the clause is inert for every other
+            // type (same precedent as .noQueries' person clause). In query
+            // contexts this matches ALL of a holder's queries, like
+            // .collection.
+            var arguments = StatementArguments()
+            arguments += [officeName]
+            return (
+                """
+                EXISTS (
+                    SELECT 1
+                    FROM person_office
+                    JOIN office
+                        ON office.id = person_office.office_id
+                    WHERE person_office.instance_id = \(tableAlias).id
+                        AND office.name = ? COLLATE NOCASE
+                )
+                """,
+                arguments
+            )
+
         case .noQueries:
             // Built-in Person relationship queries count as queries too; other
             // types never have person_query rows, so the extra clause is inert.
@@ -7259,7 +7323,7 @@ struct AppDatabase {
         guard let expression else { return [] }
 
         switch expression {
-        case .literal, .type, .typeID, .id, .noQueries, .new, .collectionID, .queryType, .queryTypeID:
+        case .literal, .type, .typeID, .id, .noQueries, .new, .collectionID, .queryType, .queryTypeID, .office:
             return []
         case .collection(let collectionName):
             return [collectionName]
@@ -7267,6 +7331,44 @@ struct AppDatabase {
             return collectionNames(in: leftExpression) + collectionNames(in: rightExpression)
         case .not(let innerExpression):
             return collectionNames(in: innerExpression)
+        }
+    }
+
+    nonisolated static func officeNames(in expression: SearchExpression?) -> [String] {
+        guard let expression else { return [] }
+
+        switch expression {
+        case .literal, .type, .typeID, .id, .noQueries, .new, .collection, .collectionID, .queryType, .queryTypeID:
+            return []
+        case .office(let officeName):
+            return [officeName]
+        case .and(let leftExpression, let rightExpression), .or(let leftExpression, let rightExpression):
+            return officeNames(in: leftExpression) + officeNames(in: rightExpression)
+        case .not(let innerExpression):
+            return officeNames(in: innerExpression)
+        }
+    }
+
+    /// Mirrors validateCollectionSearchComponents for `office:` — a friendly
+    /// error beats silently matching nothing when the name is mistyped.
+    nonisolated func validateOfficeSearchComponents(
+        _ officeNames: [String],
+        db: Database
+    ) throws {
+        for officeName in Set(officeNames) {
+            let matchingOfficeName = try String.fetchOne(
+                db,
+                sql: """
+                    SELECT name
+                    FROM office
+                    WHERE name = ? COLLATE NOCASE
+                    """,
+                arguments: [officeName]
+            )
+
+            if matchingOfficeName == nil {
+                throw DatabaseError(message: "Office does not exist: \(officeName)")
+            }
         }
     }
 }

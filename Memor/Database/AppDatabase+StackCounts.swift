@@ -63,6 +63,12 @@ extension AppDatabase {
             switch expression {
             case .literal, .collection, .collectionID, .id, .noQueries:
                 return nil
+            case .office:
+                // Office holdings exist only on Person instances (every write
+                // path goes through savePersonInstance), so any other scan
+                // target provably matches nothing; for Person the named
+                // office's holders are row-dependent.
+                return sqliteNocaseEquals(typeName, PERSON_TYPE_NAME) ? nil : false
             case .type(let searchedTypeName):
                 return sqliteNocaseEquals(typeName, searchedTypeName)
             case .typeID(let searchedTypeID):
@@ -185,6 +191,7 @@ extension AppDatabase {
         return try dbQueue.read { db in
             let parsedQuery = try parseQuerySearchQuery(stack.search)
             try validateCollectionSearchComponents(Self.collectionNames(in: parsedQuery.expression), db: db)
+            try validateOfficeSearchComponents(Self.officeNames(in: parsedQuery.expression), db: db)
 
             return try computeQueryCountGroups(
                 db: db,
@@ -218,6 +225,7 @@ extension AppDatabase {
         let counts: [Int] = try dbQueue.read { db in
             let parsedQuery = try parseQuerySearchQuery(stackSearch)
             try validateCollectionSearchComponents(Self.collectionNames(in: parsedQuery.expression), db: db)
+            try validateOfficeSearchComponents(Self.officeNames(in: parsedQuery.expression), db: db)
             let expression = parsedQuery.expression
 
             var counts = [Int](repeating: 0, count: days)
@@ -342,6 +350,7 @@ extension AppDatabase {
         var groups: [StackCountGroup] = []
         var groupIndexByExpression: [SearchExpression?: Int] = [:]
         var validatedCollectionNames: Set<String> = []
+        var validatedOfficeNames: Set<String> = []
 
         for stackRow in stackRows {
             let stackID: Int64 = stackRow["id"]
@@ -352,6 +361,10 @@ extension AppDatabase {
                     .filter { !validatedCollectionNames.contains($0) }
                 try validateCollectionSearchComponents(unvalidatedNames, db: db)
                 validatedCollectionNames.formUnion(unvalidatedNames)
+                let unvalidatedOfficeNames = Self.officeNames(in: parsedQuery.expression)
+                    .filter { !validatedOfficeNames.contains($0) }
+                try validateOfficeSearchComponents(unvalidatedOfficeNames, db: db)
+                validatedOfficeNames.formUnion(unvalidatedOfficeNames)
 
                 if let groupIndex = groupIndexByExpression[parsedQuery.expression] {
                     groups[groupIndex].stackIDs.append(stackID)
