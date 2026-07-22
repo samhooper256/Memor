@@ -132,9 +132,9 @@ func buildRenderedAnswerHTML(
     return try injectQueryCSS(into: renderedHTML, appDatabase: appDatabase, typeCSS: typeCSS)
 }
 
-/// `_offices` support for Person queries: elements with id "_offices" in the
-/// authored HTML get their contents replaced with per-office succession rows
-/// (see AppDatabase.renderPersonOfficesElements). Returns the html and the
+/// `_offices` support for Person queries: the FIRST element with id "_offices"
+/// in the authored HTML gets its contents replaced with per-office succession
+/// rows (see AppDatabase.renderPersonOfficesElements). Returns the html and the
 /// typeCSS to inject — a standard Person query's typeCSS lacks the built-in
 /// default CSS that styles the generated .office-succession/.person-* markup,
 /// so it is prepended here (built-in Person queries already carry it).

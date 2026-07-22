@@ -552,6 +552,7 @@ extension AppDatabase {
         .office-succession { width: 100%; display: flex; align-items: stretch; text-align: center; }
         .office-succession-preds, .office-succession-succs { flex: 0 0 20%; }
         .office-succession-holder { flex: 0 0 60%; border-left: 1px solid white; border-right: 1px solid white; }
+        .office-succession-note { color: gray; }
         """
 
     /// Assembles one built-in Person query as a renderable StudyQuery: fixed
@@ -966,14 +967,16 @@ extension AppDatabase {
 
     // MARK: The `_offices` element (user-defined Person query HTML)
 
-    /// User-authored Person query HTML support: replaces the CONTENTS of every
-    /// element with id "_offices" with one .office-succession row per office
-    /// the person holds, in the person's own office order. Unlike the built-in
-    /// per-office answer, the middle panel shows "Office: began–ended" (just
-    /// the name when both dates are blank) instead of the person's name; the
-    /// side panels are the office's predecessors/successors as usual. The
-    /// element's own tag and attributes are kept so it can be styled. Called
-    /// by buildRenderedQuestionHTML/buildRenderedAnswerHTML for every Person
+    /// User-authored Person query HTML support: replaces the CONTENTS of the
+    /// FIRST element with id "_offices" with one .office-succession row per
+    /// office the person holds, in the person's own office order (any later
+    /// element with the id is left as typed). Unlike the built-in per-office
+    /// answer, the middle panel shows "Office: began–ended" (just the name
+    /// when both dates are blank) instead of the person's name, with the
+    /// holding's note on a line beneath when present; the side panels are the
+    /// office's predecessors/successors as usual. The element's own tag and
+    /// attributes are kept so it can be styled. Called by
+    /// buildRenderedQuestionHTML/buildRenderedAnswerHTML for every Person
     /// query, so it works in Study mode, Query Preview, and MCP render_query.
     func renderPersonOfficesElements(in html: String, instanceID: Int64) throws -> String {
         try dbQueue.read { db in
@@ -993,16 +996,13 @@ extension AppDatabase {
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return html }
 
         let nsHTML = html as NSString
-        let matches = regex.matches(in: html, range: NSRange(location: 0, length: nsHTML.length))
-        guard !matches.isEmpty else { return html }
+        guard let match = regex.firstMatch(in: html, range: NSRange(location: 0, length: nsHTML.length)),
+              let contentRange = Range(match.range(at: 3), in: html)
+        else { return html }
 
         let contents = try personOfficesElementContents(db: db, personID: instanceID)
         var result = html
-        // Replace from the end so earlier match ranges stay valid as we mutate.
-        for match in matches.reversed() {
-            guard let contentRange = Range(match.range(at: 3), in: result) else { continue }
-            result.replaceSubrange(contentRange, with: contents)
-        }
+        result.replaceSubrange(contentRange, with: contents)
         return result
     }
 
@@ -1011,9 +1011,13 @@ extension AppDatabase {
         return try holdings.map { holding -> String in
             let began = holding.whenBegan.trimmingCharacters(in: .whitespacesAndNewlines)
             let ended = holding.whenEnded.trimmingCharacters(in: .whitespacesAndNewlines)
-            let center = (began.isEmpty && ended.isEmpty)
+            var center = (began.isEmpty && ended.isEmpty)
                 ? holding.officeName
                 : "\(holding.officeName): \(began)–\(ended)"
+            let note = holding.note.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !note.isEmpty {
+                center += "\n<div class=\"office-succession-note\">\(note)</div>"
+            }
             return try officeSuccessionRowHTML(db: db, personID: personID, officeID: holding.officeID, centerHTML: center)
         }
         .joined(separator: "\n")
