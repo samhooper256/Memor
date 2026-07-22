@@ -29,6 +29,7 @@
       "Bash(sqlite3:*)",
       "Bash(lsof:*)",
       "Bash(xcodebuild:*)",
+      "Bash(swiftc:*)",
       "Read(//tmp/**)",
       "Read(//private/tmp/**)"
     ]
