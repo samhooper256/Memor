@@ -154,6 +154,7 @@ Components:
 - Starter delays: 60s and 600s
 - Rating multipliers: Again (reset to starter), Hard (1.2x), Good (2.5x), Easy (3.25x)
 - Study mode loads queries into blue/red/green pools, prioritizes overdue red queries, then randomly picks from blue+green
+- Peeked-query override: a query glimpsed then ⌘Z'd away (rating undo) is re-shown on the next advance, preempting even overdue reds, iff it is still in the pools; one-shot and session-only (`peekedNextQueryID` view state in StudyModeView)
 
 ## Keyboard Shortcuts
 

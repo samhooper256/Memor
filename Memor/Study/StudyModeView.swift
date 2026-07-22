@@ -54,6 +54,12 @@ struct StudyModeView: View {
     @State private var overlayCollectionNames: [String] = []
     @State private var allCollectionNames: [String] = []
     @State private var pendingUndo: StudyUndoAction?
+    /// The query the user glimpsed before undoing a rating (⌘Z after advancing
+    /// too fast). The next advance re-shows it instead of drawing randomly —
+    /// the user's mind has already started on it — as long as it is still in
+    /// the session's pools. One-shot, and session-only by virtue of being view
+    /// state (exiting Study or the app forgets it).
+    @State private var peekedNextQueryID: String?
 
     // Object/Node queries get a slim bottom bar; map queries keep the taller one.
     private var isStandardQuery: Bool {
@@ -436,6 +442,13 @@ struct StudyModeView: View {
                 return
             }
 
+            // The query on screen was only glimpsed — remember it so the next
+            // advance re-shows it (nil when the rating completed the session
+            // and ⌘Z came from the congratulations screen). Recorded only
+            // after a successful revert: a failed undo leaves the glimpsed
+            // query current, where a stale peek would wrongly repeat it.
+            peekedNextQueryID = currentQuery?.id
+
             blueQueries = previousBlueQueries
             redQueries = previousRedQueries
             greenQueries = previousGreenQueries
@@ -459,6 +472,7 @@ struct StudyModeView: View {
             redQueries = buckets.redQueries
             greenQueries = buckets.greenQueries
             pendingUndo = nil
+            peekedNextQueryID = nil
             await loadNextQuery()
         } catch {
             currentQuery = nil
@@ -471,6 +485,7 @@ struct StudyModeView: View {
             isAnswerRevealed = false
             isCompleted = false
             pendingUndo = nil
+            peekedNextQueryID = nil
             errorMessage = "Failed to load study mode."
         }
     }
@@ -515,8 +530,19 @@ struct StudyModeView: View {
     private func loadNextQuery(nowTimestamp: Int64? = nil) async {
         let selectionTimestamp = nowTimestamp ?? Int64(Date().timeIntervalSince1970)
 
+        // A peeked query (glimpsed, then ⌘Z'd away) preempts normal selection,
+        // even over overdue reds. One-shot: consumed whether or not it is
+        // still in the pools (live refreshes drop queries deleted or disabled
+        // mid-session, in which case selection just proceeds normally).
+        let peekedQuery = peekedNextQueryID.flatMap { peekedID in
+            (redQueries + blueQueries + greenQueries).first { $0.id == peekedID }
+        }
+        peekedNextQueryID = nil
+
         let nextQuery: StudyQuery?
-        if let overdueRedQuery = selectOverdueRedQuery(nowTimestamp: selectionTimestamp) {
+        if let peekedQuery {
+            nextQuery = peekedQuery
+        } else if let overdueRedQuery = selectOverdueRedQuery(nowTimestamp: selectionTimestamp) {
             nextQuery = overdueRedQuery
         } else if let blueOrGreenQuery = selectRandomBlueOrGreenQuery() {
             nextQuery = blueOrGreenQuery
