@@ -19,6 +19,10 @@ struct PersonOfficesEditor: View {
     let appDatabase: AppDatabase
     @ObservedObject var draft: InstanceEditorDraft
 
+    /// The office card whose "Began" field holds focus — set when the picker
+    /// adds a card so the user can start typing dates immediately.
+    @FocusState private var focusedBeganEntryID: UUID?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Offices")
@@ -38,11 +42,18 @@ struct PersonOfficesEditor: View {
                     appDatabase: appDatabase,
                     alreadySelectedOfficeIDs: Set(draft.personOffices.map(\.officeID)),
                     onSelectOffice: { officeID, officeName in
-                        draft.personOffices.append(PersonOfficeDraftEntry(
+                        let entry = PersonOfficeDraftEntry(
                             holdingID: nil,
                             officeID: officeID,
                             officeName: officeName
-                        ))
+                        )
+                        draft.personOffices.append(entry)
+                        // Deferred a tick: the card's Began field doesn't exist
+                        // until SwiftUI commits the append, and the closing
+                        // picker popover is still giving up key focus.
+                        DispatchQueue.main.async {
+                            focusedBeganEntryID = entry.id
+                        }
                     }
                 )
             }
@@ -112,6 +123,7 @@ struct PersonOfficesEditor: View {
                     .foregroundStyle(.secondary)
                 TextField("", text: office.whenBeganText)
                     .solidFocusField()
+                    .focused($focusedBeganEntryID, equals: entry.id)
                     .frame(maxWidth: 140)
                 Text("Ended:")
                     .font(.caption)
