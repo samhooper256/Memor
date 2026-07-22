@@ -171,6 +171,7 @@ private struct BoundaryMapMKMapView: NSViewRepresentable {
         coordinator.overlaySignature = signature
 
         mapView.removeOverlays(mapView.overlays)
+        coordinator.appliedFillState.removeAll()
         for geo in visibleGeometries {
             for ring in geo.geometry.rings {
                 guard let outer = ring.first, outer.count >= 3 else { continue }
@@ -195,6 +196,12 @@ private struct BoundaryMapMKMapView: NSViewRepresentable {
         var onAnswerSelected: (() -> Void)?
         weak var mapView: MKMapView?
         weak var finderOverlay: BoundaryFinderOverlayView?
+        /// Last APPLIED filled-ness per live renderer, so refreshOverlayFills
+        /// can skip renderers whose state is unchanged. Both colors are a pure
+        /// function of filled-ness, so this Bool is the complete color state.
+        /// Cleared on overlay rebuild (recycled allocations must not alias
+        /// stale entries); repopulated at renderer creation.
+        var appliedFillState: [ObjectIdentifier: Bool] = [:]
 
         // Whether a given boundary should be filled translucent purple right now.
         private func isFilled(boundaryID: Int64) -> Bool {
@@ -224,6 +231,15 @@ private struct BoundaryMapMKMapView: NSViewRepresentable {
                       let renderer = mapView.renderer(for: overlay) as? MKPolygonRenderer else { continue }
                 let polygonBoundaryID = Int64(polygon.title ?? "") ?? 0
                 let filled = isFilled(boundaryID: polygonBoundaryID)
+                // Skip unchanged renderers ENTIRELY — the color setters alone
+                // invalidate an MKOverlayPathRenderer (even set to an equal
+                // value), which discards the composited overlay tiles and
+                // makes the boundary visibly blank while MapKit repaints
+                // asynchronously. updateNSView calls this on every SwiftUI
+                // body pass, so an unguarded pass landing after the first
+                // paint showed as the boundary "flashing" in Study mode.
+                if appliedFillState[ObjectIdentifier(renderer)] == filled { continue }
+                appliedFillState[ObjectIdentifier(renderer)] = filled
                 renderer.fillColor = filled
                     ? NSColor.systemPurple.withAlphaComponent(0.35)
                     : .clear
@@ -252,6 +268,7 @@ private struct BoundaryMapMKMapView: NSViewRepresentable {
                 renderer.fillColor = filled
                     ? NSColor.systemPurple.withAlphaComponent(0.35)
                     : .clear
+                appliedFillState[ObjectIdentifier(renderer)] = filled
                 return renderer
             }
             return MKOverlayRenderer(overlay: overlay)
