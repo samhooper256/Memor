@@ -189,13 +189,15 @@ extension AppDatabase {
         let id: Int64
         let partner: PersonRef
         let sideInstanceIDs: [Int64]
+        let startText: String
+        let endText: String
     }
 
     nonisolated static func fetchPersonPartnershipSummaries(db: Database, personID: Int64) throws -> [PersonPartnershipSummary] {
         let rows = try Row.fetchAll(
             db,
             sql: """
-                SELECT id, a_id, b_id, b_bare, a_order_index, b_order_index
+                SELECT id, a_id, b_id, b_bare, a_order_index, b_order_index, start_text, end_text
                 FROM person_partnership
                 WHERE a_id = ?1 OR b_id = ?1
                 ORDER BY CASE WHEN a_id = ?1 THEN a_order_index ELSE b_order_index END, id
@@ -213,8 +215,25 @@ extension AppDatabase {
             }
             var sides = [aID]
             if let bID { sides.append(bID) }
-            return PersonPartnershipSummary(id: row["id"], partner: partner, sideInstanceIDs: sides)
+            return PersonPartnershipSummary(
+                id: row["id"],
+                partner: partner,
+                sideInstanceIDs: sides,
+                startText: row["start_text"] as String? ?? "",
+                endText: row["end_text"] as String? ?? ""
+            )
         }
+    }
+
+    /// The Partners answer's " (start–end)" date suffix for one stint — en
+    /// dash like the TimePeriod/office ranges, one-sided stays one-sided
+    /// ("1206–" / "–1227") — or nil when both dates are blank (no empty
+    /// parentheses).
+    private nonisolated static func partnershipDatesSuffixHTML(startText: String, endText: String) -> String? {
+        let start = startText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let end = endText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !start.isEmpty || !end.isEmpty else { return nil }
+        return " <span class=\"person-partner-dates\">(\(start)\u{2013}\(end))</span>"
     }
 
     // MARK: - Enumeration (search / stacks / study MUST all use this FROM)
@@ -547,6 +566,7 @@ extension AppDatabase {
         .person-self { color: #e6b422; }
         .person-na { color: gray; }
         .person-parent-label { color: gray; }
+        .person-partner-dates { color: gray; }
         .person-children-group { margin: 4px 0; }
         .person-children-group-title { color: gray; }
         .office-succession { width: 100%; display: flex; align-items: stretch; text-align: center; }
@@ -783,7 +803,10 @@ extension AppDatabase {
             case .partners:
                 body = relations.partners.isEmpty
                     ? Self.personNAHTML
-                    : Self.personAnswerLines(try relations.partners.map { try entryHTML($0.partner) })
+                    : Self.personAnswerLines(try relations.partners.map { partner in
+                        try entryHTML(partner.partner)
+                            + (Self.partnershipDatesSuffixHTML(startText: partner.startText, endText: partner.endText) ?? "")
+                    })
             case .children:
                 var groups: [String] = []
                 for partner in relations.partners where !partner.children.isEmpty {
@@ -1021,7 +1044,10 @@ extension AppDatabase {
         case .partners:
             let partnerships = try fetchPersonPartnershipSummaries(db: db, personID: personID)
             guard !partnerships.isEmpty else { return personNAHTML }
-            return personAnswerLines(try partnerships.map { try personEntryHTML(db: db, ref: $0.partner) })
+            return personAnswerLines(try partnerships.map { partnership in
+                try personEntryHTML(db: db, ref: partnership.partner)
+                    + (partnershipDatesSuffixHTML(startText: partnership.startText, endText: partnership.endText) ?? "")
+            })
         case .children:
             return try personChildrenBody(db: db, personID: personID)
         case .childrenWith:
