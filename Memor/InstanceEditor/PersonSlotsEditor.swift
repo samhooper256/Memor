@@ -468,6 +468,7 @@ private struct PersonPickerPopover: View {
     @State private var results: [PersonCandidate] = []
     @State private var highlightedRowID: String?
     @State private var isSearchFieldFocused = false
+    @State private var escapeToken = UUID()
 
     /// Row id of the "Add as name" row (candidate rows use the instance id).
     private static let bareNameRowID = "bare"
@@ -531,7 +532,13 @@ private struct PersonPickerPopover: View {
         }
         .padding(12)
         .frame(width: 300)
-        .onAppear { performSearch() }
+        .onAppear {
+            performSearch()
+            PickerPopoverEscapeRegistry.shared.register(escapeToken, cancel: onCancel)
+        }
+        .onDisappear {
+            PickerPopoverEscapeRegistry.shared.unregister(escapeToken)
+        }
         .onChange(of: searchText) { _, _ in performSearch() }
     }
 

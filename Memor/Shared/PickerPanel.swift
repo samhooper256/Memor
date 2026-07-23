@@ -16,6 +16,42 @@ import AppKit
 import Combine
 import SwiftUI
 
+/// Tracks the picker popovers currently on screen (the Person editor's
+/// relationship/succession pickers and the Offices picker) so the instance
+/// editor's Escape handler can close the open popover instead of the whole
+/// window. Needed because the editor's local key monitor sees Escape BEFORE
+/// the popover's field editor can consume it whenever the key event targets
+/// the editor window rather than the popover. Views register onAppear and
+/// unregister onDisappear, keyed by a per-presentation token; realistically
+/// one popover is open at a time, but the keyed order keeps an overlapping
+/// close-A-while-B-opens sequence correct.
+final class PickerPopoverEscapeRegistry {
+    static let shared = PickerPopoverEscapeRegistry()
+
+    private var cancelsByToken: [UUID: () -> Void] = [:]
+    private var order: [UUID] = []
+
+    func register(_ token: UUID, cancel: @escaping () -> Void) {
+        if cancelsByToken[token] == nil {
+            order.append(token)
+        }
+        cancelsByToken[token] = cancel
+    }
+
+    func unregister(_ token: UUID) {
+        cancelsByToken[token] = nil
+        order.removeAll { $0 == token }
+    }
+
+    /// Closes the most recently opened popover. Returns false when none is open.
+    @discardableResult
+    func closeTopmost() -> Bool {
+        guard let token = order.last, let cancel = cancelsByToken[token] else { return false }
+        cancel()
+        return true
+    }
+}
+
 struct PickerPanelItem: Identifiable, Hashable {
     let id: Int64
     let title: String
@@ -256,6 +292,7 @@ struct PickerListView: View {
     @ObservedObject var state: PickerPanelState
 
     @State private var isSearchFieldFocused = false
+    @State private var escapeToken = UUID()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -307,6 +344,12 @@ struct PickerListView: View {
             }
         }
         .onChange(of: state.searchText) { _, _ in state.searchTextDidChange() }
+        .onAppear {
+            PickerPopoverEscapeRegistry.shared.register(escapeToken, cancel: state.close)
+        }
+        .onDisappear {
+            PickerPopoverEscapeRegistry.shared.unregister(escapeToken)
+        }
     }
 
     @ViewBuilder

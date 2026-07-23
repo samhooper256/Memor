@@ -138,6 +138,11 @@ struct InstanceEditorWindowView: View {
     /// Escape closes a showing map add-popup (boundaries picker or Add Point panel)
     /// in preference to the whole window; only a bare Escape dismisses the editor.
     private func handleEscape() {
+        // A person/office picker popover is open (relationship slots,
+        // predecessors/successors, Add Office): close it, not the window.
+        if PickerPopoverEscapeRegistry.shared.closeTopmost() {
+            return
+        }
         if isBoundaryPickerPresented {
             isBoundaryPickerPresented = false
             return
