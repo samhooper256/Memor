@@ -953,10 +953,12 @@ extension AppDatabase {
         }
     }
 
-    /// The name shown for a Person reference in computed query HTML: the
-    /// DisplayName field's value when non-blank, else the standard display
-    /// value (Name). Trimmed; may be empty (callers show "#id" then).
-    private nonisolated static func personLinkDisplayValue(db: Database, instanceID: Int64) throws -> String {
+    /// The name shown for a Person reference in computed query HTML AND in
+    /// the editor's people labels (chips, Children box, checklist rows —
+    /// via fetchPersonEditorData's display-name map): the DisplayName field's
+    /// value when non-blank, else the standard display value (Name). Trimmed;
+    /// may be empty (callers show "#id" then).
+    nonisolated static func personLinkDisplayValue(db: Database, instanceID: Int64) throws -> String {
         if let personTypeID = try? fetchPersonTypeID(db: db),
            let fieldIndex = try Int64.fetchOne(
                db,

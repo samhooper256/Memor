@@ -43,7 +43,7 @@ struct PersonSlotsEditor: View {
     }
 
     private func rememberCandidate(_ candidate: PersonCandidate) {
-        draft.personDisplayNamesByID[candidate.id] = candidate.displayValue
+        draft.personDisplayNamesByID[candidate.id] = candidate.preferredName
         draft.personSexesByID[candidate.id] = candidate.sex
     }
 

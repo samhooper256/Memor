@@ -263,7 +263,7 @@ struct PersonOfficesEditor: View {
                 excludingInstanceID: draft.loadedInstanceID,
                 alreadySelected: Set(refs.wrappedValue.compactMap(\.instanceID)),
                 onSelectInstance: { candidate in
-                    draft.personDisplayNamesByID[candidate.id] = candidate.displayValue
+                    draft.personDisplayNamesByID[candidate.id] = candidate.preferredName
                     draft.personSexesByID[candidate.id] = candidate.sex
                     refs.wrappedValue.append(.instance(candidate.id))
                 },

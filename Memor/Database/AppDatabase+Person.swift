@@ -25,6 +25,10 @@ nonisolated struct PersonCandidate: Identifiable, Hashable {
     let id: Int64
     let displayValue: String
     let sex: String
+    /// DisplayName when non-blank, else displayValue — what the editor's
+    /// chips/labels store for this person on selection. Picker ROWS keep
+    /// showing displayValue (the searched field), so the match stays visible.
+    let preferredName: String
 }
 
 extension AppDatabase {
@@ -317,7 +321,10 @@ extension AppDatabase {
             var displayNames: [Int64: String] = [:]
             var sexes: [Int64: String] = [:]
             for id in referencedIDs {
-                displayNames[id] = try Self.fetchInstanceDisplayValue(db: db, instanceID: id)
+                // DisplayName-preferred, like the computed query HTML — the
+                // editor's chips/labels and the MCP relation display_values
+                // both come from this map.
+                displayNames[id] = try Self.personLinkDisplayValue(db: db, instanceID: id)
                 sexes[id] = try Self.fetchPersonSex(db: db, personTypeID: personTypeID, instanceID: id)
             }
 
@@ -1959,12 +1966,22 @@ extension AppDatabase {
             }
             let whereClause = conditions.isEmpty ? "" : "WHERE \(conditions.joined(separator: " AND "))"
 
+            // The optional DisplayName column feeds preferredName; a Person
+            // type without the field (shouldn't happen) degrades to Name.
+            let displayNameIndex = try Int.fetchOne(
+                db,
+                sql: "SELECT field_index FROM field WHERE type_id = ? AND name = 'DisplayName'",
+                arguments: [personTypeID]
+            )
+            let displayNameSelect = displayNameIndex.map { "COALESCE(\"field\($0)\", '')" } ?? "''"
+
             let rows = try Row.fetchAll(
                 db,
                 sql: """
                     SELECT id,
                            COALESCE(\(displayColumn), '') AS displayValue,
-                           COALESCE("field\(sexIndex)", 'Male') AS sex
+                           COALESCE("field\(sexIndex)", 'Male') AS sex,
+                           \(displayNameSelect) AS displayName
                     FROM "type\(personTypeID)"
                     \(whereClause)
                     ORDER BY \(displayColumn) COLLATE NOCASE, id
@@ -1972,8 +1989,16 @@ extension AppDatabase {
                     """,
                 arguments: StatementArguments(arguments)
             )
-            return rows.map {
-                PersonCandidate(id: $0["id"], displayValue: $0["displayValue"], sex: $0["sex"])
+            return rows.map { row in
+                let displayValue = row["displayValue"] as String
+                let displayName = (row["displayName"] as String)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                return PersonCandidate(
+                    id: row["id"],
+                    displayValue: displayValue,
+                    sex: row["sex"],
+                    preferredName: displayName.isEmpty ? displayValue : displayName
+                )
             }
         }
     }
