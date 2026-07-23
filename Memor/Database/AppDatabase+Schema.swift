@@ -626,6 +626,7 @@ extension AppDatabase {
 
             try seedPersonType(db: db)
             try migratePersonTimePeriodField(db: db)
+            try migratePersonDisplayNameField(db: db)
 
             if isNewDatabase {
                 try db.execute(
@@ -723,9 +724,11 @@ extension AppDatabase {
 
     // Seeds the built-in Person type (idempotent, PointMap pattern): the type
     // row, its fields — deletable Name/Description plus protected
-    // Sex/TimePeriod — the dynamic type{N} table, and one premade
-    // (ordinary, deletable) "Name" query type. Runs on every launch; no-ops
-    // once the type exists.
+    // Sex/TimePeriod/DisplayName (DisplayName: an optional prettier/shorter
+    // name preferred over Name as link text in computed Person query HTML;
+    // display slot 2, seeded COLLAPSED via a collapsed_field row) — the
+    // dynamic type{N} table, and one premade (ordinary, deletable) "Name"
+    // query type. Runs on every launch; no-ops once the type exists.
     private static func seedPersonType(db: Database) throws {
         let existingPersonTypeID = try Int64.fetchOne(
             db,
@@ -745,16 +748,32 @@ extension AppDatabase {
         )
         let personTypeID = db.lastInsertedRowID
 
+        // DisplayName's field_index (5) is out of display order deliberately:
+        // Sex must stay field2 (the NOT NULL DEFAULT column below), so the
+        // later-added field takes the next free index while its
+        // field_display_index slots it between Name and Sex — matching the
+        // shape the one-off migration produces on older databases.
         try db.execute(
             sql: """
                 INSERT INTO field (type_id, name, field_index, field_display_index, field_type, is_protected)
                 VALUES
                     (?, 'Name',        1, 1, 'text', 0),
-                    (?, 'Sex',         2, 2, 'sex',  1),
-                    (?, 'TimePeriod',  3, 3, 'text', 1),
-                    (?, 'Description', 4, 4, 'text', 0)
+                    (?, 'DisplayName', 5, 2, 'text', 1),
+                    (?, 'Sex',         2, 3, 'sex',  1),
+                    (?, 'TimePeriod',  3, 4, 'text', 1),
+                    (?, 'Description', 4, 5, 'text', 0)
                 """,
-            arguments: [personTypeID, personTypeID, personTypeID, personTypeID]
+            arguments: [personTypeID, personTypeID, personTypeID, personTypeID, personTypeID]
+        )
+
+        // DisplayName starts collapsed — it's optional and shouldn't take
+        // space or Tab stops until the user opts in by expanding it.
+        try db.execute(
+            sql: """
+                INSERT OR IGNORE INTO collapsed_field (type_id, field_id)
+                SELECT type_id, id FROM field WHERE type_id = ? AND name = 'DisplayName'
+                """,
+            arguments: [personTypeID]
         )
 
         // Sex is required with default Male; the NOT NULL DEFAULT guarantees a
@@ -766,6 +785,7 @@ extension AppDatabase {
                 field2 TEXT NOT NULL DEFAULT 'Male',
                 field3 TEXT,
                 field4 TEXT,
+                field5 TEXT,
                 FOREIGN KEY (id) REFERENCES instance_id_type_id(instance_id) ON DELETE CASCADE
             ) STRICT
             """)
@@ -850,6 +870,61 @@ extension AppDatabase {
                 WHERE type_id = ? AND field_display_index > ?
                 """,
             arguments: [personTypeID, died["field_display_index"] as Int64]
+        )
+    }
+
+    // Person gained a protected DisplayName field in July 2026: an optional
+    // prettier/shorter name preferred over Name for the link text of computed
+    // Person query HTML (see personEntryHTML). Fresh databases seed it; this
+    // one-off adds it to existing ones — display slot 2 (between Name and
+    // Sex, everything from Sex down shifts one), a fresh field_index (next
+    // free; existing columns never renumber), and a collapsed_field row so it
+    // starts collapsed. Guarded by the field's absence, so it no-ops forever
+    // after; must run after the TimePeriod migration so display indices are
+    // already compacted.
+    private static func migratePersonDisplayNameField(db: Database) throws {
+        guard let personTypeID = try Int64.fetchOne(
+            db,
+            sql: """
+                SELECT id FROM "type" WHERE name = ? AND is_builtin = 1
+                """,
+            arguments: [PERSON_TYPE_NAME]
+        ) else { return }
+
+        let existingID = try Int64.fetchOne(
+            db,
+            sql: "SELECT id FROM field WHERE type_id = ? AND name = 'DisplayName'",
+            arguments: [personTypeID]
+        )
+        guard existingID == nil else { return }
+
+        let nextIndex = (try Int64.fetchOne(
+            db,
+            sql: "SELECT COALESCE(MAX(field_index), 0) FROM field WHERE type_id = ?",
+            arguments: [personTypeID]
+        ) ?? 0) + 1
+
+        try db.execute(sql: """
+            ALTER TABLE "type\(personTypeID)" ADD COLUMN "field\(nextIndex)" TEXT
+            """)
+        try db.execute(
+            sql: """
+                UPDATE field
+                SET field_display_index = field_display_index + 1
+                WHERE type_id = ? AND field_display_index >= 2
+                """,
+            arguments: [personTypeID]
+        )
+        try db.execute(
+            sql: """
+                INSERT INTO field (type_id, name, field_index, field_display_index, field_type, is_protected)
+                VALUES (?, 'DisplayName', ?, 2, 'text', 1)
+                """,
+            arguments: [personTypeID, nextIndex]
+        )
+        try db.execute(
+            sql: "INSERT OR IGNORE INTO collapsed_field (type_id, field_id) VALUES (?, ?)",
+            arguments: [personTypeID, db.lastInsertedRowID]
         )
     }
 

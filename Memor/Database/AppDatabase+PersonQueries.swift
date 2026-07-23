@@ -837,17 +837,41 @@ extension AppDatabase {
     }
 
     /// One relationship entry as answer markup: instances render as id: links
-    /// (Study/Preview navigation), bare names as plain spans. Field values are
-    /// raw HTML everywhere in this app, so names are not escaped.
+    /// (Study/Preview navigation), bare names as plain spans. Link text
+    /// prefers the optional DisplayName field, falling back to the standard
+    /// display value (Name) when it is blank. Field values are raw HTML
+    /// everywhere in this app, so names are not escaped.
     private nonisolated static func personEntryHTML(db: Database, ref: PersonRef) throws -> String {
         switch ref {
         case .instance(let id):
-            let name = try fetchInstanceDisplayValue(db: db, instanceID: id)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let name = try personLinkDisplayValue(db: db, instanceID: id)
             return "<a href=\"id:\(id)\">\(name.isEmpty ? "#\(id)" : name)</a>"
         case .bare(let name):
             return "<span class=\"person-bare-name\">\(name)</span>"
         }
+    }
+
+    /// The name shown for a Person reference in computed query HTML: the
+    /// DisplayName field's value when non-blank, else the standard display
+    /// value (Name). Trimmed; may be empty (callers show "#id" then).
+    private nonisolated static func personLinkDisplayValue(db: Database, instanceID: Int64) throws -> String {
+        if let personTypeID = try? fetchPersonTypeID(db: db),
+           let fieldIndex = try Int64.fetchOne(
+               db,
+               sql: "SELECT field_index FROM field WHERE type_id = ? AND name = 'DisplayName'",
+               arguments: [personTypeID]
+           ) {
+            let displayName = (try String.fetchOne(
+                db,
+                sql: "SELECT \"field\(fieldIndex)\" FROM \"type\(personTypeID)\" WHERE id = ?",
+                arguments: [instanceID]
+            ) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !displayName.isEmpty {
+                return displayName
+            }
+        }
+        return try fetchInstanceDisplayValue(db: db, instanceID: instanceID)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Stacks a list of already-built entry fragments one per line (each wrapped
@@ -1168,8 +1192,9 @@ extension AppDatabase {
 
         let entries = try ordered.map { siblingID -> String in
             if siblingID == personID {
-                let name = try fetchInstanceDisplayValue(db: db, instanceID: siblingID)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                // Same DisplayName-then-Name resolution as the sibling links
+                // around it, so the list reads consistently.
+                let name = try personLinkDisplayValue(db: db, instanceID: siblingID)
                 return "<span class=\"person-self\">\(name.isEmpty ? "#\(siblingID)" : name)</span>"
             }
             return try personEntryHTML(db: db, ref: .instance(siblingID))
