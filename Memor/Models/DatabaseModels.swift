@@ -135,7 +135,7 @@ struct TypeField: Identifiable, FetchableRecord, Decodable {
     let fieldDisplayIndex: Int
     let isPrimary: Bool
     let fieldType: FieldKind
-    // Built-in Person fields (Sex/WhenBorn/WhenDied): cannot be renamed or deleted.
+    // Built-in Person fields (Sex/TimePeriod): cannot be renamed or deleted.
     let isProtected: Bool
 
     init(

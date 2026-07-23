@@ -614,6 +614,7 @@ extension AppDatabase {
             }
 
             try seedPersonType(db: db)
+            try migratePersonTimePeriodField(db: db)
 
             if isNewDatabase {
                 try db.execute(
@@ -711,7 +712,7 @@ extension AppDatabase {
 
     // Seeds the built-in Person type (idempotent, PointMap pattern): the type
     // row, its fields — deletable Name/Description plus protected
-    // Sex/WhenBorn/WhenDied — the dynamic type{N} table, and one premade
+    // Sex/TimePeriod — the dynamic type{N} table, and one premade
     // (ordinary, deletable) "Name" query type. Runs on every launch; no-ops
     // once the type exists.
     private static func seedPersonType(db: Database) throws {
@@ -739,11 +740,10 @@ extension AppDatabase {
                 VALUES
                     (?, 'Name',        1, 1, 'text', 0),
                     (?, 'Sex',         2, 2, 'sex',  1),
-                    (?, 'WhenBorn',    3, 3, 'text', 1),
-                    (?, 'WhenDied',    4, 4, 'text', 1),
-                    (?, 'Description', 5, 5, 'text', 0)
+                    (?, 'TimePeriod',  3, 3, 'text', 1),
+                    (?, 'Description', 4, 4, 'text', 0)
                 """,
-            arguments: [personTypeID, personTypeID, personTypeID, personTypeID, personTypeID]
+            arguments: [personTypeID, personTypeID, personTypeID, personTypeID]
         )
 
         // Sex is required with default Male; the NOT NULL DEFAULT guarantees a
@@ -755,7 +755,6 @@ extension AppDatabase {
                 field2 TEXT NOT NULL DEFAULT 'Male',
                 field3 TEXT,
                 field4 TEXT,
-                field5 TEXT,
                 FOREIGN KEY (id) REFERENCES instance_id_type_id(instance_id) ON DELETE CASCADE
             ) STRICT
             """)
@@ -773,11 +772,73 @@ extension AppDatabase {
                     questionHTML: "{{#QuestionContent}}",
                     answerHTML: """
                     <div class="Description">{{Description}}</div>
-                    <div class="WhenBorn">{{WhenBorn}}</div>
-                    <div class="WhenDied">{{WhenDied}}</div>
+                    <div class="TimePeriod">{{TimePeriod}}</div>
                     """
                 )
             ]
+        )
+    }
+
+    // Person's protected WhenBorn/WhenDied fields were merged into a single
+    // protected TimePeriod field in July 2026. Fresh databases seed the new
+    // shape; this one-off migrates existing ones in place: WhenBorn's column
+    // takes "born—died" (em dash; a row where both sides are blank stays
+    // blank), WhenBorn's field row is renamed to TimePeriod (keeping its id,
+    // field_index, display slot, and protection), and WhenDied's column and
+    // row are dropped, compacting display indices like deleteField does.
+    // Query HTML that referenced {{WhenBorn}}/{{WhenDied}} is intentionally
+    // NOT rewritten (the user edits it by hand). Guarded by the field table's
+    // state — once WhenBorn/WhenDied are gone it no-ops forever.
+    private static func migratePersonTimePeriodField(db: Database) throws {
+        guard let personTypeID = try Int64.fetchOne(
+            db,
+            sql: """
+                SELECT id FROM "type" WHERE name = ? AND is_builtin = 1
+                """,
+            arguments: [PERSON_TYPE_NAME]
+        ) else { return }
+
+        func protectedField(named name: String) throws -> Row? {
+            try Row.fetchOne(
+                db,
+                sql: """
+                    SELECT id, field_index, field_display_index FROM field
+                    WHERE type_id = ? AND name = ? AND is_protected = 1
+                    """,
+                arguments: [personTypeID, name]
+            )
+        }
+        guard let born = try protectedField(named: "WhenBorn"),
+              let died = try protectedField(named: "WhenDied") else { return }
+        let bornIndex = born["field_index"] as Int64
+        let diedIndex = died["field_index"] as Int64
+
+        try db.execute(sql: """
+            UPDATE "type\(personTypeID)"
+            SET "field\(bornIndex)" =
+                CASE WHEN COALESCE("field\(bornIndex)", '') = '' AND COALESCE("field\(diedIndex)", '') = ''
+                     THEN "field\(bornIndex)"
+                     ELSE COALESCE("field\(bornIndex)", '') || '—' || COALESCE("field\(diedIndex)", '')
+                END
+            """)
+        try db.execute(
+            sql: "UPDATE field SET name = 'TimePeriod' WHERE id = ?",
+            arguments: [born["id"] as Int64]
+        )
+        try db.execute(sql: """
+            ALTER TABLE "type\(personTypeID)" DROP COLUMN "field\(diedIndex)"
+            """)
+        try db.execute(
+            sql: "DELETE FROM field WHERE id = ?",
+            arguments: [died["id"] as Int64]
+        )
+        try db.execute(
+            sql: """
+                UPDATE field
+                SET field_display_index = field_display_index - 1
+                WHERE type_id = ? AND field_display_index > ?
+                """,
+            arguments: [personTypeID, died["field_display_index"] as Int64]
         )
     }
 
