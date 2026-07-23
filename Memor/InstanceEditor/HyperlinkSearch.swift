@@ -89,7 +89,18 @@ final class HyperlinkSearchController: ObservableObject {
         panel.isOpaque = false
         panel.hasShadow = true
         panel.contentView = NSHostingView(rootView: HyperlinkSearchPopupView(state: popupState))
-        panel.setFrameTopLeftPoint(NSPoint(x: anchorRect.minX, y: anchorRect.minY))
+        // Open below the selection (panel top against the selected line's
+        // bottom edge; screen coordinates are y-up, so that edge is minY).
+        // When the panel wouldn't fit above the visible frame's bottom —
+        // selection near the bottom of the screen — open ABOVE the selection
+        // instead (panel bottom against the line's top edge, maxY) so the
+        // popup stays fully on-screen.
+        let screen = textView.window?.screen ?? NSScreen.main
+        if let screen, anchorRect.minY - panel.frame.height < screen.visibleFrame.minY {
+            panel.setFrameOrigin(NSPoint(x: anchorRect.minX, y: anchorRect.maxY))
+        } else {
+            panel.setFrameTopLeftPoint(NSPoint(x: anchorRect.minX, y: anchorRect.minY))
+        }
         panel.orderFront(nil)
         panel.makeKey()
 
