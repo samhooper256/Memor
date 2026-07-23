@@ -205,7 +205,9 @@ struct InstanceFieldEditor: View {
     let fieldID: Int64
     let isSticky: Bool
     let showStickyToggle: Bool
+    let isCollapsed: Bool
     let onToggleSticky: () -> Void
+    let onToggleCollapsed: () -> Void
     let onSubmit: () -> Void
     let onRequestHyperlink: ((InstanceTextView.CommandAwareTextView) -> Void)?
     let onMoveToNextField: () -> Void
@@ -217,12 +219,21 @@ struct InstanceFieldEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
-                Text(fieldName)
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
+                HStack(spacing: 5) {
+                    Text(fieldName)
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.secondary)
+
+                    if !text.isEmpty {
+                        // Content indicator — shown collapsed or expanded.
+                        Circle()
+                            .fill(.blue)
+                            .frame(width: 5, height: 5)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
 
                 Spacer(minLength: 0)
 
@@ -247,29 +258,37 @@ struct InstanceFieldEditor: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            // The whole bar toggles collapse (the sticky pin's own gesture
+            // still wins for clicks on the pin).
+            .contentShape(Rectangle())
+            .pointerStyle(.link)
+            .onTapGesture(perform: onToggleCollapsed)
+            .help(isCollapsed ? "Expand field" : "Collapse field")
 
-            Divider()
+            if !isCollapsed {
+                Divider()
 
-            InstanceTextView(
-                text: $text,
-                focusController: focusController,
-                fieldID: fieldID,
-                onSubmit: onSubmit,
-                onRequestHyperlink: onRequestHyperlink,
-                onContentHeightChange: { contentHeight in
-                    editorHeight = max(Self.minimumEditorHeight, contentHeight)
-                },
-                onMoveToNextField: onMoveToNextField,
-                onMoveToPreviousField: onMoveToPreviousField,
-                dedupesTrailingLineBreak: dedupesTrailingLineBreak
-            )
-                .frame(
-                    maxWidth: .infinity,
-                    minHeight: Self.minimumEditorHeight,
-                    idealHeight: editorHeight,
-                    maxHeight: editorHeight,
-                    alignment: .topLeading
+                InstanceTextView(
+                    text: $text,
+                    focusController: focusController,
+                    fieldID: fieldID,
+                    onSubmit: onSubmit,
+                    onRequestHyperlink: onRequestHyperlink,
+                    onContentHeightChange: { contentHeight in
+                        editorHeight = max(Self.minimumEditorHeight, contentHeight)
+                    },
+                    onMoveToNextField: onMoveToNextField,
+                    onMoveToPreviousField: onMoveToPreviousField,
+                    dedupesTrailingLineBreak: dedupesTrailingLineBreak
                 )
+                    .frame(
+                        maxWidth: .infinity,
+                        minHeight: Self.minimumEditorHeight,
+                        idealHeight: editorHeight,
+                        maxHeight: editorHeight,
+                        alignment: .topLeading
+                    )
+            }
         }
         .background(Color(NSColor.controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 6))

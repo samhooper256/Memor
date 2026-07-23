@@ -89,6 +89,9 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
     @Published var fieldValues: [Int64: String] = [:]
     @Published var selectedCollectionIDs: Set<Int64> = []
     @Published var stickyFieldIDs: Set<Int64> = []
+    /// Fields whose editors render as just the header bar (display preference,
+    /// per type+field like stickyFieldIDs; never affects dirtiness).
+    @Published var collapsedFieldIDs: Set<Int64> = []
     @Published var maxIntervalText: String = ""
 
     // MARK: Person relationship state

@@ -133,6 +133,17 @@ extension AppDatabase {
                 ) STRICT
                 """)
 
+            // Row existence == that field's editor renders collapsed (header
+            // bar only) in the Add/Edit Instance windows. Per (type, field)
+            // like sticky_field, so the preference survives across sessions.
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS collapsed_field (
+                    type_id INTEGER NOT NULL REFERENCES "type"(id) ON DELETE CASCADE,
+                    field_id INTEGER NOT NULL,
+                    PRIMARY KEY (type_id, field_id)
+                ) STRICT
+                """)
+
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS type_query_default (
                     type_id INTEGER NOT NULL REFERENCES "type"(id) ON DELETE CASCADE,

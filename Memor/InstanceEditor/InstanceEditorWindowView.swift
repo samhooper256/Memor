@@ -1714,9 +1714,15 @@ struct InstanceEditorWindowView: View {
                         fieldID: field.id,
                         isSticky: draft.stickyFieldIDs.contains(field.id),
                         showStickyToggle: mode == .add,
+                        isCollapsed: draft.collapsedFieldIDs.contains(field.id),
                         onToggleSticky: {
                             if let selectedTypeID = draft.selectedTypeID {
                                 toggleSticky(typeID: selectedTypeID, fieldID: field.id)
+                            }
+                        },
+                        onToggleCollapsed: {
+                            if let selectedTypeID = draft.selectedTypeID {
+                                toggleCollapsed(typeID: selectedTypeID, fieldID: field.id)
                             }
                         },
                         onSubmit: submitInstance,
@@ -2013,6 +2019,7 @@ struct InstanceEditorWindowView: View {
             draft.fields = try appDatabase.fetchFieldsForDisplay(forTypeID: editorData.typeID)
             draft.queryTypes = try appDatabase.fetchQueryTypes(forTypeID: editorData.typeID)
             draft.stickyFieldIDs = try appDatabase.fetchStickyFieldIDs(forTypeID: editorData.typeID)
+            draft.collapsedFieldIDs = try appDatabase.fetchCollapsedFieldIDs(forTypeID: editorData.typeID)
             draft.selectedQueryTypeIDs = editorData.enabledQueryTypeIDs
             draft.fieldValues = Dictionary(
                 uniqueKeysWithValues: draft.fields.map { field in
@@ -2076,6 +2083,7 @@ struct InstanceEditorWindowView: View {
             draft.selectedCollectionIDs = []
             collectionSearchQuery = ""
             draft.stickyFieldIDs = []
+            draft.collapsedFieldIDs = []
             draft.maxIntervalText = ""
             return
         }
@@ -2092,6 +2100,7 @@ struct InstanceEditorWindowView: View {
             draft.fields = try appDatabase.fetchFieldsForDisplay(forTypeID: typeID)
             draft.queryTypes = try appDatabase.fetchQueryTypes(forTypeID: typeID)
             draft.stickyFieldIDs = try appDatabase.fetchStickyFieldIDs(forTypeID: typeID)
+            draft.collapsedFieldIDs = try appDatabase.fetchCollapsedFieldIDs(forTypeID: typeID)
             if didChangeType {
                 draft.resetPersonState()
                 let availableQueryTypeIDs = draft.queryTypes.map(\.id)
@@ -2147,6 +2156,7 @@ struct InstanceEditorWindowView: View {
             allCollectionItems = []
             draft.selectedCollectionIDs = []
             draft.stickyFieldIDs = []
+            draft.collapsedFieldIDs = []
             focusController.reset(with: [])
             focusController.focusField(nil)
             showToast(message: "Failed to load fields.", style: .error)
@@ -2173,6 +2183,7 @@ struct InstanceEditorWindowView: View {
                 draft.fieldValues = [:]
                 draft.selectedCollectionIDs = try appDatabase.fetchCollectionIDs(forInstanceID: instanceID)
                 draft.stickyFieldIDs = []
+                draft.collapsedFieldIDs = []
                 collectionSearchQuery = ""
                 draft.maxIntervalText = ""
                 loadCollectionItems()
@@ -2199,6 +2210,7 @@ struct InstanceEditorWindowView: View {
                 draft.fieldValues = [:]
                 draft.selectedCollectionIDs = try appDatabase.fetchCollectionIDs(forInstanceID: instanceID)
                 draft.stickyFieldIDs = []
+                draft.collapsedFieldIDs = []
                 collectionSearchQuery = ""
                 draft.maxIntervalText = ""
                 loadCollectionItems()
@@ -2227,6 +2239,7 @@ struct InstanceEditorWindowView: View {
             )
             draft.selectedCollectionIDs = try appDatabase.fetchCollectionIDs(forInstanceID: instanceID)
             draft.stickyFieldIDs = try appDatabase.fetchStickyFieldIDs(forTypeID: editorData.typeID)
+            draft.collapsedFieldIDs = try appDatabase.fetchCollapsedFieldIDs(forTypeID: editorData.typeID)
             draft.queryIntervalsByQueryTypeID = try appDatabase.fetchQueryIntervals(forInstanceID: instanceID)
             collectionSearchQuery = ""
             draft.maxIntervalText = editorData.maxInterval.map(String.init) ?? ""
@@ -2244,6 +2257,7 @@ struct InstanceEditorWindowView: View {
             allCollectionItems = []
             draft.selectedCollectionIDs = []
             draft.stickyFieldIDs = []
+            draft.collapsedFieldIDs = []
             draft.queryIntervalsByQueryTypeID = [:]
             focusController.reset(with: [])
             focusController.focusField(nil)
@@ -2299,7 +2313,10 @@ struct InstanceEditorWindowView: View {
                         return (field.id, preserved)
                     }
                 )
-                focusController.focusField(draft.fields.first?.id)
+                // navigableFieldIDs, not draft.fields: focusing a collapsed
+                // (unmounted) first field would desync activeFieldID and arm a
+                // pending focus that fires on a later expand.
+                focusController.focusField(navigableFieldIDs.first)
                 addScrollNonce = UUID()
                 showToast(message: "Instance added successfully.", style: .success)
             case .edit:
@@ -2671,10 +2688,46 @@ struct InstanceEditorWindowView: View {
         }
     }
 
+    private func toggleCollapsed(typeID: Int64, fieldID: Int64) {
+        let newCollapsed = !draft.collapsedFieldIDs.contains(fieldID)
+        do {
+            try appDatabase.setCollapsedField(typeID: typeID, fieldID: fieldID, isCollapsed: newCollapsed)
+            if newCollapsed {
+                let hadFocus = focusController.activeFieldID == fieldID
+                draft.collapsedFieldIDs.insert(fieldID)
+                // Collapsing the focused field unmounts its text view, which
+                // would strand first responder on the window and take Tab out
+                // of the field cycle — hand focus to the next expanded field
+                // (falling through to the collection search, like Tab does)
+                // BEFORE the render pass removes the view.
+                if hadFocus {
+                    let ids = navigableFieldIDs
+                    let followingID = draft.fields
+                        .drop(while: { $0.id != fieldID })
+                        .dropFirst()
+                        .first(where: { ids.contains($0.id) })?
+                        .id
+                    if let followingID {
+                        focusController.focusField(followingID)
+                    } else {
+                        focusController.focusCollectionSearch()
+                    }
+                }
+            } else {
+                draft.collapsedFieldIDs.remove(fieldID)
+            }
+        } catch {
+            showToast(message: "Failed to update collapsed field.", style: .error)
+        }
+    }
+
     // Tab navigation only visits text fields — boolean fields are checkboxes, not
-    // NSTextViews, so they aren't part of the focus chain.
+    // NSTextViews, so they aren't part of the focus chain. Collapsed fields have
+    // no mounted text view, so they're skipped too.
     private var navigableFieldIDs: [Int64] {
-        draft.fields.filter { $0.fieldType == .text }.map(\.id)
+        draft.fields
+            .filter { $0.fieldType == .text && !draft.collapsedFieldIDs.contains($0.id) }
+            .map(\.id)
     }
 
     private func focusNextField(after fieldID: Int64?) {
@@ -2949,7 +3002,10 @@ struct InstanceEditorWindowView: View {
                     }
                 )
                 draft.resetPersonState()
-                focusController.focusField(draft.fields.first?.id)
+                // navigableFieldIDs, not draft.fields: with the Name field
+                // collapsed, focusing it would leave NOTHING focused after the
+                // endEditing() above (the collapsed field mounts no text view).
+                focusController.focusField(navigableFieldIDs.first)
                 addScrollNonce = UUID()
                 showToast(message: "Person added successfully.\(resetSuffix)", style: .success)
             case .edit:

@@ -1328,6 +1328,39 @@ struct AppDatabase {
         }
     }
 
+    func fetchCollapsedFieldIDs(forTypeID typeID: Int64) throws -> Set<Int64> {
+        try dbQueue.read { db in
+            let ids = try Int64.fetchAll(
+                db,
+                sql: "SELECT field_id FROM collapsed_field WHERE type_id = ?",
+                arguments: [typeID]
+            )
+            return Set(ids)
+        }
+    }
+
+    func setCollapsedField(typeID: Int64, fieldID: Int64, isCollapsed: Bool) throws {
+        try dbQueue.write { db in
+            if isCollapsed {
+                try db.execute(
+                    sql: """
+                        INSERT OR IGNORE INTO collapsed_field (type_id, field_id)
+                        VALUES (?, ?)
+                        """,
+                    arguments: [typeID, fieldID]
+                )
+            } else {
+                try db.execute(
+                    sql: """
+                        DELETE FROM collapsed_field
+                        WHERE type_id = ? AND field_id = ?
+                        """,
+                    arguments: [typeID, fieldID]
+                )
+            }
+        }
+    }
+
     func fetchTypeQueryDefaults(forTypeID typeID: Int64) throws -> [Int64: Bool] {
         try dbQueue.read { db in
             let rows = try Row.fetchAll(
