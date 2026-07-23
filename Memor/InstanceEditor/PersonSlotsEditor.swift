@@ -153,15 +153,35 @@ struct PersonSlotsEditor: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach($draft.personPartners) { $partner in
-                    partnerCard($partner)
+                ForEach(draft.personPartners) { entry in
+                    partnerCard(entry)
                 }
             }
         }
     }
 
-    private func partnerCard(_ partner: Binding<PersonPartnerDraftEntry>) -> some View {
-        let entry = partner.wrappedValue
+    /// ID-keyed (not positional) element binding: a focused partner date
+    /// TextField flushes through its binding when it resigns first responder —
+    /// including during row teardown AFTER the entry was removed — and a
+    /// `ForEach($array)` element binding subscripts the array by position,
+    /// which is out of bounds once the array shrinks (crash). Looking the
+    /// entry up by id on every access makes stale reads/writes harmless,
+    /// matching the office cards' Began/Ended/Note fields.
+    private func partnerBinding(id: UUID) -> Binding<PersonPartnerDraftEntry> {
+        Binding(
+            get: {
+                draft.personPartners.first(where: { $0.id == id })
+                    ?? PersonPartnerDraftEntry(partnershipID: nil, partner: .bare(""))
+            },
+            set: { newValue in
+                guard let index = draft.personPartners.firstIndex(where: { $0.id == id }) else { return }
+                draft.personPartners[index] = newValue
+            }
+        )
+    }
+
+    private func partnerCard(_ entry: PersonPartnerDraftEntry) -> some View {
+        let partner = partnerBinding(id: entry.id)
         let index = draft.personPartners.firstIndex(where: { $0.id == entry.id }) ?? 0
         let partnerSex = entry.partner.instanceID.flatMap { draft.personSexesByID[$0] }
         // Children can't be added under a same-sex couple; bare-name partners
@@ -306,7 +326,7 @@ struct PersonSlotsEditor: View {
 
             // Grouped children are live mirrors of each partner card's array,
             // so removing one here removes it there too (and vice versa).
-            ForEach($draft.personPartners) { $partner in
+            ForEach(draft.personPartners) { partner in
                 if !partner.children.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("with \(chipLabel(for: partner.partner))")
@@ -318,7 +338,7 @@ struct PersonSlotsEditor: View {
                                     label: chipLabel(for: child.child),
                                     isBareName: child.child.bareName != nil,
                                     onRemove: {
-                                        $partner.wrappedValue.children.removeAll { $0.id == child.id }
+                                        partnerBinding(id: partner.id).wrappedValue.children.removeAll { $0.id == child.id }
                                     }
                                 )
                             }

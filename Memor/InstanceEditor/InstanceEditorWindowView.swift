@@ -2091,10 +2091,10 @@ struct InstanceEditorWindowView: View {
         do {
             let didChangeType = draft.loadedTypeID != typeID
             if didChangeType {
-                // Same hazard as loadInstance: resetPersonState() below empties
-                // the arrays behind any focused partner/office card TextField,
-                // and the focusField call later in this function would force it
-                // to resign against a stale element binding.
+                // Same as loadInstance: resign any focused partner/office card
+                // field before resetPersonState() below empties the arrays
+                // behind it (see endEditing() — belt-and-braces now that card
+                // fields use id-keyed bindings).
                 focusController.endEditing()
             }
             draft.fields = try appDatabase.fetchFieldsForDisplay(forTypeID: typeID)
@@ -2166,10 +2166,9 @@ struct InstanceEditorWindowView: View {
     @MainActor
     private func loadInstance(instanceID: Int64) async {
         // Resign the focused control before the draft is repointed at another
-        // instance. Reloading into an instance with fewer partner/office cards
-        // empties the arrays behind the old cards' TextField bindings, and the
-        // focusField call at the end of this load would then force the stale
-        // field to resign and re-read its out-of-bounds element binding (crash).
+        // instance and the partner/office arrays are wholesale replaced (see
+        // endEditing() — belt-and-braces now that card fields use id-keyed
+        // bindings).
         focusController.endEditing()
         do {
             if let pointMap = try appDatabase.fetchPointMapInstance(instanceID: instanceID),
@@ -2972,10 +2971,10 @@ struct InstanceEditorWindowView: View {
             switch mode {
             case .add:
                 onAddSaved?(typeID)
-                // Resign a focused partner/office card TextField while its
-                // element binding is still valid — resetPersonState() empties
-                // the array it indexes, and the focusField call below would
-                // otherwise force the stale field to resign afterwards (crash).
+                // Resign a focused partner/office card field before
+                // resetPersonState() empties the arrays behind it (see
+                // endEditing() — belt-and-braces now that card fields use
+                // id-keyed bindings).
                 focusController.endEditing()
                 draft.fieldValues = Dictionary(
                     uniqueKeysWithValues: draft.fields.map { field in
