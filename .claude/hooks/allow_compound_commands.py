@@ -4,7 +4,10 @@
 Auto-approves a command when every segment of a compound command
 (split on top-level &&, ||, |, ; and newlines) matches a Bash(...)
 allow rule from .claude/settings.json / .claude/settings.local.json,
-or is an sqlite3 invocation.
+is an sqlite3 invocation, or executes a file under Claude's own
+session-temp tree (/private/tmp/claude-<uid>/…, e.g. a compiled test
+probe in a scratchpad — must be invoked by ABSOLUTE path; a relative
+./probe still prompts because segments aren't cwd-aware).
 
 Heredocs with a QUOTED delimiter (<<'EOF' / <<"EOF") are handled:
 the body expands nothing, so it is pure data for the receiving
@@ -26,7 +29,16 @@ import sys
 from fnmatch import fnmatchcase
 
 # Always-permitted prefixes, independent of the settings files.
-EXTRA_ALLOW = ["sqlite3:*"]
+# The claude-501 globs let agents run executables they built inside their
+# own session scratchpads (501 = Sam's uid; /tmp is the /private/tmp
+# symlink). Everything under that tree is Claude-written temp data, so
+# "run a binary there" carries the same trust as the swiftc that produced
+# it. fnmatch's * crosses slashes and spaces, so arguments match too.
+EXTRA_ALLOW = [
+    "sqlite3:*",
+    "/private/tmp/claude-501/*",
+    "/tmp/claude-501/*",
+]
 
 
 def load_rules():
@@ -199,7 +211,7 @@ def main():
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "allow",
                 "permissionDecisionReason":
-                    "Every command in the compound matches a project allow rule (or sqlite3)",
+                    "Every command in the compound matches a project allow rule (or a built-in extra: sqlite3 / scratchpad executables)",
             }
         }))
 
