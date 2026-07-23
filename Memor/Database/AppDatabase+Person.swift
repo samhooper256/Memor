@@ -886,6 +886,16 @@ extension AppDatabase {
                 }
             }
 
+            // Instance children grouped under ANY of this person's drafted
+            // partnerships. A child in this set must keep its materialized
+            // parent rows even when it LEFT some other list in the same save
+            // (ungrouped → grouped, or grouped → grouped across partner
+            // cards): the destination grouping's added-branch owns the slots,
+            // and the removal branches below must not clobber them.
+            let draftGroupedChildIDs = Set(relations.partners.flatMap { partner in
+                partner.children.compactMap(\.child.instanceID)
+            })
+
             // 6e. Grouped-children reconciliation (per partner draft).
             for (index, draft) in relations.partners.enumerated() {
                 guard let partnershipID = partnershipIDByDraftIndex[index] else { continue }
@@ -898,9 +908,13 @@ extension AppDatabase {
                 let myRole: PersonParentRole = newSex == "Female" ? .mother : .father
                 let partnerRole: PersonParentRole = myRole == .mother ? .father : .mother
 
-                // Dematerialize removed instance children (they lose both parents).
+                // Dematerialize removed instance children (they lose both
+                // parents) — unless they were MOVED to another of this
+                // person's partner cards in the same save, whose added-branch
+                // rewrites the slots (in either processing order).
                 for childRef in diff.removed {
-                    guard case .instance(let childID) = childRef else { continue }
+                    guard case .instance(let childID) = childRef,
+                          !draftGroupedChildIDs.contains(childID) else { continue }
                     let slots = try Self.fetchParentSlots(db: db, childID: childID)
                     try db.execute(
                         sql: "DELETE FROM person_parent WHERE child_id = ? AND role IN ('mother','father')",
@@ -974,6 +988,11 @@ extension AppDatabase {
             if !ungroupedAdded.isEmpty || !ungroupedRemoved.isEmpty || ungroupedOrderChanged {
                 for childRef in ungroupedRemoved {
                     if case .instance(let childID) = childRef {
+                        // Moved from the ungrouped list INTO a partner card in
+                        // this same save: 6e just materialized this person's
+                        // role — deleting it here orphaned the child's slot
+                        // (the Genghis/Ögedei bug).
+                        guard !draftGroupedChildIDs.contains(childID) else { continue }
                         let slots = try Self.fetchParentSlots(db: db, childID: childID)
                         let role: PersonParentRole = slots.first(where: { $0.value == .instance(personID) && ($0.key == .mother || $0.key == .father) })?.key ?? myBiologicalRole
                         try db.execute(
