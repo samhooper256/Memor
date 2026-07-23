@@ -782,7 +782,7 @@ extension AppDatabase {
     // Person's protected WhenBorn/WhenDied fields were merged into a single
     // protected TimePeriod field in July 2026. Fresh databases seed the new
     // shape; this one-off migrates existing ones in place: WhenBorn's column
-    // takes "born—died" (em dash; a row where both sides are blank stays
+    // takes "born–died" (en dash; a row where both sides are blank stays
     // blank), WhenBorn's field row is renamed to TimePeriod (keeping its id,
     // field_index, display slot, and protection), and WhenDied's column and
     // row are dropped, compacting display indices like deleteField does.
@@ -818,7 +818,7 @@ extension AppDatabase {
             SET "field\(bornIndex)" =
                 CASE WHEN COALESCE("field\(bornIndex)", '') = '' AND COALESCE("field\(diedIndex)", '') = ''
                      THEN "field\(bornIndex)"
-                     ELSE COALESCE("field\(bornIndex)", '') || '—' || COALESCE("field\(diedIndex)", '')
+                     ELSE COALESCE("field\(bornIndex)", '') || '–' || COALESCE("field\(diedIndex)", '')
                 END
             """)
         try db.execute(
