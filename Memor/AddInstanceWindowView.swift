@@ -131,16 +131,16 @@ final class QueryPreviewWindowState: ObservableObject {
     @Published private(set) var requestedTypeID: Int64?
     @Published private(set) var requestedQueryTypeID: Int64?
     @Published private(set) var requestedFieldValuesByName: [String: String]?
-    // Built-in Person query previews (kind + the kind's discriminator:
-    // partnership for childrenWith, office for office).
+    // Built-in Person query previews from the instance editor: the FULL
+    // drafted relations ride the request so unsaved relationship/office edits
+    // render (both modes). partnerIndex/officeIndex pick the childrenWith
+    // partner entry / office holding; selfInstanceID is the edited person's
+    // row in Edit mode and nil in Add mode.
     @Published private(set) var requestedPersonKind: PersonQueryKind?
-    @Published private(set) var requestedPersonPartnershipID: Int64?
-    @Published private(set) var requestedPersonOfficeID: Int64?
-    // Non-nil only for office-based built-in query previews from the Add
-    // Instance window, where the person has no row yet: the drafted holdings
-    // (and, for .office, the index of the previewed one) ride the request.
-    @Published private(set) var requestedPersonOfficeDrafts: [PersonOfficeDraft]?
-    @Published private(set) var requestedPersonOfficeDraftIndex: Int?
+    @Published private(set) var requestedPersonRelationsDraft: PersonRelationsDraft?
+    @Published private(set) var requestedPersonDraftPartnerIndex: Int?
+    @Published private(set) var requestedPersonDraftOfficeIndex: Int?
+    @Published private(set) var requestedPersonDraftSelfInstanceID: Int64?
     // Non-nil only for previews requested by the instance editor: the draft's
     // currently-checked collections, so {{#CollectionClasses}}/{{#CollectionIDs}}
     // reflect unsaved checkbox state instead of the persisted membership.
@@ -158,10 +158,10 @@ final class QueryPreviewWindowState: ObservableObject {
         requestedQueryTypeID = queryTypeID
         requestedFieldValuesByName = fieldValuesByName
         requestedPersonKind = nil
-        requestedPersonPartnershipID = nil
-        requestedPersonOfficeID = nil
-        requestedPersonOfficeDrafts = nil
-        requestedPersonOfficeDraftIndex = nil
+        requestedPersonRelationsDraft = nil
+        requestedPersonDraftPartnerIndex = nil
+        requestedPersonDraftOfficeIndex = nil
+        requestedPersonDraftSelfInstanceID = nil
         requestedCollectionIDs = collectionIDs
         requestNonce = UUID()
     }
@@ -172,32 +172,11 @@ final class QueryPreviewWindowState: ObservableObject {
         requestedQueryTypeID = nil
         requestedFieldValuesByName = nil
         requestedPersonKind = nil
-        requestedPersonPartnershipID = nil
-        requestedPersonOfficeID = nil
-        requestedPersonOfficeDrafts = nil
-        requestedPersonOfficeDraftIndex = nil
+        requestedPersonRelationsDraft = nil
+        requestedPersonDraftPartnerIndex = nil
+        requestedPersonDraftOfficeIndex = nil
+        requestedPersonDraftSelfInstanceID = nil
         requestedCollectionIDs = nil
-        requestNonce = UUID()
-    }
-
-    /// Preview one of a Person instance's built-in queries.
-    func requestOpenPersonQuery(
-        instanceID: Int64,
-        kind: PersonQueryKind,
-        partnershipID: Int64?,
-        officeID: Int64? = nil,
-        collectionIDs: Set<Int64>? = nil
-    ) {
-        requestedInstanceID = instanceID
-        requestedTypeID = nil
-        requestedQueryTypeID = nil
-        requestedFieldValuesByName = nil
-        requestedPersonKind = kind
-        requestedPersonPartnershipID = partnershipID
-        requestedPersonOfficeID = officeID
-        requestedPersonOfficeDrafts = nil
-        requestedPersonOfficeDraftIndex = nil
-        requestedCollectionIDs = collectionIDs
         requestNonce = UUID()
     }
 
@@ -215,23 +194,26 @@ final class QueryPreviewWindowState: ObservableObject {
         requestedQueryTypeID = queryTypeID
         requestedFieldValuesByName = fieldValuesByName
         requestedPersonKind = nil
-        requestedPersonPartnershipID = nil
-        requestedPersonOfficeID = nil
-        requestedPersonOfficeDrafts = nil
-        requestedPersonOfficeDraftIndex = nil
+        requestedPersonRelationsDraft = nil
+        requestedPersonDraftPartnerIndex = nil
+        requestedPersonDraftOfficeIndex = nil
+        requestedPersonDraftSelfInstanceID = nil
         requestedCollectionIDs = collectionIDs
         requestNonce = UUID()
     }
 
-    /// Preview an office-based built-in query (.office / .allOffices) for an
-    /// unsaved person being composed in the Add Instance window: holdings and
-    /// field values come from the editor's draft, not the database, so
-    /// uncommitted edits render. `officeIndex` picks the previewed holding for
-    /// .office and is nil for .allOffices.
-    func requestOpenPersonOfficeDraft(
+    /// Preview a built-in Person query from the instance editor's CURRENT
+    /// draft state (Add and Edit modes alike): relations, offices, and field
+    /// values come from the editor rather than the database, so unsaved edits
+    /// render. `partnerIndex` picks the childrenWith partner entry;
+    /// `officeIndex` picks the previewed holding for .office;
+    /// `selfInstanceID` is nil for a person with no row yet (Add mode).
+    func requestOpenPersonDraft(
         kind: PersonQueryKind,
-        offices: [PersonOfficeDraft],
+        relations: PersonRelationsDraft,
+        partnerIndex: Int?,
         officeIndex: Int?,
+        selfInstanceID: Int64?,
         fieldValuesByName: [String: String],
         collectionIDs: Set<Int64>? = nil
     ) {
@@ -240,10 +222,10 @@ final class QueryPreviewWindowState: ObservableObject {
         requestedQueryTypeID = nil
         requestedFieldValuesByName = fieldValuesByName
         requestedPersonKind = kind
-        requestedPersonPartnershipID = nil
-        requestedPersonOfficeID = nil
-        requestedPersonOfficeDrafts = offices
-        requestedPersonOfficeDraftIndex = officeIndex
+        requestedPersonRelationsDraft = relations
+        requestedPersonDraftPartnerIndex = partnerIndex
+        requestedPersonDraftOfficeIndex = officeIndex
+        requestedPersonDraftSelfInstanceID = selfInstanceID
         requestedCollectionIDs = collectionIDs
         requestNonce = UUID()
     }

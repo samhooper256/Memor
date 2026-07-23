@@ -660,21 +660,29 @@ extension AppDatabase {
         }
     }
 
-    /// Preview an Offices-section built-in query (.office / .allOffices) for an
-    /// UNSAVED person being composed in the Add Instance window: the holdings
-    /// come from the editor's draft instead of person_office, so uncommitted
-    /// office edits render. Office names resolve from the office table (drafted
-    /// holdings always reference existing offices) and succession peers are
-    /// persisted instances or bare names, but the person themself has no row
-    /// yet — their name
-    /// in the per-office answer is the display field's {{FieldName}} placeholder,
-    /// resolved by the live field values the caller supplies via
-    /// `StudyQuery.withFieldValues` (fieldValuesByName is left empty here, like
-    /// fetchQueryTypePreview).
-    func fetchPersonOfficeDraftPreview(
+    /// Preview ANY built-in Person query from the instance editor's CURRENT
+    /// draft state instead of the database, so unsaved relationship and office
+    /// edits render (both editor modes; saved-state rendering stays in
+    /// makePersonStudyQuery, whose markup this mirrors exactly).
+    /// `selfInstanceID` is the edited person's row in Edit mode — their own
+    /// name renders as a real id: link — and nil in Add mode, where the person
+    /// has no row yet: their name is the display field's {{FieldName}}
+    /// placeholder, resolved by the live field values the caller supplies via
+    /// `StudyQuery.withFieldValues` (fieldValuesByName is left empty here,
+    /// like fetchQueryTypePreview). Drafted refs to OTHER people are persisted
+    /// instances or bare names, so entries render exactly like the saved-state
+    /// paths (id: links with the DisplayName preference, .person-bare-name
+    /// spans). Full Siblings matches the DRAFTED parents against the database
+    /// and always includes the edited person as .person-self. SRS state is
+    /// zeroed — the preview is about content. `partnerIndex` addresses
+    /// relations.partners exactly for .childrenWith; `officeIndex` addresses
+    /// relations.offices exactly for .office.
+    func fetchPersonDraftPreview(
         kind: PersonQueryKind,
-        offices: [PersonOfficeDraft],
-        officeIndex: Int?
+        relations: PersonRelationsDraft,
+        partnerIndex: Int?,
+        officeIndex: Int?,
+        selfInstanceID: Int64?
     ) throws -> StudyQuery {
         try dbQueue.read { db in
             let personTypeID = try Self.fetchPersonTypeID(db: db)
@@ -688,8 +696,19 @@ extension AppDatabase {
                 sql: "SELECT css FROM \"type\" WHERE id = ?",
                 arguments: [personTypeID]
             ) ?? ""
+            // Same display-field choice as fetchInstanceDisplayValue, but as a
+            // placeholder — the draft person's typed name substitutes in.
+            let displayFieldName = try String.fetchOne(
+                db,
+                sql: "SELECT name FROM field WHERE type_id = ? ORDER BY is_primary DESC, field_display_index ASC, id LIMIT 1",
+                arguments: [personTypeID]
+            )
+            let selfPlaceholder = displayFieldName.map { "{{\($0)}}" } ?? ""
+            let selfHTML = try selfInstanceID.map { try Self.personEntryHTML(db: db, ref: .instance($0)) }
+                ?? selfPlaceholder
+
             let template = try Self.personOfficeQueryHTML(db: db)
-            let holdings = try offices.map { office in
+            let holdings = try relations.offices.map { office in
                 PersonOfficeHolding(
                     personOfficeID: office.personOfficeID ?? 0,
                     officeID: office.officeID,
@@ -700,43 +719,126 @@ extension AppDatabase {
                 )
             }
 
-            let questionHTML: String
-            let body: String
-            let queryTypeName: String
-            switch kind {
-            case .office:
-                guard let officeIndex, holdings.indices.contains(officeIndex) else {
+            let draftPartner: PersonPartnerDraft?
+            if kind == .childrenWith {
+                guard let partnerIndex, relations.partners.indices.contains(partnerIndex) else {
+                    throw DatabaseError(message: "Partner entry not found.")
+                }
+                draftPartner = relations.partners[partnerIndex]
+            } else {
+                draftPartner = nil
+            }
+            let draftOffice: PersonOfficeDraft?
+            if kind == .office {
+                guard let officeIndex, relations.offices.indices.contains(officeIndex) else {
                     throw DatabaseError(message: "Office holding not found.")
                 }
-                // Same display-field choice as fetchInstanceDisplayValue, but as
-                // a placeholder — the draft person's typed name substitutes in.
-                let displayFieldName = try String.fetchOne(
-                    db,
-                    sql: "SELECT name FROM field WHERE type_id = ? ORDER BY is_primary DESC, field_display_index ASC, id LIMIT 1",
-                    arguments: [personTypeID]
-                )
+                draftOffice = relations.offices[officeIndex]
+            } else {
+                draftOffice = nil
+            }
+
+            func entryHTML(_ ref: PersonRef) throws -> String {
+                try Self.personEntryHTML(db: db, ref: ref)
+            }
+            func slotHTML(_ ref: PersonRef?) throws -> String {
+                guard let ref else { return Self.personNAHTML }
+                return try entryHTML(ref)
+            }
+
+            // Question: same shapes as personQuestionHTML, with the
+            // childrenWith partner line drawn from the DRAFTED partner.
+            let questionHTML: String
+            if kind == .office, let officeIndex {
                 questionHTML = Self.renderedOfficeTemplate(template, holding: holdings[officeIndex])
+            } else {
+                var lines = ["<div class=\"person-question-title\">\(Self.personQuestionTitle(kind))</div>"]
+                let detailsHTML = try Self.personBuiltinQueryHTML(db: db)
+                if !detailsHTML.isEmpty {
+                    lines.append(detailsHTML)
+                }
+                if let draftPartner {
+                    let partnerHTML = try entryHTML(draftPartner.partner)
+                    lines.append("<div class=\"person-partner-line\">with <span class=\"person-partner\">\(partnerHTML)</span></div>")
+                }
+                questionHTML = lines.joined(separator: "\n")
+            }
+
+            // Answer: personAnswerBody's markup, computed from the draft.
+            let body: String
+            switch kind {
+            case .mother:
+                body = try slotHTML(relations.mother)
+            case .father:
+                body = try slotHTML(relations.father)
+            case .adoptiveMother:
+                body = try slotHTML(relations.adoptiveMother)
+            case .adoptiveFather:
+                body = try slotHTML(relations.adoptiveFather)
+            case .parents:
+                body = """
+                    <div class="person-parent"><span class="person-parent-label">Father:</span> \(try slotHTML(relations.father))</div>
+                    <div class="person-parent"><span class="person-parent-label">Mother:</span> \(try slotHTML(relations.mother))</div>
+                    """
+            case .partners:
+                body = relations.partners.isEmpty
+                    ? Self.personNAHTML
+                    : Self.personAnswerLines(try relations.partners.map { try entryHTML($0.partner) })
+            case .children:
+                var groups: [String] = []
+                for partner in relations.partners where !partner.children.isEmpty {
+                    let partnerHTML = try entryHTML(partner.partner)
+                    let list = Self.personAnswerLines(try partner.children.map { try entryHTML($0.child) })
+                    groups.append("""
+                        <div class="person-children-group"><div class="person-children-group-title">With \(partnerHTML):</div><div class="person-children-group-list">\(list)</div></div>
+                        """)
+                }
+                if !relations.ungroupedChildren.isEmpty {
+                    let list = Self.personAnswerLines(try relations.ungroupedChildren.map { try entryHTML($0.child) })
+                    groups.append("""
+                        <div class="person-children-group person-children-ungrouped"><div class="person-children-group-list">\(list)</div></div>
+                        """)
+                }
+                body = groups.isEmpty ? Self.personNAHTML : groups.joined(separator: "\n")
+            case .childrenWith:
+                let children = draftPartner?.children ?? []
+                body = children.isEmpty
+                    ? Self.personNAHTML
+                    : Self.personAnswerLines(try children.map { try entryHTML($0.child) })
+            case .fullSiblings:
+                var slots: [PersonParentRole: PersonRef] = [:]
+                slots[.mother] = relations.mother
+                slots[.father] = relations.father
+                body = try Self.personFullSiblingsBody(
+                    db: db,
+                    personID: selfInstanceID,
+                    selfPlaceholderHTML: selfInstanceID == nil ? selfPlaceholder : nil,
+                    slots: slots
+                )
+            case .office:
                 body = try Self.officeSuccessionRowHTML(
                     db: db,
-                    predecessors: offices[officeIndex].predecessors,
-                    successors: offices[officeIndex].successors,
-                    centerHTML: displayFieldName.map { "{{\($0)}}" } ?? ""
+                    predecessors: draftOffice?.predecessors ?? [],
+                    successors: draftOffice?.successors ?? [],
+                    centerHTML: selfHTML
                 )
-                queryTypeName = "Office: \(holdings[officeIndex].officeName)"
             case .allOffices:
-                // personID is only used for the childrenWith partner line, so 0
-                // is safe: the allOffices question is title + details block.
-                questionHTML = try Self.personQuestionHTML(db: db, personID: 0, kind: .allOffices, partnershipID: nil)
                 body = holdings.isEmpty
                     ? Self.personNAHTML
                     : Self.personAnswerLines(holdings.map { Self.renderedOfficeTemplate(template, holding: $0) })
-                queryTypeName = PersonQueryKind.allOffices.displayName
-            default:
-                throw DatabaseError(message: "Not an office-based built-in query.")
+            }
+
+            let queryTypeName: String
+            if let draftPartner {
+                queryTypeName = try Self.personChildrenWithDisplayName(db: db, partnerRef: draftPartner.partner)
+            } else if kind == .office, let officeIndex {
+                queryTypeName = "Office: \(holdings[officeIndex].officeName)"
+            } else {
+                queryTypeName = kind.displayName
             }
 
             return StudyQuery(
-                instanceID: 0,
+                instanceID: selfInstanceID ?? 0,
                 queryTypeID: 0,
                 interval: 0,
                 maxInterval: nil,
@@ -753,8 +855,8 @@ extension AppDatabase {
                 fieldValuesByName: [:],
                 booleanFieldNames: booleanFieldNames,
                 personQueryKind: kind,
-                personPartnershipID: nil,
-                personOfficeID: kind == .office ? officeIndex.map { offices[$0].officeID } : nil
+                personPartnershipID: draftPartner?.partnershipID,
+                personOfficeID: draftOffice?.officeID
             )
         }
     }
@@ -1110,14 +1212,18 @@ extension AppDatabase {
         return groups.joined(separator: "\n")
     }
 
-    /// People sharing BOTH the same mother and the same father as `personID`
-    /// (instances match by id, bare names by exact string; both slots must be
-    /// present, else N/A). The person appears in the list styled as
-    /// .person-self. Order: the parents' shared partnership children order for
-    /// members grouped there, then the mother's/father's ungrouped order, then id.
+    /// People sharing BOTH the same mother and the same father (instances
+    /// match by id, bare names by exact string; both slots must be present,
+    /// else N/A). The person appears in the list styled as .person-self —
+    /// force-included when `personID` is set, because a DRAFT's slots may not
+    /// be materialized in person_parent yet; for an unsaved person (nil
+    /// `personID`) `selfPlaceholderHTML` supplies their line instead. Order:
+    /// the parents' shared partnership children order for members grouped
+    /// there, then the mother's/father's ungrouped order, then id.
     private nonisolated static func personFullSiblingsBody(
         db: Database,
-        personID: Int64,
+        personID: Int64?,
+        selfPlaceholderHTML: String? = nil,
         slots: [PersonParentRole: PersonRef]
     ) throws -> String {
         guard let mother = slots[.mother], let father = slots[.father] else { return personNAHTML }
@@ -1139,9 +1245,12 @@ extension AppDatabase {
             }
         }
 
-        let siblingIDs = try matchingChildIDs(role: .mother, ref: mother)
+        var siblingIDs = try matchingChildIDs(role: .mother, ref: mother)
             .intersection(matchingChildIDs(role: .father, ref: father))
-        guard !siblingIDs.isEmpty else { return personNAHTML }
+        if let personID {
+            siblingIDs.insert(personID)
+        }
+        guard !siblingIDs.isEmpty || selfPlaceholderHTML != nil else { return personNAHTML }
 
         // Rank: shared grouping order under the parents' partnership(s) first,
         // then the mother's (or father's) ungrouped order, then id.
@@ -1190,7 +1299,7 @@ extension AppDatabase {
             return lhs < rhs
         }
 
-        let entries = try ordered.map { siblingID -> String in
+        var entries = try ordered.map { siblingID -> String in
             if siblingID == personID {
                 // Same DisplayName-then-Name resolution as the sibling links
                 // around it, so the list reads consistently.
@@ -1198,6 +1307,9 @@ extension AppDatabase {
                 return "<span class=\"person-self\">\(name.isEmpty ? "#\(siblingID)" : name)</span>"
             }
             return try personEntryHTML(db: db, ref: .instance(siblingID))
+        }
+        if let selfPlaceholderHTML {
+            entries.append("<span class=\"person-self\">\(selfPlaceholderHTML)</span>")
         }
         return personAnswerLines(entries)
     }

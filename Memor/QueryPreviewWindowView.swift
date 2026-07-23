@@ -128,22 +128,16 @@ struct QueryPreviewWindowView: View {
         do {
             let baseQuery: StudyQuery
             if let personKind = windowState.requestedPersonKind,
-               let officeDrafts = windowState.requestedPersonOfficeDrafts {
-                // Office-based built-in query for an unsaved person (Add
-                // Instance window): holdings come from the editor's draft.
-                baseQuery = try appDatabase.fetchPersonOfficeDraftPreview(
+               let relations = windowState.requestedPersonRelationsDraft {
+                // Built-in Person query from the instance editor: computed
+                // from the DRAFTED relations/offices (both modes) so unsaved
+                // edits render.
+                baseQuery = try appDatabase.fetchPersonDraftPreview(
                     kind: personKind,
-                    offices: officeDrafts,
-                    officeIndex: windowState.requestedPersonOfficeDraftIndex
-                )
-            } else if let personKind = windowState.requestedPersonKind,
-               let instanceID = windowState.requestedInstanceID {
-                // Built-in Person query: computed HTML.
-                baseQuery = try appDatabase.fetchPersonQueryPreview(
-                    instanceID: instanceID,
-                    kind: personKind,
-                    partnershipID: windowState.requestedPersonPartnershipID,
-                    officeID: windowState.requestedPersonOfficeID
+                    relations: relations,
+                    partnerIndex: windowState.requestedPersonDraftPartnerIndex,
+                    officeIndex: windowState.requestedPersonDraftOfficeIndex,
+                    selfInstanceID: windowState.requestedPersonDraftSelfInstanceID
                 )
             } else if let typeID = windowState.requestedTypeID,
                let queryTypeID = windowState.requestedQueryTypeID {

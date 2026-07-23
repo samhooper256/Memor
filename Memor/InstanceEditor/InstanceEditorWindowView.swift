@@ -2822,46 +2822,28 @@ struct InstanceEditorWindowView: View {
         return entry.officeID
     }
 
+    /// Preview a built-in Person query from the editor's CURRENT draft (both
+    /// modes), so unsaved relationship/office/field edits render — including
+    /// queries of not-yet-saved partners and offices.
     private func openPersonQueryPreview(kind: PersonQueryKind, partnerEntryID: UUID?, officeEntryID: UUID?) {
-        guard mode == .edit else {
-            openPersonOfficeDraftPreview(kind: kind, officeEntryID: officeEntryID)
-            return
+        // buildPersonRelationsDraft maps personPartners/personOffices in
+        // order, so an entry's index addresses the same item in the payload.
+        var partnerIndex: Int?
+        if kind == .childrenWith {
+            guard let index = draft.personPartners.firstIndex(where: { $0.id == partnerEntryID }) else { return }
+            partnerIndex = index
         }
-        guard let loadedInstanceID = draft.loadedInstanceID else { return }
-        if kind == .childrenWith, personPartnershipID(forEntryID: partnerEntryID) == nil {
-            showToast(message: "Save this person before previewing a new partner's query.", style: .error)
-            return
-        }
-        if kind == .office, personSavedOfficeID(forEntryID: officeEntryID) == nil {
-            showToast(message: "Save this person before previewing a new office's query.", style: .error)
-            return
-        }
-        queryPreviewWindowState.requestOpenPersonQuery(
-            instanceID: loadedInstanceID,
-            kind: kind,
-            partnershipID: personPartnershipID(forEntryID: partnerEntryID),
-            officeID: personSavedOfficeID(forEntryID: officeEntryID),
-            collectionIDs: draft.selectedCollectionIDs
-        )
-        openWindow(id: "query-preview")
-    }
-
-    /// Add-mode preview of an office-based built-in query (per-office or All
-    /// Offices), rendered from the draft's uncommitted offices + live field
-    /// values — the person has no instance row yet.
-    private func openPersonOfficeDraftPreview(kind: PersonQueryKind, officeEntryID: UUID?) {
-        guard kind == .office || kind == .allOffices else { return }
         var officeIndex: Int?
         if kind == .office {
-            // buildPersonRelationsDraft maps personOffices in order, so the
-            // entry's index addresses the same holding in the payload.
             guard let index = draft.personOffices.firstIndex(where: { $0.id == officeEntryID }) else { return }
             officeIndex = index
         }
-        queryPreviewWindowState.requestOpenPersonOfficeDraft(
+        queryPreviewWindowState.requestOpenPersonDraft(
             kind: kind,
-            offices: draft.buildPersonRelationsDraft().offices,
+            relations: draft.buildPersonRelationsDraft(),
+            partnerIndex: partnerIndex,
             officeIndex: officeIndex,
+            selfInstanceID: mode == .edit ? draft.loadedInstanceID : nil,
             fieldValuesByName: liveFieldValuesByName(),
             collectionIDs: draft.selectedCollectionIDs
         )
