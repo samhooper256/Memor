@@ -98,8 +98,8 @@ struct PersonOfficesEditor: View {
                     .foregroundStyle(.secondary)
             }
 
-            ForEach($draft.personOffices) { $office in
-                officeCard($office)
+            ForEach(draft.personOffices) { entry in
+                officeCard(entry)
             }
         }
         .padding(10)
@@ -114,8 +114,27 @@ struct PersonOfficesEditor: View {
 
     // MARK: Office card
 
-    private func officeCard(_ office: Binding<PersonOfficeDraftEntry>) -> some View {
-        let entry = office.wrappedValue
+    /// ID-keyed (not positional) whole-entry binding, like the partner cards'
+    /// partnerBinding(id:): the Began/Ended/Note fields were already immune
+    /// via officeText(entryID:keyPath:), but the succession rows' derived
+    /// bindings rode a positional ForEach element binding — same latent
+    /// out-of-bounds hazard once the array shrinks. Get falls back to a
+    /// placeholder, set no-ops once the entry is gone.
+    private func officeBinding(id: UUID) -> Binding<PersonOfficeDraftEntry> {
+        Binding(
+            get: {
+                draft.personOffices.first(where: { $0.id == id })
+                    ?? PersonOfficeDraftEntry(holdingID: nil, officeID: 0, officeName: "")
+            },
+            set: { newValue in
+                guard let index = draft.personOffices.firstIndex(where: { $0.id == id }) else { return }
+                draft.personOffices[index] = newValue
+            }
+        )
+    }
+
+    private func officeCard(_ entry: PersonOfficeDraftEntry) -> some View {
+        let office = officeBinding(id: entry.id)
         let index = draft.personOffices.firstIndex(where: { $0.id == entry.id }) ?? 0
 
         return VStack(alignment: .leading, spacing: 6) {
