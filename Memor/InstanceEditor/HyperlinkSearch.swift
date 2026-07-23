@@ -610,7 +610,7 @@ struct HyperlinkSearchPopupView: View {
                                     Text(formatFieldDisplayValue(result.displayValue))
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .padding(.horizontal, 8)
-                                        .padding(.vertical, 6)
+                                        .padding(.vertical, 1)
                                         .background(isHighlighted ? Color.accentColor.opacity(0.75) : Color.clear)
                                         .foregroundStyle(isHighlighted ? Color.white : Color.primary)
                                 }
@@ -632,7 +632,7 @@ struct HyperlinkSearchPopupView: View {
                                     }
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .padding(.horizontal, 8)
-                                    .padding(.vertical, 6)
+                                    .padding(.vertical, 1)
                                     .background(isHighlighted ? Color.accentColor.opacity(0.75) : Color.clear)
                                 }
                                 .buttonStyle(.plain)
@@ -653,7 +653,7 @@ struct HyperlinkSearchPopupView: View {
                                     }
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .padding(.horizontal, 8)
-                                    .padding(.vertical, 6)
+                                    .padding(.vertical, 1)
                                     .background(isHighlighted ? Color.accentColor.opacity(0.75) : Color.clear)
                                 }
                                 .buttonStyle(.plain)
