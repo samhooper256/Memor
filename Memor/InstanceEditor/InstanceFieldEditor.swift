@@ -73,10 +73,11 @@ final class AddInstanceFieldFocusController: ObservableObject {
     /// focused) while the draft state backing that control is still intact.
     /// Call BEFORE emptying or replacing draft arrays that mounted views are
     /// bound to: a focused TextField inside a `ForEach($array)` card (partner
-    /// dates, office dates/note) holds a positional element binding, and
-    /// resigning it re-reads that binding — so a forced first-responder change
-    /// AFTER the array shrinks subscripts out of bounds and crashes. Resigning
-    /// first makes the end-of-editing read hit the still-valid old state.
+    /// dates) holds a positional element binding, and resigning it re-reads
+    /// that binding — so a forced first-responder change AFTER the array
+    /// shrinks subscripts out of bounds and crashes. Resigning first makes the
+    /// end-of-editing read hit the still-valid old state. (The office cards'
+    /// Began/Ended/Note fields use id-keyed bindings and are immune.)
     func endEditing() {
         let window = textViewsByFieldID.values.compactMap { $0.value?.window }.first
             ?? collectionSearchField?.window

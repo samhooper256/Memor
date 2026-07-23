@@ -3,25 +3,57 @@
 //  Memor
 //
 //  The Person instance editor's Offices panel: ordered office cards (office
-//  chip, WhenBegan/WhenEnded/Note text fields, predecessor/successor entries)
-//  plus the office picker popover, which suggests existing offices by name and
-//  can create a new one inline. Every card references an existing office row.
+//  chip, Began/Ended/Note fields, predecessor/successor entries) plus the
+//  office picker popover, which suggests existing offices by name and can
+//  create a new one inline. Every card references an existing office row.
 //  Predecessors/successors are Person instances (reciprocal by construction on
 //  save) or bare names (free text with no reciprocity), like the relationship
-//  slots.
+//  slots. The Began/Ended/Note fields are the same InstanceTextView the main
+//  field editors use (HTML highlighting, ⌘K hyperlinks), registered with the
+//  editor's shared focus controller under synthetic NEGATIVE field ids.
 //
 
 import AppKit
 import GRDB
 import SwiftUI
 
+/// Which of an office card's three inline text fields a synthetic field id
+/// addresses, in the card's Tab order.
+private enum OfficeFieldSlot: CaseIterable, Hashable {
+    case began, ended, note
+}
+
+/// Hands out stable synthetic field ids for the office cards' inline text
+/// views. InstanceTextView registers with the editor's shared
+/// AddInstanceFieldFocusController keyed by Int64, so the office fields need
+/// ids that can never collide with real field rows — real ids are positive,
+/// these are allocated negative. Keyed by (draft entry UUID, slot): stable for
+/// an entry's lifetime, unique across every editor window in the session.
+private enum OfficeFieldIDAllocator {
+    private struct Key: Hashable {
+        let entryID: UUID
+        let slot: OfficeFieldSlot
+    }
+
+    private static var idsByKey: [Key: Int64] = [:]
+    private static var nextID: Int64 = -1
+
+    static func fieldID(entryID: UUID, slot: OfficeFieldSlot) -> Int64 {
+        let key = Key(entryID: entryID, slot: slot)
+        if let existing = idsByKey[key] { return existing }
+        let allocated = nextID
+        nextID -= 1
+        idsByKey[key] = allocated
+        return allocated
+    }
+}
+
 struct PersonOfficesEditor: View {
     let appDatabase: AppDatabase
     @ObservedObject var draft: InstanceEditorDraft
-
-    /// The office card whose "Began" field holds focus — set when the picker
-    /// adds a card so the user can start typing dates immediately.
-    @FocusState private var focusedBeganEntryID: UUID?
+    let focusController: AddInstanceFieldFocusController
+    let onSubmit: () -> Void
+    let onRequestHyperlink: ((InstanceTextView.CommandAwareTextView) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -52,7 +84,9 @@ struct PersonOfficesEditor: View {
                         // until SwiftUI commits the append, and the closing
                         // picker popover is still giving up key focus.
                         DispatchQueue.main.async {
-                            focusedBeganEntryID = entry.id
+                            focusController.focusField(
+                                OfficeFieldIDAllocator.fieldID(entryID: entry.id, slot: .began)
+                            )
                         }
                     }
                 )
@@ -121,15 +155,12 @@ struct PersonOfficesEditor: View {
                 Text("Began:")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                TextField("", text: office.whenBeganText)
-                    .solidFocusField()
-                    .focused($focusedBeganEntryID, equals: entry.id)
+                officeFieldView(entryID: entry.id, slot: .began, keyPath: \.whenBeganText)
                     .frame(maxWidth: 140)
                 Text("Ended:")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                TextField("", text: office.whenEndedText)
-                    .solidFocusField()
+                officeFieldView(entryID: entry.id, slot: .ended, keyPath: \.whenEndedText)
                     .frame(maxWidth: 140)
             }
 
@@ -137,8 +168,7 @@ struct PersonOfficesEditor: View {
                 Text("Note:")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                TextField("", text: office.noteText)
-                    .solidFocusField()
+                officeFieldView(entryID: entry.id, slot: .note, keyPath: \.noteText)
             }
 
             successionRow(title: "Predecessors", refs: office.predecessors)
@@ -151,6 +181,74 @@ struct PersonOfficesEditor: View {
             RoundedRectangle(cornerRadius: 6)
                 .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
         }
+    }
+
+    // MARK: Began/Ended/Note fields
+
+    private func officeFieldView(
+        entryID: UUID,
+        slot: OfficeFieldSlot,
+        keyPath: WritableKeyPath<PersonOfficeDraftEntry, String>
+    ) -> some View {
+        let fieldID = OfficeFieldIDAllocator.fieldID(entryID: entryID, slot: slot)
+        return OfficeInlineTextField(
+            text: officeText(entryID: entryID, keyPath: keyPath),
+            focusController: focusController,
+            fieldID: fieldID,
+            onSubmit: onSubmit,
+            onRequestHyperlink: onRequestHyperlink,
+            onMoveToNextField: { focusOfficeField(after: fieldID) },
+            onMoveToPreviousField: { focusOfficeField(before: fieldID) }
+        )
+    }
+
+    /// ID-keyed (not positional) text bindings: InstanceTextView's coordinator
+    /// captures its binding once at creation, so a ForEach element binding
+    /// would keep writing through its ORIGINAL index after cards reorder or
+    /// delete. Looking the entry up by id on every access makes stale
+    /// coordinators harmless.
+    private func officeText(
+        entryID: UUID,
+        keyPath: WritableKeyPath<PersonOfficeDraftEntry, String>
+    ) -> Binding<String> {
+        Binding(
+            get: {
+                draft.personOffices.first(where: { $0.id == entryID })?[keyPath: keyPath] ?? ""
+            },
+            set: { newValue in
+                guard let index = draft.personOffices.firstIndex(where: { $0.id == entryID }) else { return }
+                draft.personOffices[index][keyPath: keyPath] = newValue
+            }
+        )
+    }
+
+    private var orderedOfficeFieldIDs: [Int64] {
+        draft.personOffices.flatMap { entry in
+            OfficeFieldSlot.allCases.map { OfficeFieldIDAllocator.fieldID(entryID: entry.id, slot: $0) }
+        }
+    }
+
+    /// Tab order: Began → Ended → Note within a card, then the next card; past
+    /// either end of the panel, focus moves to the collection search field
+    /// (like the main field editors' Tab cycle).
+    private func focusOfficeField(after fieldID: Int64) {
+        let ids = orderedOfficeFieldIDs
+        guard let currentIndex = ids.firstIndex(of: fieldID) else { return }
+        let nextIndex = ids.index(after: currentIndex)
+        if nextIndex < ids.endIndex {
+            focusController.focusField(ids[nextIndex])
+        } else {
+            focusController.focusCollectionSearch()
+        }
+    }
+
+    private func focusOfficeField(before fieldID: Int64) {
+        let ids = orderedOfficeFieldIDs
+        guard let currentIndex = ids.firstIndex(of: fieldID), currentIndex > ids.startIndex else {
+            focusController.focusCollectionSearch()
+            return
+        }
+        focusController.focusField(ids[ids.index(before: currentIndex)])
     }
 
     private func successionRow(title: String, refs: Binding<[PersonRef]>) -> some View {
@@ -197,6 +295,51 @@ struct PersonOfficesEditor: View {
         case .bare(let name):
             return name
         }
+    }
+}
+
+// MARK: - Inline office text field
+
+/// One office-card text field (Began/Ended/Note) backed by the SAME
+/// InstanceTextView the main field editors use — HTML tag/entity highlighting,
+/// the ⌘K hyperlink popup, entity auto-replacement, https link pasting, ⌘B/⌘I
+/// wrapping via the shared focus controller — in the compact solid-focus
+/// chrome the card had before. Grows with its content like the main editors,
+/// from a one-line floor.
+private struct OfficeInlineTextField: View {
+    /// One line of the monospaced editor font + the text view's 4pt insets.
+    private static let minimumHeight: CGFloat = 24
+
+    @Binding var text: String
+    let focusController: AddInstanceFieldFocusController
+    let fieldID: Int64
+    let onSubmit: () -> Void
+    let onRequestHyperlink: ((InstanceTextView.CommandAwareTextView) -> Void)?
+    let onMoveToNextField: () -> Void
+    let onMoveToPreviousField: () -> Void
+
+    @State private var editorHeight: CGFloat = minimumHeight
+    // @FocusState can't observe an NSTextView, so the chrome's focus stroke is
+    // driven by the text view's own first-responder callback.
+    @State private var isFocused = false
+
+    var body: some View {
+        InstanceTextView(
+            text: $text,
+            focusController: focusController,
+            fieldID: fieldID,
+            onSubmit: onSubmit,
+            onRequestHyperlink: onRequestHyperlink,
+            onContentHeightChange: { contentHeight in
+                editorHeight = max(Self.minimumHeight, contentHeight)
+            },
+            onMoveToNextField: onMoveToNextField,
+            onMoveToPreviousField: onMoveToPreviousField,
+            dedupesTrailingLineBreak: true,
+            onFocusChange: { isFocused = $0 }
+        )
+        .frame(maxWidth: .infinity, minHeight: editorHeight, maxHeight: editorHeight)
+        .solidFocusFieldChrome(isFocused: isFocused)
     }
 }
 

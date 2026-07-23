@@ -1583,7 +1583,18 @@ struct InstanceEditorWindowView: View {
 
                     if isPersonSelected {
                         PersonSlotsEditor(appDatabase: appDatabase, draft: draft)
-                        PersonOfficesEditor(appDatabase: appDatabase, draft: draft)
+                        PersonOfficesEditor(
+                            appDatabase: appDatabase,
+                            draft: draft,
+                            focusController: focusController,
+                            onSubmit: submitInstance,
+                            onRequestHyperlink: { textView in
+                                hyperlinkSearchController.present(
+                                    appDatabase: appDatabase,
+                                    from: textView
+                                )
+                            }
+                        )
                     }
 
                     if draft.selectedTypeID != nil {
@@ -2501,7 +2512,11 @@ struct InstanceEditorWindowView: View {
             return
         }
         guard let selectedTypeID = draft.selectedTypeID,
-              let fieldID = focusController.activeFieldID ?? focusController.lastFocusedFieldID else { return }
+              let fieldID = focusController.activeFieldID ?? focusController.lastFocusedFieldID,
+              // The Person office cards' text views register synthetic
+              // (negative) field ids; sticky is a real-field concept and
+              // toggling it here would write a bogus sticky row.
+              draft.fields.contains(where: { $0.id == fieldID }) else { return }
         toggleSticky(typeID: selectedTypeID, fieldID: fieldID)
     }
 
