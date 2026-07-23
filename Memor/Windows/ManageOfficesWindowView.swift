@@ -5,9 +5,10 @@
 //  Standalone window for managing the offices Person instances can hold
 //  ("Edit Offices" on the Person type detail page): searchable list with
 //  per-office holder counts, add/delete (confirmation spells out the cascade
-//  when the office has holders), and a debounced per-office Description
-//  editor. Refreshes live on memorDidChangeDatabase so offices created from
-//  the instance editor's picker (or MCP) appear immediately.
+//  when the office has holders), right-click rename, and a debounced
+//  per-office Description editor. Refreshes live on memorDidChangeDatabase so
+//  offices created from the instance editor's picker (or MCP) appear
+//  immediately.
 //
 
 import AppKit
@@ -37,6 +38,9 @@ struct ManageOfficesWindowView: View {
     @State private var isAddPresented = false
     @State private var newOfficeName = ""
     @State private var addErrorMessage: String?
+    @State private var renameTarget: OfficeSummary?
+    @State private var renameText = ""
+    @State private var renameErrorMessage: String?
     @State private var deleteTarget: OfficeSummary?
     @State private var isDeleteConfirmationPresented = false
 
@@ -226,6 +230,56 @@ struct ManageOfficesWindowView: View {
         .onTapGesture {
             selectedOfficeID = office.id
         }
+        .contextMenu {
+            Button("Rename…") {
+                beginRename(office)
+            }
+        }
+        .popover(item: renamePopoverItem(for: office), arrowEdge: .bottom) { target in
+            renameOfficePopover(target)
+        }
+    }
+
+    /// Item-based presentation, but scoped to ONE row: the popover modifier is
+    /// attached to every row, so a shared `$renameTarget` would present the
+    /// popover from all of them at once. Each row sees the target only when
+    /// it is that row's office.
+    private func renamePopoverItem(for office: OfficeSummary) -> Binding<OfficeSummary?> {
+        Binding(
+            get: { renameTarget?.id == office.id ? renameTarget : nil },
+            set: { newValue in
+                if newValue == nil, renameTarget?.id == office.id {
+                    renameTarget = nil
+                }
+            }
+        )
+    }
+
+    private func renameOfficePopover(_ office: OfficeSummary) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Rename Office")
+                .font(.headline)
+
+            TextField("Office Name", text: $renameText)
+                .solidFocusField()
+                .frame(width: 240)
+                .onSubmit { commitRename() }
+
+            if let renameErrorMessage {
+                Text(renameErrorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") { renameTarget = nil }
+                Button("Rename") { commitRename() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(12)
     }
 
     // MARK: Description
@@ -296,6 +350,29 @@ struct ManageOfficesWindowView: View {
             syncDescriptionDraftFromSelection()
         } catch {
             addErrorMessage = (error as? DatabaseError)?.message ?? "Failed to add office."
+        }
+    }
+
+    private func beginRename(_ office: OfficeSummary) {
+        renameText = office.name
+        renameErrorMessage = nil
+        renameTarget = office
+    }
+
+    private func commitRename() {
+        guard let target = renameTarget else { return }
+        let trimmed = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        do {
+            try appDatabase.renameOffice(officeID: target.id, name: trimmed)
+            NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
+            renameTarget = nil
+            reload()
+            errorMessage = nil
+        } catch {
+            // Blank/duplicate-name messages come from validatedOfficeName;
+            // keep the popover open so the user can correct the name.
+            renameErrorMessage = (error as? DatabaseError)?.message ?? "Failed to rename office."
         }
     }
 
