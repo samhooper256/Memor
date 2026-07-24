@@ -3328,6 +3328,158 @@ struct AppDatabase {
         }
     }
 
+    /// Creates a new user type that copies the source type's description, CSS,
+    /// fields (names, order, primary flag, kinds — same field_index layout, so
+    /// the dynamic table's columns line up), query types (question/answer HTML
+    /// verbatim) and their per-type enablement defaults. Instances are NOT
+    /// copied. Only the name differs, validated like createType.
+    func duplicateType(sourceTypeID: Int64, name: String) throws -> FlashcardType {
+        try dbQueue.write { db in
+            let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedName.isEmpty else {
+                throw DatabaseError(message: "Type name cannot be empty.")
+            }
+            if Self.nameStartsWithDigit(trimmedName) {
+                throw DatabaseError(message: "A type name cannot start with a digit.")
+            }
+            if try String.fetchOne(
+                db,
+                sql: "SELECT name FROM \"type\" WHERE name = ?",
+                arguments: [trimmedName]
+            ) != nil {
+                throw DatabaseError(message: "A type named \"\(trimmedName)\" already exists.")
+            }
+            guard let source = try Row.fetchOne(
+                db,
+                sql: """
+                    SELECT description, css, COALESCE(is_builtin, 0) AS is_builtin
+                    FROM "type"
+                    WHERE id = ?
+                    """,
+                arguments: [sourceTypeID]
+            ) else {
+                throw DatabaseError(message: "Source type not found.")
+            }
+            if ((source["is_builtin"] as Int64?) ?? 0) != 0 {
+                throw DatabaseError(message: "Built-in types cannot be duplicated.")
+            }
+            let description = source["description"] as String? ?? ""
+            let css = source["css"] as String? ?? ""
+
+            try db.execute(
+                sql: """
+                    INSERT INTO "type" (name, description, css)
+                    VALUES (?, ?, ?)
+                    """,
+                arguments: [trimmedName, description, css]
+            )
+            let newTypeID = db.lastInsertedRowID
+
+            let fieldRows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT
+                        name,
+                        field_index,
+                        field_display_index,
+                        COALESCE(is_primary, 0) AS is_primary,
+                        field_type
+                    FROM field
+                    WHERE type_id = ?
+                    ORDER BY field_index
+                    """,
+                arguments: [sourceTypeID]
+            )
+            var columnDefinitions: [String] = []
+            for row in fieldRows {
+                let fieldIndex = row["field_index"] as Int64? ?? 0
+                let fieldType = row["field_type"] as String? ?? FieldKind.text.rawValue
+                try db.execute(
+                    sql: """
+                        INSERT INTO field (type_id, name, field_index, field_display_index, is_primary, field_type)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                    arguments: [
+                        newTypeID,
+                        row["name"] as String? ?? "",
+                        fieldIndex,
+                        row["field_display_index"] as Int64? ?? fieldIndex,
+                        row["is_primary"] as Int64? ?? 0,
+                        fieldType
+                    ]
+                )
+                // Same column shapes as addField: booleans backfill '0'.
+                let columnDefinition = fieldType == FieldKind.boolean.rawValue
+                    ? "TEXT NOT NULL DEFAULT '0'"
+                    : "TEXT DEFAULT ''"
+                columnDefinitions.append("\"field\(fieldIndex)\" \(columnDefinition),")
+            }
+            try db.execute(
+                sql: """
+                    CREATE TABLE "type\(newTypeID)" (
+                        id INTEGER PRIMARY KEY,
+                        \(columnDefinitions.joined(separator: "\n    "))
+                        FOREIGN KEY (id) REFERENCES instance_id_type_id(instance_id) ON DELETE CASCADE
+                    ) STRICT
+                    """
+            )
+
+            let queryTypeRows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT id, name, question_html, answer_html
+                    FROM query_type
+                    WHERE type_id = ?
+                    ORDER BY id
+                    """,
+                arguments: [sourceTypeID]
+            )
+            var newQueryTypeIDsBySourceID: [Int64: Int64] = [:]
+            for row in queryTypeRows {
+                try db.execute(
+                    sql: """
+                        INSERT INTO query_type (type_id, name, question_html, answer_html)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                    arguments: [
+                        newTypeID,
+                        row["name"] as String?,
+                        row["question_html"] as String?,
+                        row["answer_html"] as String?
+                    ]
+                )
+                newQueryTypeIDsBySourceID[row["id"] as Int64? ?? 0] = db.lastInsertedRowID
+            }
+
+            // The per-type "enabled by default on new instances" flags belong
+            // to the query types, so they ride along (mapped to the new ids).
+            let defaultRows = try Row.fetchAll(
+                db,
+                sql: "SELECT query_type_id, is_enabled FROM type_query_default WHERE type_id = ?",
+                arguments: [sourceTypeID]
+            )
+            for row in defaultRows {
+                guard let newQueryTypeID = newQueryTypeIDsBySourceID[row["query_type_id"] as Int64? ?? 0] else { continue }
+                try db.execute(
+                    sql: """
+                        INSERT INTO type_query_default (type_id, query_type_id, is_enabled)
+                        VALUES (?, ?, ?)
+                        """,
+                    arguments: [newTypeID, newQueryTypeID, row["is_enabled"] as Int64? ?? 0]
+                )
+            }
+
+            return FlashcardType(
+                id: newTypeID,
+                name: trimmedName,
+                description: description,
+                css: css,
+                isBuiltin: false,
+                instanceCount: 0
+            )
+        }
+    }
+
     func createQueryType(forTypeID typeID: Int64, name: String) throws -> QueryType {
         try dbQueue.write { db in
             let fieldsForDisplay = try TypeField.fetchAll(

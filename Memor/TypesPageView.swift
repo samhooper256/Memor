@@ -31,6 +31,11 @@ struct TypesPageView: View {
     @FocusState private var isNewTypeNameFocused: Bool
     @FocusState private var isSearchFocused: Bool
 
+    @State private var duplicateSourceType: FlashcardType?
+    @State private var duplicateTypeName = ""
+    @State private var duplicateTypeError: String?
+    @FocusState private var isDuplicateTypeNameFocused: Bool
+
     private var filteredTypes: [FlashcardType] {
         let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return types }
@@ -190,6 +195,18 @@ struct TypesPageView: View {
                                     typePendingDeletion = type
                                 }
                             )
+                            .contextMenu {
+                                if !type.isBuiltin {
+                                    Button("Duplicate Type") {
+                                        duplicateTypeName = ""
+                                        duplicateTypeError = nil
+                                        duplicateSourceType = type
+                                    }
+                                }
+                            }
+                            .popover(item: duplicationBinding(for: type), arrowEdge: .bottom) { source in
+                                duplicateTypePopover(source: source)
+                            }
                             .id(type.id)
                         }
                     }
@@ -209,7 +226,7 @@ struct TypesPageView: View {
         }
         .background {
             ListKeyNavigationHandler(
-                isEnabled: !isAddTypePopoverPresented && typePendingDeletion == nil,
+                isEnabled: !isAddTypePopoverPresented && typePendingDeletion == nil && duplicateSourceType == nil,
                 onMoveUp: { moveHighlight(by: -1) },
                 onMoveDown: { moveHighlight(by: 1) },
                 onOpen: {
@@ -257,6 +274,73 @@ struct TypesPageView: View {
         .frame(width: 320)
         .onAppear {
             isNewTypeNameFocused = true
+        }
+    }
+
+    // Item-based presentation (see PickerPanelState note in CLAUDE.md), scoped
+    // per row: the shared duplicateSourceType maps to a non-nil item only on
+    // the row the menu was opened from, so the popover anchors to that row.
+    private func duplicationBinding(for type: FlashcardType) -> Binding<FlashcardType?> {
+        Binding(
+            get: { duplicateSourceType?.id == type.id ? duplicateSourceType : nil },
+            set: { newValue in
+                if newValue == nil && duplicateSourceType?.id == type.id {
+                    duplicateSourceType = nil
+                }
+            }
+        )
+    }
+
+    private func duplicateTypePopover(source: FlashcardType) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Duplicate \u{201C}\(source.name)\u{201D}")
+                .font(.headline)
+
+            TextField("New Type Name", text: $duplicateTypeName)
+                .solidFocusField()
+                .focused($isDuplicateTypeNameFocused)
+                .onSubmit {
+                    Task { await duplicateType(source: source) }
+                }
+
+            if let duplicateTypeError {
+                Text(duplicateTypeError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    duplicateSourceType = nil
+                }
+                Button("Duplicate") {
+                    Task { await duplicateType(source: source) }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(duplicateTypeName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(16)
+        .frame(width: 320)
+        .onAppear {
+            isDuplicateTypeNameFocused = true
+        }
+    }
+
+    @MainActor
+    private func duplicateType(source: FlashcardType) async {
+        let trimmedName = duplicateTypeName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
+        do {
+            let newType = try appDatabase.duplicateType(sourceTypeID: source.id, name: trimmedName)
+            types = try appDatabase.fetchTypes()
+            duplicateSourceType = nil
+            selectedType = newType
+            errorMessage = nil
+        } catch {
+            duplicateTypeError = (error as? DatabaseError)?.message ?? "Failed to duplicate type."
         }
     }
 
