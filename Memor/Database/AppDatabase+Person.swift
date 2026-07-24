@@ -1319,6 +1319,14 @@ extension AppDatabase {
                 }
             }
 
+            // 6k. Grouping invariant: a child whose biological parents are
+            // exactly the two sides of an existing partnership belongs to that
+            // partnership's shared children list. Child-side slot fills (6b)
+            // and freshly created partnerships (6d) can complete such a pair;
+            // regroup the affected children now so both parents' cards and
+            // Children with answers agree.
+            try Self.reconcileChildGroupings(db: db, changes: &changes)
+
             // 7. Reset affected queries when the per-type option is on.
             let resetFlag = try String.fetchOne(
                 db,
@@ -1506,6 +1514,105 @@ extension AppDatabase {
                 """,
             arguments: [parentID, child.instanceID, child.bareName, nextOrder]
         )
+    }
+
+    /// Enforces the grouping invariant: an instance child whose biological
+    /// Mother and Father are exactly the two sides of an existing partnership
+    /// (instances matched by id, bare names by exact string) belongs to that
+    /// partnership's shared children list, not to the parents' ungrouped
+    /// projections. Child-side saves fill person_parent without knowing about
+    /// the parents' partnerships (the Livia/Drusus bug), and a new partnership
+    /// can complete such a pair for already-listed direct children — so this
+    /// idempotent whole-table pass runs at the end of every save (recording
+    /// change-set entries) and once per launch (healing pre-invariant rows,
+    /// entries discarded). With duplicate stints between the same couple the
+    /// oldest row wins; regrouped children append at the end of the
+    /// partnership's shared order. A no-op on consistent databases.
+    @discardableResult
+    nonisolated static func reconcileChildGroupings(
+        db: Database,
+        changes: inout Set<PersonRelationChange>
+    ) throws -> Int {
+        let candidateIDs = try Int64.fetchAll(
+            db,
+            sql: """
+                SELECT DISTINCT dc.child_id FROM person_direct_child dc
+                WHERE dc.child_id IS NOT NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM person_partnership_child ppc WHERE ppc.child_id = dc.child_id
+                  )
+                ORDER BY dc.child_id
+                """
+        )
+        var regroupedCount = 0
+        for childID in candidateIDs {
+            let slots = try fetchParentSlots(db: db, childID: childID)
+            guard let mother = slots[.mother], let father = slots[.father] else { continue }
+
+            // The bare side of a partnership is always b; two bare parents can
+            // never match one (a_id is NOT NULL).
+            let partnershipID: Int64?
+            switch (mother, father) {
+            case (.instance(let motherID), .instance(let fatherID)):
+                partnershipID = try Int64.fetchOne(
+                    db,
+                    sql: """
+                        SELECT MIN(id) FROM person_partnership
+                        WHERE (a_id = ? AND b_id = ?) OR (a_id = ? AND b_id = ?)
+                        """,
+                    arguments: [motherID, fatherID, fatherID, motherID]
+                )
+            case (.instance(let motherID), .bare(let fatherName)):
+                partnershipID = try Int64.fetchOne(
+                    db,
+                    sql: "SELECT MIN(id) FROM person_partnership WHERE a_id = ? AND b_bare = ?",
+                    arguments: [motherID, fatherName]
+                )
+            case (.bare(let motherName), .instance(let fatherID)):
+                partnershipID = try Int64.fetchOne(
+                    db,
+                    sql: "SELECT MIN(id) FROM person_partnership WHERE a_id = ? AND b_bare = ?",
+                    arguments: [fatherID, motherName]
+                )
+            case (.bare, .bare):
+                partnershipID = nil
+            }
+            guard let partnershipID else { continue }
+
+            let orderIndex = try Int.fetchOne(
+                db,
+                sql: """
+                    SELECT COALESCE(MAX(order_index) + 1, 0) FROM person_partnership_child
+                    WHERE partnership_id = ?
+                    """,
+                arguments: [partnershipID]
+            ) ?? 0
+            try db.execute(
+                sql: """
+                    INSERT INTO person_partnership_child (partnership_id, child_id, child_bare, order_index)
+                    VALUES (?, ?, NULL, ?)
+                    """,
+                arguments: [partnershipID, childID, orderIndex]
+            )
+            let instanceParentIDs = [mother.instanceID, father.instanceID].compactMap { $0 }
+            if !instanceParentIDs.isEmpty {
+                let idList = instanceParentIDs.map(String.init).joined(separator: ", ")
+                try db.execute(
+                    sql: "DELETE FROM person_direct_child WHERE child_id = ? AND parent_id IN (\(idList))",
+                    arguments: [childID]
+                )
+            }
+            // Both parents' Children answers change (the child moves between
+            // sections/order) and the partnership's Children with gains a
+            // line. Full Siblings answers are driven by the parent SLOTS,
+            // which this pass never touches — no entries for them.
+            for parentID in instanceParentIDs {
+                changes.insert(PersonRelationChange(instanceID: parentID, kind: .children))
+                changes.insert(PersonRelationChange(instanceID: parentID, kind: .childrenWith(partnershipID: partnershipID)))
+            }
+            regroupedCount += 1
+        }
+        return regroupedCount
     }
 
     /// Swaps a partnership's partner ref in place (id + children_with SRS

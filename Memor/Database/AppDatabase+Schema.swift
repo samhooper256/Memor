@@ -628,6 +628,18 @@ extension AppDatabase {
             try migratePersonTimePeriodField(db: db)
             try migratePersonDisplayNameField(db: db)
 
+            // Every-launch consistency repair (idempotent, normally a no-op):
+            // group any child whose biological parents form an existing
+            // partnership. Pre-invariant databases hold ungrouped rows from
+            // child-side saves; saves enforce this at write time now, so this
+            // only ever fires on legacy rows. Change entries are discarded —
+            // this is a repair, not a user edit, so it never resets queries.
+            var discardedChanges: Set<PersonRelationChange> = []
+            let regrouped = try reconcileChildGroupings(db: db, changes: &discardedChanges)
+            if regrouped > 0 {
+                print("Grouped \(regrouped) existing child\(regrouped == 1 ? "" : "ren") under their parents' partnerships.")
+            }
+
             if isNewDatabase {
                 try db.execute(
                     sql: """
