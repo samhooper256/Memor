@@ -200,6 +200,12 @@ enum MemorMCPTools {
                 nameContains: try arguments.optionalString("name_contains"),
                 appDatabase: appDatabase
             ))
+        case "set_boundary_color":
+            return try jsonResult(setBoundaryColor(
+                boundaryID: try arguments.requireInt64("boundary_id"),
+                colorRaw: try arguments.requireString("color"),
+                appDatabase: appDatabase
+            ))
 
         // Collections
         case "list_collections":
@@ -1289,7 +1295,24 @@ enum MemorMCPTools {
         if let nameContains, !nameContains.isEmpty {
             boundaries = boundaries.filter { $0.name.localizedCaseInsensitiveContains(nameContains) }
         }
-        return boundaries.map { BoundaryDTO(id: $0.id, name: $0.name) }
+        return boundaries.map { BoundaryDTO(id: $0.id, name: $0.name, color: $0.color.rawValue) }
+    }
+
+    private static func setBoundaryColor(
+        boundaryID: Int64,
+        colorRaw: String,
+        appDatabase: AppDatabase
+    ) throws -> BoundaryDTO {
+        guard let color = BoundaryColor(rawValue: colorRaw) else {
+            throw MemorMCPToolError(message: "`color` must be one of: red, blue.")
+        }
+        guard let boundary = try appDatabase.fetchAllBoundaryOptions()
+            .first(where: { $0.id == boundaryID })?.boundary else {
+            throw MemorMCPToolError(message: "No boundary with id \(boundaryID). Use list_boundary_sets and list_boundaries to discover boundaries.")
+        }
+        try appDatabase.setBoundaryColor(boundaryID: boundaryID, color: color)
+        postDatabaseChange()
+        return BoundaryDTO(id: boundary.id, name: boundary.name, color: color.rawValue)
     }
 
     // MARK: - Collection tools
@@ -2225,7 +2248,7 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "list_boundaries",
-                description: "List the boundaries in a boundary set (id + name). Optional name_contains filters case-insensitively, which is recommended for large sets.",
+                description: "List the boundaries in a boundary set (id + name + border color). Optional name_contains filters case-insensitively, which is recommended for large sets.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -2233,6 +2256,18 @@ enum MemorMCPTools {
                         "name_contains": stringValue
                     ]),
                     "required": .array([.string("boundary_set_id")])
+                ])
+            ),
+            Tool(
+                name: "set_boundary_color",
+                description: "Set a boundary's border color: \"red\" (the default) or \"blue\". The color is a property of the boundary itself, so it changes on every PointMap and BoundaryMap instance the boundary appears on; it renders wherever the boundary is not the current query's purple highlight.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "boundary_id": int64Number,
+                        "color": stringValue
+                    ]),
+                    "required": .array([.string("boundary_id"), .string("color")])
                 ])
             ),
 
@@ -2572,6 +2607,7 @@ private struct BoundarySetDTO: Encodable {
 private struct BoundaryDTO: Encodable {
     let id: Int64
     let name: String
+    let color: String
 }
 
 private struct RenderedPointDTO: Encodable {
