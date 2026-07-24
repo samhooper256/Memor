@@ -161,6 +161,7 @@ extension AppDatabase {
                         b.id AS boundary_id,
                         b.boundary_set_id AS boundary_set_id,
                         b.name AS boundary_name,
+                        b.color AS boundary_color,
                         bs.name AS set_name,
                         bs.is_builtin AS is_builtin
                     FROM boundary AS b
@@ -173,7 +174,8 @@ extension AppDatabase {
                     boundary: Boundary(
                         id: row["boundary_id"] as Int64? ?? 0,
                         boundarySetID: row["boundary_set_id"] as Int64? ?? 0,
-                        name: row["boundary_name"] as String? ?? ""
+                        name: row["boundary_name"] as String? ?? "",
+                        color: BoundaryColor(rawValue: row["boundary_color"] as String? ?? "") ?? .red
                     ),
                     setName: row["set_name"] as String? ?? "",
                     isBuiltin: ((row["is_builtin"] as Int64?) ?? 0) != 0
@@ -214,7 +216,7 @@ extension AppDatabase {
             let rows = try Row.fetchAll(
                 db,
                 sql: """
-                    SELECT id, boundary_set_id, name
+                    SELECT id, boundary_set_id, name, color
                     FROM boundary
                     WHERE boundary_set_id = ?
                     ORDER BY name COLLATE NOCASE
@@ -225,7 +227,8 @@ extension AppDatabase {
                 Boundary(
                     id: row["id"] as Int64? ?? 0,
                     boundarySetID: row["boundary_set_id"] as Int64? ?? 0,
-                    name: row["name"] as String? ?? ""
+                    name: row["name"] as String? ?? "",
+                    color: BoundaryColor(rawValue: row["color"] as String? ?? "") ?? .red
                 )
             }
         }
@@ -270,7 +273,7 @@ extension AppDatabase {
         let rows = try Row.fetchAll(
             db,
             sql: """
-                SELECT b.id AS id, b.name AS name, b.geometry_json AS geometry_json
+                SELECT b.id AS id, b.name AS name, b.geometry_json AS geometry_json, b.color AS color
                 FROM pointmap_boundary AS pb
                 JOIN boundary AS b ON b.id = pb.boundary_id
                 WHERE pb.instance_id = ?
@@ -284,7 +287,8 @@ extension AppDatabase {
             return BoundaryGeometry(
                 id: row["id"] as Int64? ?? 0,
                 name: row["name"] as String? ?? "",
-                geometry: parsed
+                geometry: parsed,
+                color: BoundaryColor(rawValue: row["color"] as String? ?? "") ?? .red
             )
         }
     }
@@ -307,6 +311,15 @@ extension AppDatabase {
     }
 
     // MARK: - Writes
+
+    func setBoundaryColor(boundaryID: Int64, color: BoundaryColor) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE boundary SET color = ? WHERE id = ?",
+                arguments: [color.rawValue, boundaryID]
+            )
+        }
+    }
 
     func setBoundaries(forInstance instanceID: Int64, boundaryIDs: [Int64]) throws {
         try dbQueue.write { db in

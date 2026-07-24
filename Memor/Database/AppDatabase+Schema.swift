@@ -227,9 +227,18 @@ extension AppDatabase {
                     id INTEGER PRIMARY KEY,
                     boundary_set_id INTEGER NOT NULL REFERENCES boundary_set(id) ON DELETE CASCADE,
                     name TEXT NOT NULL,
-                    geometry_json BLOB NOT NULL
+                    geometry_json BLOB NOT NULL,
+                    color TEXT NOT NULL DEFAULT 'red'
                 ) STRICT
                 """)
+
+            // The per-boundary border color ('red'/'blue', a closed Swift enum —
+            // BoundaryColor) was added July 2026; self-apply to older databases.
+            let boundaryColumns = try Row.fetchAll(db, sql: "PRAGMA table_info(boundary)")
+                .map { $0["name"] as String }
+            if !boundaryColumns.contains("color") {
+                try db.execute(sql: "ALTER TABLE boundary ADD COLUMN color TEXT NOT NULL DEFAULT 'red'")
+            }
 
             try db.execute(sql: """
                 CREATE INDEX IF NOT EXISTS idx_boundary_set_id

@@ -639,7 +639,7 @@ private struct PointMapMKMapView: NSViewRepresentable {
     }
 
     private func applyOverlays(to mapView: MKMapView, coordinator: Coordinator) {
-        let newSignature = payload.boundaries.map { $0.id }
+        let newSignature = payload.boundaries.map { "\($0.id):\($0.color.rawValue)" }
         guard newSignature != coordinator.boundarySignature else { return }
         coordinator.boundarySignature = newSignature
 
@@ -649,6 +649,9 @@ private struct PointMapMKMapView: NSViewRepresentable {
                 guard let outer = ring.first, outer.count >= 3 else { continue }
                 let coords = outer.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
                 let polygon = MKPolygon(coordinates: coords, count: coords.count)
+                // The renderer callback only sees the polygon, so carry the
+                // boundary's color on the (otherwise unused) title.
+                polygon.title = geo.color.rawValue
                 mapView.addOverlay(polygon)
             }
         }
@@ -656,7 +659,7 @@ private struct PointMapMKMapView: NSViewRepresentable {
 
     final class Coordinator: NSObject, MKMapViewDelegate {
         var lastPointID: Int64 = .min
-        var boundarySignature: [Int64] = []
+        var boundarySignature: [String] = []
         weak var mapView: MKMapView?
         var onHoverChange: ((PointMapQueryView.HoverInfo?) -> Void)?
         var onAnswerSelected: ((Int64) -> Void)?
@@ -736,7 +739,8 @@ private struct PointMapMKMapView: NSViewRepresentable {
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let polygon = overlay as? MKPolygon {
                 let renderer = MKPolygonRenderer(polygon: polygon)
-                renderer.strokeColor = .red
+                let color = BoundaryColor(rawValue: polygon.title ?? "") ?? .red
+                renderer.strokeColor = color.nsColor
                 renderer.lineWidth = 1.5
                 renderer.fillColor = .clear
                 return renderer

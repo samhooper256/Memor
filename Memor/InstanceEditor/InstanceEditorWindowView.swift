@@ -386,7 +386,7 @@ struct InstanceEditorWindowView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
             pointMapListPane
-                .frame(width: 260)
+                .frame(width: 320)
                 .frame(maxHeight: .infinity, alignment: .topLeading)
         }
         .background {
@@ -421,6 +421,9 @@ struct InstanceEditorWindowView: View {
                     onRemove: { id in
                         draft.boundaryPickerState.selectedIDs.remove(id)
                         refreshBoundaryGeometries()
+                    },
+                    onSetColor: { id, color in
+                        applyBoundaryColorChange(boundaryID: id, color: color)
                     },
                     onAddTapped: { isBoundaryPickerPresented = true },
                     addButtonLabel: "Add"
@@ -467,7 +470,7 @@ struct InstanceEditorWindowView: View {
                                 if let outer = polygonRings.first, outer.count >= 3 {
                                     MapPolygon(coordinates: outer.map(\.clLocation))
                                         .foregroundStyle(.clear)
-                                        .stroke(Color.red, lineWidth: 1.5)
+                                        .stroke(geo.color.swiftUIColor, lineWidth: 1.5)
                                 }
                             }
                         }
@@ -776,11 +779,30 @@ struct InstanceEditorWindowView: View {
                 geometries.append(BoundaryGeometry(
                     id: option.id,
                     name: option.boundary.name,
-                    geometry: geo
+                    geometry: geo,
+                    color: option.boundary.color
                 ))
             }
         }
         draft.pointMapBoundaryGeometries = geometries
+    }
+
+    // Writes the boundary's border color to the DB immediately (a boundary's
+    // color is a property of the boundary itself, shared across every instance
+    // it appears on — not part of this editor's draft), then refreshes both
+    // map editors' color sources.
+    private func applyBoundaryColorChange(boundaryID: Int64, color: BoundaryColor) {
+        do {
+            try appDatabase.setBoundaryColor(boundaryID: boundaryID, color: color)
+        } catch {
+            showToast(message: "Failed to change boundary color.", style: .error)
+            return
+        }
+        draft.boundaryPickerState.reload(appDatabase: appDatabase)
+        draft.boundaryMapPickerState.reload(appDatabase: appDatabase)
+        refreshBoundaryGeometries()
+        refreshBoundaryMapGeometries()
+        NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
     }
 
     private func mapContextMenuActions(at localPoint: CGPoint, proxy: MapProxy) -> [MapMenuAction] {
@@ -1121,7 +1143,7 @@ struct InstanceEditorWindowView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
             boundaryMapListPane
-                .frame(width: 260)
+                .frame(width: 320)
                 .frame(maxHeight: .infinity, alignment: .topLeading)
         }
         .background {
@@ -1153,11 +1175,11 @@ struct InstanceEditorWindowView: View {
                     Map(position: $draft.boundaryMapCameraPosition) {
                         ForEach(boundaryMapDisplayEntries, id: \.id) { entry in
                             if let geo = boundaryMapGeometriesByBoundaryID[entry.boundaryID] {
-                                ForEach(Array(geo.rings.enumerated()), id: \.offset) { _, polygonRings in
+                                ForEach(Array(geo.geometry.rings.enumerated()), id: \.offset) { _, polygonRings in
                                     if let outer = polygonRings.first, outer.count >= 3 {
                                         MapPolygon(coordinates: outer.map(\.clLocation))
                                             .foregroundStyle(.clear)
-                                            .stroke(Color.red, lineWidth: 1.5)
+                                            .stroke(geo.color.swiftUIColor, lineWidth: 1.5)
                                     }
                                 }
                             }
@@ -1238,6 +1260,10 @@ struct InstanceEditorWindowView: View {
                         ForEach(boundaryMapDisplayEntries, id: \.id) { entry in
                             BoundaryMapEntryRow(
                                 name: entry.name,
+                                color: boundaryMapColorsByBoundaryID[entry.boundaryID] ?? .red,
+                                onSetColor: { color in
+                                    applyBoundaryColorChange(boundaryID: entry.boundaryID, color: color)
+                                },
                                 forwardEnabled: boundaryMapForwardBinding(for: entry.ref),
                                 reverseEnabled: boundaryMapReverseBinding(for: entry.ref)
                             )
@@ -1247,6 +1273,10 @@ struct InstanceEditorWindowView: View {
                     .listStyle(.inset)
                     .contextMenu(forSelectionType: BoundaryMapEntryRef.self) { refs in
                         if !refs.isEmpty {
+                            Menu("Change Color") {
+                                Button("Red") { setBoundaryMapEntriesColor(refs, color: .red) }
+                                Button("Blue") { setBoundaryMapEntriesColor(refs, color: .blue) }
+                            }
                             Button("Delete", role: .destructive) {
                                 requestDeleteBoundaryMapEntries(refs)
                             }
@@ -1334,12 +1364,34 @@ struct InstanceEditorWindowView: View {
         }
     }
 
-    private var boundaryMapGeometriesByBoundaryID: [Int64: ParsedMultiPolygon] {
-        var map: [Int64: ParsedMultiPolygon] = [:]
+    private var boundaryMapGeometriesByBoundaryID: [Int64: BoundaryGeometry] {
+        var map: [Int64: BoundaryGeometry] = [:]
         for geo in draft.boundaryMapGeometries {
-            map[geo.id] = geo.geometry
+            map[geo.id] = geo
         }
         return map
+    }
+
+    // Colors come from the picker's option list (always reloaded on editor
+    // load/reset), not the attachment drafts — a boundary's color is shared
+    // app-wide, not per-instance state.
+    private var boundaryMapColorsByBoundaryID: [Int64: BoundaryColor] {
+        var map: [Int64: BoundaryColor] = [:]
+        for option in draft.boundaryMapPickerState.options {
+            map[option.id] = option.boundary.color
+        }
+        return map
+    }
+
+    private func setBoundaryMapEntriesColor(_ refs: Set<BoundaryMapEntryRef>, color: BoundaryColor) {
+        let boundaryIDs = Set(
+            boundaryMapDisplayEntries
+                .filter { refs.contains($0.ref) }
+                .map(\.boundaryID)
+        )
+        for boundaryID in boundaryIDs {
+            applyBoundaryColorChange(boundaryID: boundaryID, color: color)
+        }
     }
 
     private func boundaryMapSyncExplicitFieldsFromRegion() {
@@ -1468,7 +1520,8 @@ struct InstanceEditorWindowView: View {
                 geometries.append(BoundaryGeometry(
                     id: option.id,
                     name: option.boundary.name,
-                    geometry: geo
+                    geometry: geo,
+                    color: option.boundary.color
                 ))
             }
         }
@@ -1479,7 +1532,7 @@ struct InstanceEditorWindowView: View {
         guard let coord = proxy.convert(localPoint, from: .local) else { return [] }
         for entry in boundaryMapDisplayEntries.reversed() {
             guard let geometry = boundaryMapGeometriesByBoundaryID[entry.boundaryID] else { continue }
-            if boundaryContains(coordinate: coord, geometry: geometry) {
+            if boundaryContains(coordinate: coord, geometry: geometry.geometry) {
                 let ref = entry.ref
                 return [MapMenuAction(title: "Delete") { removeBoundaryMapEntry(ref) }]
             }

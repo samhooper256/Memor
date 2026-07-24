@@ -6047,7 +6047,7 @@ struct AppDatabase {
         let rows = try Row.fetchAll(
             db,
             sql: """
-                SELECT b.id AS id, b.name AS name, b.geometry_json AS geometry_json
+                SELECT b.id AS id, b.name AS name, b.geometry_json AS geometry_json, b.color AS color
                 FROM boundarymap_attachment AS bq
                 JOIN boundary AS b ON b.id = bq.boundary_id
                 WHERE bq.instance_id = ?
@@ -6061,7 +6061,8 @@ struct AppDatabase {
             return BoundaryGeometry(
                 id: row["id"] as Int64? ?? 0,
                 name: row["name"] as String? ?? "",
-                geometry: parsed
+                geometry: parsed,
+                color: BoundaryColor(rawValue: row["color"] as String? ?? "") ?? .red
             )
         }
     }

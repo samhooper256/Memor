@@ -57,6 +57,7 @@ Memor/
     ShortcutLabel.swift             Renders "Title (⌘R)" labels that update live
   Shared/
     SRS.swift                       Starter delays, interval formatting, color/bucket helpers
+    BoundaryColorViews.swift        Per-boundary border color UI: color mappings, indicator circle, "Color:" picker popover, right-click catcher
     FlowLayout.swift                Wrapping chip layout (used by the Person editor)
     ToastView.swift                 ToastMessage, ToastStyle, ToastView (used by InstanceEditor)
     WindowKeyCommandHandler.swift   Background NSViewRepresentable wiring ⌘Return/⌘S/⌘B/⌘I/⌘O/⌘J/⌘L/⌘T/Esc

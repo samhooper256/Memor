@@ -4,7 +4,8 @@
 //
 //  Map-based boundary-quiz query rendering. In a forward query the current
 //  boundary is filled translucent purple with a purple border (it is the
-//  prompt); other attached boundaries are red stroke-only. In a reverse query
+//  prompt); other attached boundaries are stroke-only in their own border
+//  color (red by default, per-boundary blue). In a reverse query
 //  the boundary's name is the prompt and the user clicks the matching boundary
 //  — hovered boundaries tint translucent purple with a pointer cursor until
 //  the answer is revealed.
@@ -165,8 +166,8 @@ private struct BoundaryMapMKMapView: NSViewRepresentable {
     }
 
     private func applyOverlays(to mapView: MKMapView, coordinator: Coordinator) {
-        let signature = visibleGeometries.map { $0.id }
-            + [payload.boundaryID, payload.showHighlight ? 1 : 0, payload.isReverse ? 1 : 0, revealName ? 1 : 0]
+        let signature = visibleGeometries.map { "\($0.id):\($0.color.rawValue)" }
+            + [String(payload.boundaryID), payload.showHighlight ? "1" : "0", payload.isReverse ? "1" : "0", revealName ? "1" : "0"]
         guard signature != coordinator.overlaySignature else { return }
         coordinator.overlaySignature = signature
 
@@ -190,7 +191,7 @@ private struct BoundaryMapMKMapView: NSViewRepresentable {
         var isReverse: Bool = false
         var revealName: Bool = false
         var reverseInteractive: Bool = false
-        var overlaySignature: [Int64] = []
+        var overlaySignature: [String] = []
         var geometries: [BoundaryGeometry] = []
         var hoveredBoundaryID: Int64?
         var onAnswerSelected: (() -> Void)?
@@ -198,7 +199,9 @@ private struct BoundaryMapMKMapView: NSViewRepresentable {
         weak var finderOverlay: BoundaryFinderOverlayView?
         /// Last APPLIED filled-ness per live renderer, so refreshOverlayFills
         /// can skip renderers whose state is unchanged. Both colors are a pure
-        /// function of filled-ness, so this Bool is the complete color state.
+        /// function of filled-ness plus the boundary's stored border color —
+        /// and that color is part of the overlay signature, so it is fixed for
+        /// a renderer's lifetime and this Bool stays the complete color state.
         /// Cleared on overlay rebuild (recycled allocations must not alias
         /// stale entries); repopulated at renderer creation.
         var appliedFillState: [ObjectIdentifier: Bool] = [:]
@@ -209,6 +212,12 @@ private struct BoundaryMapMKMapView: NSViewRepresentable {
             if answerVisible && boundaryID == currentBoundaryID { return true }
             if reverseInteractive && boundaryID == hoveredBoundaryID { return true }
             return false
+        }
+
+        // The boundary's stored border color, used when the boundary is not
+        // filled (i.e. it is not the prompt/hover highlight).
+        private func strokeColor(for boundaryID: Int64) -> NSColor {
+            (geometries.first { $0.id == boundaryID }?.color ?? .red).nsColor
         }
 
         func boundaryID(at coordinate: CLLocationCoordinate2D) -> Int64? {
@@ -243,7 +252,7 @@ private struct BoundaryMapMKMapView: NSViewRepresentable {
                 renderer.fillColor = filled
                     ? NSColor.systemPurple.withAlphaComponent(0.35)
                     : .clear
-                renderer.strokeColor = filled ? .systemPurple : .red
+                renderer.strokeColor = filled ? .systemPurple : strokeColor(for: polygonBoundaryID)
                 renderer.setNeedsDisplay()
             }
         }
@@ -263,7 +272,7 @@ private struct BoundaryMapMKMapView: NSViewRepresentable {
                 let renderer = MKPolygonRenderer(polygon: polygon)
                 let polygonBoundaryID = Int64(polygon.title ?? "") ?? 0
                 let filled = isFilled(boundaryID: polygonBoundaryID)
-                renderer.strokeColor = filled ? .systemPurple : .red
+                renderer.strokeColor = filled ? .systemPurple : strokeColor(for: polygonBoundaryID)
                 renderer.lineWidth = 1.5
                 renderer.fillColor = filled
                     ? NSColor.systemPurple.withAlphaComponent(0.35)

@@ -49,11 +49,29 @@ enum BoundaryMapEntryRef: Hashable, Identifiable {
 
 struct BoundaryMapEntryRow: View {
     let name: String
+    let color: BoundaryColor
+    let onSetColor: (BoundaryColor) -> Void
     @Binding var forwardEnabled: Bool
     @Binding var reverseEnabled: Bool
 
+    @State private var isColorPopoverPresented = false
+
     var body: some View {
         HStack(spacing: 6) {
+            Button {
+                isColorPopoverPresented = true
+            } label: {
+                BoundaryColorCircle(color: color)
+            }
+            .buttonStyle(.plain)
+            .help("Change border color")
+            .popover(isPresented: $isColorPopoverPresented, arrowEdge: .bottom) {
+                BoundaryColorPickerPopoverView(
+                    currentColor: color,
+                    onSelect: onSetColor
+                )
+            }
+
             Text(name.isEmpty ? "(unnamed)" : name)
                 .foregroundStyle(name.isEmpty ? .secondary : .primary)
                 .frame(maxWidth: .infinity, alignment: .leading)

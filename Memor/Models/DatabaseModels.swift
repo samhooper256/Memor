@@ -413,10 +413,27 @@ struct BoundarySet: Identifiable, Hashable {
     let boundaryCount: Int
 }
 
+// The border color a boundary renders with when it is not the current query's
+// highlighted boundary. A property of the boundary itself (stored on the
+// `boundary` row), so the same boundary shows the same color on every PointMap
+// and BoundaryMap instance it appears on.
+enum BoundaryColor: String, Codable, Hashable, CaseIterable {
+    case red
+    case blue
+
+    var displayName: String {
+        switch self {
+        case .red: return "Red"
+        case .blue: return "Blue"
+        }
+    }
+}
+
 struct Boundary: Identifiable, Hashable {
     let id: Int64
     let boundarySetID: Int64
     let name: String
+    let color: BoundaryColor
 }
 
 struct BoundaryWithSet: Identifiable, Hashable {
@@ -445,6 +462,7 @@ struct BoundaryGeometry: Identifiable, Hashable {
     let id: Int64
     let name: String
     let geometry: ParsedMultiPolygon
+    let color: BoundaryColor
 }
 
 struct StudyQuery: Identifiable, Hashable {

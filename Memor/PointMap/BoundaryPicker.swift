@@ -283,6 +283,7 @@ private struct BoundaryPickerRow: View {
 struct SelectedBoundariesStrip: View {
     let boundaries: [BoundaryWithSet]
     let onRemove: (Int64) -> Void
+    let onSetColor: (Int64, BoundaryColor) -> Void
     let onAddTapped: () -> Void
     let addButtonLabel: String
 
@@ -290,24 +291,10 @@ struct SelectedBoundariesStrip: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 ForEach(boundaries) { item in
-                    HStack(spacing: 4) {
-                        Text(item.boundary.name)
-                            .font(.caption)
-                            .lineLimit(1)
-                        Button {
-                            onRemove(item.id)
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(Color.secondary.opacity(0.15))
+                    SelectedBoundaryChip(
+                        item: item,
+                        onRemove: { onRemove(item.id) },
+                        onSetColor: { onSetColor(item.id, $0) }
                     )
                 }
 
@@ -319,6 +306,48 @@ struct SelectedBoundariesStrip: View {
                 .controlSize(.small)
             }
             .padding(.vertical, 2)
+        }
+    }
+}
+
+private struct SelectedBoundaryChip: View {
+    let item: BoundaryWithSet
+    let onRemove: () -> Void
+    let onSetColor: (BoundaryColor) -> Void
+
+    @State private var isColorPopoverPresented = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            BoundaryColorCircle(color: item.boundary.color)
+            Text(item.boundary.name)
+                .font(.caption)
+                .lineLimit(1)
+            Button {
+                onRemove()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.secondary.opacity(0.15))
+        )
+        .overlay {
+            RightClickCatcher {
+                isColorPopoverPresented = true
+            }
+        }
+        .popover(isPresented: $isColorPopoverPresented, arrowEdge: .bottom) {
+            BoundaryColorPickerPopoverView(
+                currentColor: item.boundary.color,
+                onSelect: onSetColor
+            )
         }
     }
 }
