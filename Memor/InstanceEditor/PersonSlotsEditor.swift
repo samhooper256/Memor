@@ -268,10 +268,10 @@ struct PersonSlotsEditor: View {
             }
 
             if !entry.children.isEmpty {
-                FlowLayout(spacing: 6) {
+                VStack(alignment: .leading, spacing: 4) {
                     ForEach(entry.children) { child in
                         let childIndex = entry.children.firstIndex(where: { $0.id == child.id }) ?? 0
-                        HStack(spacing: 4) {
+                        HStack(spacing: 8) {
                             PersonReorderButtons(
                                 canMoveUp: childIndex > 0,
                                 canMoveDown: childIndex < entry.children.count - 1,
@@ -341,10 +341,10 @@ struct PersonSlotsEditor: View {
                         Text("with \(chipLabel(for: partner.partner))")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        FlowLayout(spacing: 6) {
+                        VStack(alignment: .leading, spacing: 4) {
                             ForEach(partner.children) { child in
                                 let childIndex = partner.children.firstIndex(where: { $0.id == child.id }) ?? 0
-                                HStack(spacing: 4) {
+                                HStack(spacing: 8) {
                                     PersonReorderButtons(
                                         canMoveUp: childIndex > 0,
                                         canMoveDown: childIndex < partner.children.count - 1,
