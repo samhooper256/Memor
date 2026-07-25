@@ -188,6 +188,9 @@ nonisolated struct PersonEditorData {
     let displayNamesByInstanceID: [Int64: String]
     /// "Male"/"Female" for every referenced instance (same-sex child blocking).
     let sexesByInstanceID: [Int64: String]
+    /// TimePeriod values for every referenced instance (shown beside
+    /// grouped-children chips). Empty when the field is missing.
+    let timePeriodsByInstanceID: [Int64: String]
     /// Office names for every office referenced by the relations (chips,
     /// checklist titles).
     let officeNamesByID: [Int64: String]

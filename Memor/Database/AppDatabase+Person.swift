@@ -29,6 +29,9 @@ nonisolated struct PersonCandidate: Identifiable, Hashable {
     /// chips/labels store for this person on selection. Picker ROWS keep
     /// showing displayValue (the searched field), so the match stays visible.
     let preferredName: String
+    /// The TimePeriod field's value ("" when the field is missing or blank);
+    /// shown beside grouped-children chips in the editor.
+    let timePeriod: String
 }
 
 extension AppDatabase {
@@ -196,6 +199,17 @@ extension AppDatabase {
         return index
     }
 
+    /// The Person type's TimePeriod field index, or nil if the field doesn't
+    /// exist (it is protected, but stay defensive — callers degrade to "no
+    /// time period shown").
+    private nonisolated static func personTimePeriodFieldIndex(db: Database, personTypeID: Int64) throws -> Int? {
+        try Int.fetchOne(
+            db,
+            sql: "SELECT field_index FROM field WHERE type_id = ? AND name = 'TimePeriod'",
+            arguments: [personTypeID]
+        )
+    }
+
     nonisolated static func fetchPersonSex(db: Database, personTypeID: Int64, instanceID: Int64) throws -> String {
         let sexIndex = try personSexFieldIndex(db: db, personTypeID: personTypeID)
         let raw = try String.fetchOne(
@@ -320,12 +334,21 @@ extension AppDatabase {
 
             var displayNames: [Int64: String] = [:]
             var sexes: [Int64: String] = [:]
+            var timePeriods: [Int64: String] = [:]
+            let timePeriodIndex = try Self.personTimePeriodFieldIndex(db: db, personTypeID: personTypeID)
             for id in referencedIDs {
                 // DisplayName-preferred, like the computed query HTML — the
                 // editor's chips/labels and the MCP relation display_values
                 // both come from this map.
                 displayNames[id] = try Self.personLinkDisplayValue(db: db, instanceID: id)
                 sexes[id] = try Self.fetchPersonSex(db: db, personTypeID: personTypeID, instanceID: id)
+                if let timePeriodIndex {
+                    timePeriods[id] = try String.fetchOne(
+                        db,
+                        sql: "SELECT COALESCE(\"field\(timePeriodIndex)\", '') FROM \"type\(personTypeID)\" WHERE id = ?",
+                        arguments: [id]
+                    ) ?? ""
+                }
             }
 
             var builtinQueries: [PersonBuiltinQueryInfo] = []
@@ -383,6 +406,7 @@ extension AppDatabase {
                 relations: relations,
                 displayNamesByInstanceID: displayNames,
                 sexesByInstanceID: sexes,
+                timePeriodsByInstanceID: timePeriods,
                 officeNamesByID: officeNamesByID,
                 builtinQueries: builtinQueries
             )
@@ -2081,6 +2105,8 @@ extension AppDatabase {
                 arguments: [personTypeID]
             )
             let displayNameSelect = displayNameIndex.map { "COALESCE(\"field\($0)\", '')" } ?? "''"
+            let timePeriodSelect = (try Self.personTimePeriodFieldIndex(db: db, personTypeID: personTypeID))
+                .map { "COALESCE(\"field\($0)\", '')" } ?? "''"
 
             let rows = try Row.fetchAll(
                 db,
@@ -2088,7 +2114,8 @@ extension AppDatabase {
                     SELECT id,
                            COALESCE(\(displayColumn), '') AS displayValue,
                            COALESCE("field\(sexIndex)", 'Male') AS sex,
-                           \(displayNameSelect) AS displayName
+                           \(displayNameSelect) AS displayName,
+                           \(timePeriodSelect) AS timePeriod
                     FROM "type\(personTypeID)"
                     \(whereClause)
                     ORDER BY \(displayColumn) COLLATE NOCASE, id
@@ -2104,7 +2131,8 @@ extension AppDatabase {
                     id: row["id"],
                     displayValue: displayValue,
                     sex: row["sex"],
-                    preferredName: displayName.isEmpty ? displayValue : displayName
+                    preferredName: displayName.isEmpty ? displayValue : displayName,
+                    timePeriod: row["timePeriod"] as String
                 )
             }
         }

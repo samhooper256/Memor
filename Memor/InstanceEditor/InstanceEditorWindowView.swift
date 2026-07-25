@@ -2990,6 +2990,7 @@ struct InstanceEditorWindowView: View {
         )
         draft.personDisplayNamesByID = data.displayNamesByInstanceID
         draft.personSexesByID = data.sexesByInstanceID
+        draft.personTimePeriodsByID = data.timePeriodsByInstanceID
     }
 
     @MainActor

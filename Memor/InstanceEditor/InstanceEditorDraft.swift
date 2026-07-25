@@ -112,6 +112,9 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
     /// same-sex child blocking). Grows as the picker adds people.
     @Published var personDisplayNamesByID: [Int64: String] = [:]
     @Published var personSexesByID: [Int64: String] = [:]
+    /// TimePeriod values for referenced instances (shown beside grouped-children
+    /// chips). Grows as the picker adds people, like the maps above.
+    @Published var personTimePeriodsByID: [Int64: String] = [:]
 
     /// The draft's current Sex value ("Male" unless explicitly set to "Female").
     var personSexValue: String {
@@ -138,6 +141,7 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
         personQueryIntervalsByKind = [:]
         personDisplayNamesByID = [:]
         personSexesByID = [:]
+        personTimePeriodsByID = [:]
     }
 
     /// The relations payload for savePersonInstance.

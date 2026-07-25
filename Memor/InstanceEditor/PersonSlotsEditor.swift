@@ -45,6 +45,15 @@ struct PersonSlotsEditor: View {
     private func rememberCandidate(_ candidate: PersonCandidate) {
         draft.personDisplayNamesByID[candidate.id] = candidate.preferredName
         draft.personSexesByID[candidate.id] = candidate.sex
+        draft.personTimePeriodsByID[candidate.id] = candidate.timePeriod
+    }
+
+    /// The TimePeriod shown beside a grouped child's chip; nil (nothing shown)
+    /// for bare names and instances with a blank/missing TimePeriod.
+    private func timePeriodLabel(for ref: PersonRef) -> String? {
+        guard let id = ref.instanceID else { return nil }
+        let value = (draft.personTimePeriodsByID[id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
     }
 
     /// Instance ids already used anywhere in the slots (pickers grey them out).
@@ -285,6 +294,12 @@ struct PersonSlotsEditor: View {
                                     partner.wrappedValue.children.removeAll { $0.id == child.id }
                                 }
                             )
+                            if let timePeriod = timePeriodLabel(for: child.child) {
+                                Text(formatFieldDisplayValue(timePeriod))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
                         }
                     }
                 }
@@ -362,6 +377,12 @@ struct PersonSlotsEditor: View {
                                             partnerBinding(id: partner.id).wrappedValue.children.removeAll { $0.id == child.id }
                                         }
                                     )
+                                    if let timePeriod = timePeriodLabel(for: child.child) {
+                                        Text(formatFieldDisplayValue(timePeriod))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
                                 }
                             }
                         }
