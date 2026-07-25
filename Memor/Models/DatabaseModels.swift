@@ -397,6 +397,10 @@ struct BoundaryMapStudyPayload: Hashable {
     let boundaryName: String
     let instanceTitle: String
     let geometries: [BoundaryGeometry]
+    /// Boundaries with at least one enabled query (forward or reverse). Only
+    /// these are clickable candidates during a reverse question — query-less
+    /// boundaries behave like empty map (no hover tint, clicks pan).
+    var queryableBoundaryIDs: Set<Int64> = []
     let defaultCenterLat: Double
     let defaultCenterLng: Double
     let defaultZoom: Double

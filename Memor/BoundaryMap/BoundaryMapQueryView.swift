@@ -137,6 +137,7 @@ private struct BoundaryMapMKMapView: NSViewRepresentable {
         coordinator.revealName = revealName
         coordinator.reverseInteractive = reverseInteractive
         coordinator.geometries = payload.geometries
+        coordinator.queryableBoundaryIDs = payload.queryableBoundaryIDs
         coordinator.onAnswerSelected = onAnswerSelected
         if !reverseInteractive {
             coordinator.hoveredBoundaryID = nil
@@ -193,6 +194,7 @@ private struct BoundaryMapMKMapView: NSViewRepresentable {
         var reverseInteractive: Bool = false
         var overlaySignature: [String] = []
         var geometries: [BoundaryGeometry] = []
+        var queryableBoundaryIDs: Set<Int64> = []
         var hoveredBoundaryID: Int64?
         var onAnswerSelected: (() -> Void)?
         weak var mapView: MKMapView?
@@ -222,6 +224,10 @@ private struct BoundaryMapMKMapView: NSViewRepresentable {
 
         func boundaryID(at coordinate: CLLocationCoordinate2D) -> Int64? {
             for geo in geometries where boundaryContains(coordinate: coordinate, geometry: geo.geometry) {
+                // Boundaries with no enabled queries aren't valid reverse
+                // answers — skip them (no hover tint/pointer; a click pans the
+                // map), letting an overlapping queryable boundary still match.
+                guard queryableBoundaryIDs.contains(geo.id) else { continue }
                 return geo.id
             }
             return nil

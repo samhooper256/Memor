@@ -6245,6 +6245,25 @@ struct AppDatabase {
         }
     }
 
+    // Boundaries on the instance with at least one enabled query direction (a
+    // boundarymap_query row exists only for an enabled direction). Feeds the
+    // study payload's reverse-click candidate set.
+    private static func fetchBoundaryMapQueryableBoundaryIDs(
+        db: Database,
+        instanceID: Int64
+    ) throws -> Set<Int64> {
+        Set(try Int64.fetchAll(
+            db,
+            sql: """
+                SELECT DISTINCT ba.boundary_id
+                FROM boundarymap_attachment AS ba
+                JOIN boundarymap_query AS q ON q.attachment_id = ba.id
+                WHERE ba.instance_id = ?
+                """,
+            arguments: [instanceID]
+        ))
+    }
+
     // `directionalAlias`: see makePointMapSearchCondition.
     nonisolated private func makeBoundaryMapSearchCondition(
         _ expression: SearchExpression,
@@ -6595,9 +6614,10 @@ struct AppDatabase {
             additionalArguments: additionalArguments
         )
 
-        // Cache attached geometries per instance — JSON decoding cost paid once
-        // per unique instance instead of once per query row.
+        // Cache attached geometries + queryable ids per instance — cost paid
+        // once per unique instance instead of once per query row.
         var geometriesByInstanceID: [Int64: [BoundaryGeometry]] = [:]
+        var queryableIDsByInstanceID: [Int64: Set<Int64>] = [:]
         return try rows.map { row in
             let geometries: [BoundaryGeometry]
             if let cached = geometriesByInstanceID[row.instanceID] {
@@ -6606,12 +6626,20 @@ struct AppDatabase {
                 geometries = try Self.fetchBoundaryMapAttachedGeometries(db: db, instanceID: row.instanceID)
                 geometriesByInstanceID[row.instanceID] = geometries
             }
+            let queryableIDs: Set<Int64>
+            if let cached = queryableIDsByInstanceID[row.instanceID] {
+                queryableIDs = cached
+            } else {
+                queryableIDs = try Self.fetchBoundaryMapQueryableBoundaryIDs(db: db, instanceID: row.instanceID)
+                queryableIDsByInstanceID[row.instanceID] = queryableIDs
+            }
             let payload = BoundaryMapStudyPayload(
                 attachmentID: row.attachmentID,
                 boundaryID: row.boundaryID,
                 boundaryName: row.boundaryName,
                 instanceTitle: row.title,
                 geometries: geometries,
+                queryableBoundaryIDs: queryableIDs,
                 defaultCenterLat: row.defaultCenterLat,
                 defaultCenterLng: row.defaultCenterLng,
                 defaultZoom: row.defaultZoom,
@@ -6782,6 +6810,7 @@ struct AppDatabase {
             boundaryName: row.boundaryName,
             instanceTitle: row.title,
             geometries: geometries,
+            queryableBoundaryIDs: try Self.fetchBoundaryMapQueryableBoundaryIDs(db: db, instanceID: row.instanceID),
             defaultCenterLat: row.defaultCenterLat,
             defaultCenterLng: row.defaultCenterLng,
             defaultZoom: row.defaultZoom,
@@ -6863,6 +6892,7 @@ struct AppDatabase {
             boundaryName: highlighted?.name ?? "",
             instanceTitle: instanceRow.title,
             geometries: geometries,
+            queryableBoundaryIDs: try Self.fetchBoundaryMapQueryableBoundaryIDs(db: db, instanceID: instanceID),
             defaultCenterLat: instanceRow.defaultCenterLat,
             defaultCenterLng: instanceRow.defaultCenterLng,
             defaultZoom: instanceRow.defaultZoom,
