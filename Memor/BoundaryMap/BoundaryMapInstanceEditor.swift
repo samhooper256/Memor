@@ -26,11 +26,13 @@ struct BoundaryMapAttachmentDraft: Identifiable, Hashable {
 enum BoundaryMapSortMode: Hashable, CaseIterable {
     case creation
     case alphabetical
+    case color
 
     var displayName: String {
         switch self {
         case .creation: return "Creation order"
         case .alphabetical: return "A–Z"
+        case .color: return "Color"
         }
     }
 }

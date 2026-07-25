@@ -1314,10 +1314,19 @@ struct InstanceEditorWindowView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Sort:")
                     .font(.subheadline)
+                // Two radio-group pickers sharing one binding, so "Color" sits
+                // beside "Creation order" instead of on a third row (a single
+                // radioGroup picker can only lay out one column or one row).
                 Picker("", selection: $draft.boundaryMapSortMode) {
-                    ForEach(BoundaryMapSortMode.allCases, id: \.self) { mode in
+                    ForEach([BoundaryMapSortMode.creation, .color], id: \.self) { mode in
                         Text(mode.displayName).tag(mode)
                     }
+                }
+                .pickerStyle(.radioGroup)
+                .horizontalRadioGroupLayout()
+                .labelsHidden()
+                Picker("", selection: $draft.boundaryMapSortMode) {
+                    Text(BoundaryMapSortMode.alphabetical.displayName).tag(BoundaryMapSortMode.alphabetical)
                 }
                 .pickerStyle(.radioGroup)
                 .labelsHidden()
@@ -1360,6 +1369,15 @@ struct InstanceEditorWindowView: View {
         case .alphabetical:
             return entries.sorted { lhs, rhs in
                 lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+        case .color:
+            // Red boundaries first, then blue, each group alphabetical.
+            let colors = boundaryMapColorsByBoundaryID
+            return entries.sorted { lhs, rhs in
+                let lhsColor = colors[lhs.boundaryID] ?? .red
+                let rhsColor = colors[rhs.boundaryID] ?? .red
+                if lhsColor != rhsColor { return lhsColor == .red }
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
             }
         }
     }
