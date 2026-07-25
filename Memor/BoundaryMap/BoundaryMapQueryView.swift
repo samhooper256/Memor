@@ -22,6 +22,9 @@ struct BoundaryMapQueryView: View {
     var showFinder: Bool
     var onAnswerSelected: () -> Void
 
+    // Reverse queries: which boundary the user clicked (their guess), if any.
+    @State private var clickedBoundaryID: Int64?
+
     init(
         payload: BoundaryMapStudyPayload,
         revealName: Bool = false,
@@ -36,6 +39,15 @@ struct BoundaryMapQueryView: View {
 
     private var reverseInteractive: Bool { payload.isReverse && !revealName }
 
+    // After a reverse query is revealed, color the prompt by whether the user
+    // clicked the correct boundary: green if correct, red if wrong. Neutral if
+    // no guess was made (e.g. revealed via the keyboard) or for forward
+    // queries. Mirrors PointMapQueryView.answerTextColor.
+    private var answerTextColor: Color {
+        guard payload.isReverse, revealName, let clickedBoundaryID else { return .primary }
+        return clickedBoundaryID == payload.boundaryID ? .green : .red
+    }
+
     var body: some View {
         VStack(spacing: 12) {
             BoundaryMapMKMapView(
@@ -43,7 +55,10 @@ struct BoundaryMapQueryView: View {
                 revealName: revealName,
                 reverseInteractive: reverseInteractive,
                 showFinder: showFinder,
-                onAnswerSelected: onAnswerSelected
+                onAnswerSelected: { clickedID in
+                    clickedBoundaryID = clickedID
+                    onAnswerSelected()
+                }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -55,10 +70,19 @@ struct BoundaryMapQueryView: View {
                     Text(payload.boundaryName)
                         .font(.title2)
                         .fontWeight(.semibold)
+                        .foregroundStyle(answerTextColor)
                 }
             }
             .frame(height: 40)
             .padding(.bottom, 12)
+        }
+        .onChange(of: payload.attachmentID) { _, _ in
+            clickedBoundaryID = nil
+        }
+        .onChange(of: revealName) { _, newValue in
+            if !newValue {
+                clickedBoundaryID = nil
+            }
         }
     }
 
@@ -74,7 +98,8 @@ private struct BoundaryMapMKMapView: NSViewRepresentable {
     let revealName: Bool
     let reverseInteractive: Bool
     let showFinder: Bool
-    let onAnswerSelected: () -> Void
+    // Called with the clicked boundary's id (the user's guess).
+    let onAnswerSelected: (Int64) -> Void
 
     func makeNSView(context: Context) -> MKMapView {
         let mapView = BoundaryMapInteractiveMapView()
@@ -196,7 +221,7 @@ private struct BoundaryMapMKMapView: NSViewRepresentable {
         var geometries: [BoundaryGeometry] = []
         var queryableBoundaryIDs: Set<Int64> = []
         var hoveredBoundaryID: Int64?
-        var onAnswerSelected: (() -> Void)?
+        var onAnswerSelected: ((Int64) -> Void)?
         weak var mapView: MKMapView?
         weak var finderOverlay: BoundaryFinderOverlayView?
         /// Last APPLIED filled-ness per live renderer, so refreshOverlayFills
@@ -341,8 +366,8 @@ private final class BoundaryMapInteractiveMapView: MKMapView {
 
     override func mouseDown(with event: NSEvent) {
         if let coordinator, coordinator.reverseInteractive,
-           boundaryID(at: event.locationInWindow) != nil {
-            coordinator.onAnswerSelected?()
+           let clickedID = boundaryID(at: event.locationInWindow) {
+            coordinator.onAnswerSelected?(clickedID)
             return
         }
         super.mouseDown(with: event)
