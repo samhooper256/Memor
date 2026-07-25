@@ -270,13 +270,22 @@ struct PersonSlotsEditor: View {
             if !entry.children.isEmpty {
                 FlowLayout(spacing: 6) {
                     ForEach(entry.children) { child in
-                        PersonChip(
-                            label: chipLabel(for: child.child),
-                            isBareName: child.child.bareName != nil,
-                            onRemove: {
-                                partner.wrappedValue.children.removeAll { $0.id == child.id }
-                            }
-                        )
+                        let childIndex = entry.children.firstIndex(where: { $0.id == child.id }) ?? 0
+                        HStack(spacing: 4) {
+                            PersonReorderButtons(
+                                canMoveUp: childIndex > 0,
+                                canMoveDown: childIndex < entry.children.count - 1,
+                                onMoveUp: { partner.wrappedValue.children.swapAt(childIndex, childIndex - 1) },
+                                onMoveDown: { partner.wrappedValue.children.swapAt(childIndex, childIndex + 1) }
+                            )
+                            PersonChip(
+                                label: chipLabel(for: child.child),
+                                isBareName: child.child.bareName != nil,
+                                onRemove: {
+                                    partner.wrappedValue.children.removeAll { $0.id == child.id }
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -334,13 +343,26 @@ struct PersonSlotsEditor: View {
                             .foregroundStyle(.secondary)
                         FlowLayout(spacing: 6) {
                             ForEach(partner.children) { child in
-                                PersonChip(
-                                    label: chipLabel(for: child.child),
-                                    isBareName: child.child.bareName != nil,
-                                    onRemove: {
-                                        partnerBinding(id: partner.id).wrappedValue.children.removeAll { $0.id == child.id }
-                                    }
-                                )
+                                let childIndex = partner.children.firstIndex(where: { $0.id == child.id }) ?? 0
+                                HStack(spacing: 4) {
+                                    PersonReorderButtons(
+                                        canMoveUp: childIndex > 0,
+                                        canMoveDown: childIndex < partner.children.count - 1,
+                                        onMoveUp: {
+                                            partnerBinding(id: partner.id).wrappedValue.children.swapAt(childIndex, childIndex - 1)
+                                        },
+                                        onMoveDown: {
+                                            partnerBinding(id: partner.id).wrappedValue.children.swapAt(childIndex, childIndex + 1)
+                                        }
+                                    )
+                                    PersonChip(
+                                        label: chipLabel(for: child.child),
+                                        isBareName: child.child.bareName != nil,
+                                        onRemove: {
+                                            partnerBinding(id: partner.id).wrappedValue.children.removeAll { $0.id == child.id }
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
