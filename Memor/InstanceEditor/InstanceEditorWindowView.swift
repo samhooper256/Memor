@@ -1273,10 +1273,28 @@ struct InstanceEditorWindowView: View {
                     .listStyle(.inset)
                     .contextMenu(forSelectionType: BoundaryMapEntryRef.self) { refs in
                         if !refs.isEmpty {
+                            Menu("Enable Queries") {
+                                Button("Forward") { setBoundaryMapEntriesEnabled(refs, forward: true, reverse: nil) }
+                                Button("Reverse") { setBoundaryMapEntriesEnabled(refs, forward: nil, reverse: true) }
+                            }
+                            Menu("Disable Queries") {
+                                Button("Forward") { setBoundaryMapEntriesEnabled(refs, forward: false, reverse: nil) }
+                                Button("Reverse") { setBoundaryMapEntriesEnabled(refs, forward: nil, reverse: false) }
+                            }
+                            // Resetting writes SRS state directly to the saved
+                            // attachments, so it's only meaningful once the
+                            // instance exists (Edit mode) — like PointMap.
+                            if mode == .edit {
+                                Menu("Reset Queries") {
+                                    Button("Forward") { resetBoundaryMapEntriesDueDates(refs, isReverse: false) }
+                                    Button("Reverse") { resetBoundaryMapEntriesDueDates(refs, isReverse: true) }
+                                }
+                            }
                             Menu("Change Color") {
                                 Button("Red") { setBoundaryMapEntriesColor(refs, color: .red) }
                                 Button("Blue") { setBoundaryMapEntriesColor(refs, color: .blue) }
                             }
+                            Divider()
                             Button("Delete", role: .destructive) {
                                 requestDeleteBoundaryMapEntries(refs)
                             }
@@ -1615,6 +1633,31 @@ struct InstanceEditorWindowView: View {
         case .new(let localID):
             guard let draft = draft.boundaryMapNewAttachments.first(where: { $0.localID == localID }) else { return (true, false) }
             return (draft.forwardEnabled, draft.reverseEnabled)
+        }
+    }
+
+    private func setBoundaryMapEntriesEnabled(_ refs: Set<BoundaryMapEntryRef>, forward: Bool?, reverse: Bool?) {
+        for ref in refs {
+            setBoundaryMapEntryFlags(for: ref, forward: forward, reverse: reverse)
+        }
+    }
+
+    // Reset the due dates for one query direction across all selected saved
+    // attachments (Edit mode only — new attachments have no persisted queries
+    // yet). Writes straight to the DB and reports how many queries were
+    // actually reset via a green toast, mirroring the PointMap list.
+    private func resetBoundaryMapEntriesDueDates(_ refs: Set<BoundaryMapEntryRef>, isReverse: Bool) {
+        let attachmentIDs = refs.compactMap { ref -> Int64? in
+            if case .existing(let id) = ref { return id }
+            return nil
+        }
+        guard !attachmentIDs.isEmpty else { return }
+        do {
+            let count = try appDatabase.resetBoundaryMapAttachmentDueDates(attachmentIDs: attachmentIDs, isReverse: isReverse)
+            NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
+            showToast(message: "Reset due dates for \(count) queries", style: .success)
+        } catch {
+            showToast(message: "Failed to reset due dates.", style: .error)
         }
     }
 
