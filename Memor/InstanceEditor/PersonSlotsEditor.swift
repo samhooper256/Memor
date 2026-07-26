@@ -92,14 +92,14 @@ struct PersonSlotsEditor: View {
         slotBox {
             Text("Parents")
                 .fontWeight(.medium)
-            singleSlotRow(label: "Mother", ref: $draft.personMother)
-            singleSlotRow(label: "Father", ref: $draft.personFather)
-            singleSlotRow(label: "Adoptive Mother", ref: $draft.personAdoptiveMother)
-            singleSlotRow(label: "Adoptive Father", ref: $draft.personAdoptiveFather)
+            singleSlotRow(label: "Mother", ref: $draft.personMother, requiredSex: "Female")
+            singleSlotRow(label: "Father", ref: $draft.personFather, requiredSex: "Male")
+            singleSlotRow(label: "Adoptive Mother", ref: $draft.personAdoptiveMother, requiredSex: "Female")
+            singleSlotRow(label: "Adoptive Father", ref: $draft.personAdoptiveFather, requiredSex: "Male")
         }
     }
 
-    private func singleSlotRow(label: String, ref: Binding<PersonRef?>) -> some View {
+    private func singleSlotRow(label: String, ref: Binding<PersonRef?>, requiredSex: String? = nil) -> some View {
         HStack(spacing: 8) {
             Text(label)
                 .font(.callout)
@@ -116,6 +116,7 @@ struct PersonSlotsEditor: View {
                     appDatabase: appDatabase,
                     excludingInstanceID: excludingInstanceID,
                     alreadySelected: usedInstanceIDs,
+                    requiredSex: requiredSex,
                     onSelectInstance: { candidate in
                         rememberCandidate(candidate)
                         ref.wrappedValue = .instance(candidate.id)
@@ -488,6 +489,9 @@ struct PersonAddButton: View {
     let appDatabase: AppDatabase
     let excludingInstanceID: Int64?
     let alreadySelected: Set<Int64>
+    /// "Male"/"Female" restricts the picker's instance rows to that sex
+    /// (mother/father slots); bare-name entry is unaffected.
+    var requiredSex: String? = nil
     let onSelectInstance: (PersonCandidate) -> Void
     let onSelectBareName: (String) -> Void
 
@@ -503,6 +507,7 @@ struct PersonAddButton: View {
                 appDatabase: appDatabase,
                 excludingInstanceID: excludingInstanceID,
                 alreadySelected: alreadySelected,
+                requiredSex: requiredSex,
                 onSelectInstance: { candidate in
                     onSelectInstance(candidate)
                     isPickerPresented = false
@@ -523,6 +528,7 @@ private struct PersonPickerPopover: View {
     let appDatabase: AppDatabase
     let excludingInstanceID: Int64?
     let alreadySelected: Set<Int64>
+    let requiredSex: String?
     let onSelectInstance: (PersonCandidate) -> Void
     let onSelectBareName: (String) -> Void
     let onCancel: () -> Void
@@ -648,7 +654,8 @@ private struct PersonPickerPopover: View {
     private func performSearch() {
         results = (try? appDatabase.fetchPersonCandidates(
             matching: searchText,
-            excludingInstanceID: excludingInstanceID
+            excludingInstanceID: excludingInstanceID,
+            requiredSex: requiredSex
         )) ?? []
         let ids = navigableRowIDs
         if let highlightedRowID, ids.contains(highlightedRowID) {

@@ -2062,7 +2062,14 @@ extension AppDatabase {
     /// Search Person instances for the slot picker. Matches against the display
     /// field; empty query lists all. `excludingInstanceID` omits the instance
     /// being edited (no self references).
-    func fetchPersonCandidates(matching query: String, excludingInstanceID: Int64?) throws -> [PersonCandidate] {
+    /// `requiredSex` ("Male"/"Female") keeps only people of that sex — used by
+    /// the mother/father pickers, whose slots the save engine would reject for
+    /// the wrong sex anyway.
+    func fetchPersonCandidates(
+        matching query: String,
+        excludingInstanceID: Int64?,
+        requiredSex: String? = nil
+    ) throws -> [PersonCandidate] {
         try dbQueue.read { db in
             let personTypeID = try Self.fetchPersonTypeID(db: db)
             guard let displayFieldIndex = try Int.fetchOne(
@@ -2094,6 +2101,10 @@ extension AppDatabase {
                     .replacingOccurrences(of: "%", with: "\\%")
                     .replacingOccurrences(of: "_", with: "\\_")
                 arguments.append("%\(escaped)%".databaseValue)
+            }
+            if let requiredSex {
+                conditions.append("COALESCE(\"field\(sexIndex)\", 'Male') = ?")
+                arguments.append(requiredSex.databaseValue)
             }
             let whereClause = conditions.isEmpty ? "" : "WHERE \(conditions.joined(separator: " AND "))"
 
