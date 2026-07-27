@@ -65,6 +65,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
     case editorPointMapAddQuery
     case editorPreviewTopQueryType
     case editorFocusCollectionSearch
+    case editorHighlightQueryTypes
 
     // Types page / code editors
     case typesSaveCurrent
@@ -108,6 +109,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         case .editorPointMapAddQuery: return "PointMap — Add Query"
         case .editorPreviewTopQueryType: return "Preview Topmost Query"
         case .editorFocusCollectionSearch: return "Focus Collections Search"
+        case .editorHighlightQueryTypes: return "Highlight Query Types"
         case .typesSaveCurrent: return "Save Current Editor"
         case .searchResetDueDates: return "Reset Due Dates"
         }
@@ -125,7 +127,8 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
             return .study
         case .editorSave, .editorSubmit, .editorWrapBold, .editorWrapItalic, .editorWrapEmphasis,
              .editorInsertImage, .editorCopyLink, .editorPickType, .editorOpenHyperlinkSearch,
-             .editorPointMapAddQuery, .editorPreviewTopQueryType, .editorFocusCollectionSearch:
+             .editorPointMapAddQuery, .editorPreviewTopQueryType, .editorFocusCollectionSearch,
+             .editorHighlightQueryTypes:
             return .editor
         case .typesSaveCurrent:
             return .types
@@ -160,7 +163,10 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         case .editorSubmit: return KeyBinding(key: "Return", modifiers: .command)
         case .editorWrapBold: return KeyBinding(key: "B", modifiers: .command)
         case .editorWrapItalic: return KeyBinding(key: "I", modifiers: .command)
-        case .editorWrapEmphasis: return KeyBinding(key: "E", modifiers: .command)
+        // The <e> wrap is dispatched by the hard-coded ⌘J route in
+        // WindowKeyCommandHandler; this default mirrors that reality (the old
+        // ⌘E default was never dispatched, and ⌘E now highlights query types).
+        case .editorWrapEmphasis: return KeyBinding(key: "J", modifiers: .command)
         case .editorInsertImage: return KeyBinding(key: "O", modifiers: .command)
         case .editorCopyLink: return KeyBinding(key: "K", modifiers: [.command, .shift])
         case .editorPickType: return KeyBinding(key: "T", modifiers: [.command, .shift])
@@ -168,6 +174,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         case .editorPointMapAddQuery: return KeyBinding(key: "A")
         case .editorPreviewTopQueryType: return KeyBinding(key: "P", modifiers: .command)
         case .editorFocusCollectionSearch: return KeyBinding(key: "D", modifiers: .command)
+        case .editorHighlightQueryTypes: return KeyBinding(key: "E", modifiers: .command)
         case .typesSaveCurrent: return KeyBinding(key: "S", modifiers: .command)
         case .searchResetDueDates: return KeyBinding(key: "R", modifiers: .command)
         }

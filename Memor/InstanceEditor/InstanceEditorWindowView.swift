@@ -75,6 +75,10 @@ struct InstanceEditorWindowView: View {
     @StateObject private var movePointsPickerController = PickerPanelController()
     @State private var isBoundaryPickerPresented = false
     @State private var isIDCopyButtonHovered = false
+    // Keyboard cursor over the Query Types checklist (nil = inactive). Driven
+    // by the Highlight Query Types shortcut + arrows/Return, like the
+    // Collections checklist's search-field navigation.
+    @State private var highlightedQueryTypeID: Int64?
     @State private var isBoundaryMapPickerPresented = false
 
     private var selectedType: FlashcardType? {
@@ -283,6 +287,21 @@ struct InstanceEditorWindowView: View {
                 shortcutSettings: shortcutSettings,
                 onPreviewTopQuery: previewTopmostCheckedQueryType
             )
+        }
+        .background {
+            QueryTypeHighlightKeyHandler(
+                shortcutSettings: shortcutSettings,
+                isEnabled: !isPointMapSelected && !isBoundaryMapSelected && !draft.queryTypes.isEmpty,
+                isActive: highlightedQueryTypeID != nil,
+                onToggleActivation: toggleQueryTypeHighlightActivation,
+                onMoveUp: { moveQueryTypeHighlight(by: -1) },
+                onMoveDown: { moveQueryTypeHighlight(by: 1) },
+                onToggleChecked: toggleHighlightedQueryTypeChecked,
+                onDeactivate: { highlightedQueryTypeID = nil }
+            )
+        }
+        .onChange(of: draft.selectedTypeID) { _, _ in
+            highlightedQueryTypeID = nil
         }
         .overlay(alignment: .topTrailing) {
             if let toast {
@@ -1760,35 +1779,41 @@ struct InstanceEditorWindowView: View {
             Text("Query Types")
                 .font(.headline)
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    if draft.selectedTypeID == nil {
-                        Text("No types are available.")
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    } else if draft.queryTypes.isEmpty && !isPersonSelected {
-                        Text("This type has no query types.")
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        if !draft.queryTypes.isEmpty {
-                            queryTypeCheckboxList
-                        }
-                        if isPersonSelected {
-                            PersonQueryChecklist(
-                                draft: draft,
-                                mode: mode,
-                                onPreview: { kind, partnerEntryID, officeEntryID in
-                                    openPersonQueryPreview(kind: kind, partnerEntryID: partnerEntryID, officeEntryID: officeEntryID)
-                                },
-                                onResetDueDate: { kind, partnerEntryID, officeEntryID in
-                                    resetPersonQueryDueDate(kind: kind, partnerEntryID: partnerEntryID, officeEntryID: officeEntryID)
-                                }
-                            )
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        if draft.selectedTypeID == nil {
+                            Text("No types are available.")
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else if draft.queryTypes.isEmpty && !isPersonSelected {
+                            Text("This type has no query types.")
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            if !draft.queryTypes.isEmpty {
+                                queryTypeCheckboxList
+                            }
+                            if isPersonSelected {
+                                PersonQueryChecklist(
+                                    draft: draft,
+                                    mode: mode,
+                                    onPreview: { kind, partnerEntryID, officeEntryID in
+                                        openPersonQueryPreview(kind: kind, partnerEntryID: partnerEntryID, officeEntryID: officeEntryID)
+                                    },
+                                    onResetDueDate: { kind, partnerEntryID, officeEntryID in
+                                        resetPersonQueryDueDate(kind: kind, partnerEntryID: partnerEntryID, officeEntryID: officeEntryID)
+                                    }
+                                )
+                            }
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .onChange(of: highlightedQueryTypeID) { _, id in
+                    guard let id else { return }
+                    proxy.scrollTo("query-type-row-\(id)", anchor: nil)
+                }
             }
         }
         .padding(16)
@@ -1859,12 +1884,63 @@ struct InstanceEditorWindowView: View {
         }
     }
 
-    private var queryTypeCheckboxList: some View {
-        let displayedQueryTypes = draft.queryTypes.sorted { lhs, rhs in
+    // The checklist's display order — also the order the keyboard highlight
+    // walks through.
+    private var displayedQueryTypes: [QueryType] {
+        draft.queryTypes.sorted { lhs, rhs in
             lhs.id < rhs.id
         }
+    }
 
-        return VStack(alignment: .leading, spacing: 10) {
+    private func setQueryTypeChecked(_ queryType: QueryType, isSelected: Bool) {
+        if isSelected {
+            draft.selectedQueryTypeIDs.insert(queryType.id)
+            if mode == .edit {
+                draft.queryIntervalsByQueryTypeID[queryType.id] = 0
+            }
+        } else {
+            draft.selectedQueryTypeIDs.remove(queryType.id)
+            draft.queryIntervalsByQueryTypeID.removeValue(forKey: queryType.id)
+        }
+        if mode == .add, let typeID = draft.selectedTypeID {
+            try? appDatabase.setTypeQueryDefault(
+                typeID: typeID,
+                queryTypeID: queryType.id,
+                isEnabled: isSelected
+            )
+        }
+    }
+
+    // MARK: - Query type keyboard highlight
+
+    private func toggleQueryTypeHighlightActivation() {
+        if highlightedQueryTypeID != nil {
+            highlightedQueryTypeID = nil
+        } else {
+            highlightedQueryTypeID = displayedQueryTypes.first?.id
+        }
+    }
+
+    private func moveQueryTypeHighlight(by delta: Int) {
+        let list = displayedQueryTypes
+        guard !list.isEmpty else { return }
+        guard let current = highlightedQueryTypeID,
+              let index = list.firstIndex(where: { $0.id == current }) else {
+            highlightedQueryTypeID = list.first?.id
+            return
+        }
+        // Wrap around at both ends.
+        highlightedQueryTypeID = list[(index + delta + list.count) % list.count].id
+    }
+
+    private func toggleHighlightedQueryTypeChecked() {
+        guard let id = highlightedQueryTypeID,
+              let queryType = draft.queryTypes.first(where: { $0.id == id }) else { return }
+        setQueryTypeChecked(queryType, isSelected: !draft.selectedQueryTypeIDs.contains(id))
+    }
+
+    private var queryTypeCheckboxList: some View {
+        VStack(alignment: .leading, spacing: 10) {
             ForEach(displayedQueryTypes) { queryType in
                 HStack(spacing: 12) {
                     Toggle(
@@ -1872,22 +1948,7 @@ struct InstanceEditorWindowView: View {
                         isOn: Binding(
                             get: { draft.selectedQueryTypeIDs.contains(queryType.id) },
                             set: { isSelected in
-                                if isSelected {
-                                    draft.selectedQueryTypeIDs.insert(queryType.id)
-                                    if mode == .edit {
-                                        draft.queryIntervalsByQueryTypeID[queryType.id] = 0
-                                    }
-                                } else {
-                                    draft.selectedQueryTypeIDs.remove(queryType.id)
-                                    draft.queryIntervalsByQueryTypeID.removeValue(forKey: queryType.id)
-                                }
-                                if mode == .add, let typeID = draft.selectedTypeID {
-                                    try? appDatabase.setTypeQueryDefault(
-                                        typeID: typeID,
-                                        queryTypeID: queryType.id,
-                                        isEnabled: isSelected
-                                    )
-                                }
+                                setQueryTypeChecked(queryType, isSelected: isSelected)
                             }
                         )
                     )
@@ -1925,6 +1986,13 @@ struct InstanceEditorWindowView: View {
                         }
                     }
                 }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(queryType.id == highlightedQueryTypeID ? Color.blue : Color.clear, lineWidth: 1)
+                }
+                .id("query-type-row-\(queryType.id)")
             }
         }
     }
@@ -3206,6 +3274,128 @@ private struct EditorPreviewShortcutHandler: NSViewRepresentable {
                 }
 
                 return event
+            }
+        }
+
+        private func removeMonitor() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
+    }
+}
+
+// Drives the Query Types checklist's keyboard highlight: the customizable
+// Highlight Query Types shortcut toggles it (blurring any focused field so the
+// arrows are free), up/down move it with wraparound, and plain Return toggles
+// the highlighted checkbox (consumed, so the window's default button doesn't
+// fire). The highlight yields whenever a text editor takes focus back — the
+// next arrow/Return deactivates it and passes the key through — and a click
+// anywhere deactivates it too.
+private struct QueryTypeHighlightKeyHandler: NSViewRepresentable {
+    let shortcutSettings: ShortcutSettings
+    let isEnabled: Bool
+    let isActive: Bool
+    let onToggleActivation: () -> Void
+    let onMoveUp: () -> Void
+    let onMoveDown: () -> Void
+    let onToggleChecked: () -> Void
+    let onDeactivate: () -> Void
+
+    func makeNSView(context: Context) -> KeyHandlingView {
+        let view = KeyHandlingView()
+        apply(to: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: KeyHandlingView, context: Context) {
+        apply(to: nsView)
+    }
+
+    private func apply(to view: KeyHandlingView) {
+        view.shortcutSettings = shortcutSettings
+        view.isEnabled = isEnabled
+        view.isActive = isActive
+        view.onToggleActivation = onToggleActivation
+        view.onMoveUp = onMoveUp
+        view.onMoveDown = onMoveDown
+        view.onToggleChecked = onToggleChecked
+        view.onDeactivate = onDeactivate
+    }
+
+    final class KeyHandlingView: NSView {
+        var shortcutSettings: ShortcutSettings?
+        var isEnabled = false
+        var isActive = false
+        var onToggleActivation: (() -> Void)?
+        var onMoveUp: (() -> Void)?
+        var onMoveDown: (() -> Void)?
+        var onToggleChecked: (() -> Void)?
+        var onDeactivate: (() -> Void)?
+
+        private var monitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window == nil {
+                removeMonitor()
+            } else {
+                installMonitorIfNeeded()
+            }
+        }
+
+        deinit {
+            removeMonitor()
+        }
+
+        private func installMonitorIfNeeded() {
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown]) { [weak self] event in
+                guard let self, event.window === self.window else { return event }
+
+                if event.type == .leftMouseDown {
+                    if self.isActive {
+                        self.onDeactivate?()
+                    }
+                    return event
+                }
+
+                guard let settings = self.shortcutSettings else { return event }
+
+                if self.isEnabled, settings.binding(for: .editorHighlightQueryTypes).matches(event) {
+                    if !self.isActive {
+                        // Free the arrows/Return from any focused field.
+                        self.window?.makeFirstResponder(nil)
+                    }
+                    self.onToggleActivation?()
+                    return nil
+                }
+
+                guard self.isActive else { return event }
+
+                // A text editor took focus back (click or Tab) — let it keep
+                // its keys and drop the highlight.
+                if self.window?.firstResponder is NSTextView {
+                    self.onDeactivate?()
+                    return event
+                }
+
+                let modifierFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                switch event.keyCode {
+                case 126 where modifierFlags.isEmpty: // up arrow
+                    self.onMoveUp?()
+                    return nil
+                case 125 where modifierFlags.isEmpty: // down arrow
+                    self.onMoveDown?()
+                    return nil
+                case 36, 76: // return / keypad enter
+                    guard modifierFlags.isEmpty else { return event }
+                    self.onToggleChecked?()
+                    return nil
+                default:
+                    return event
+                }
             }
         }
 

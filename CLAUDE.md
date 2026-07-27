@@ -222,6 +222,7 @@ navigates to the linked instance).
 | Study — Edit Type (exit Study, open the instance's type detail page) | ⌘⇧T |
 | Study — Duplicate current instance (open Add Instance prefilled; post-reveal, Object types only) | ⌘D |
 | Instance editor — Save | ⌘S |
+| Instance editor — Highlight Query Types (then ↑/↓ move w/ wrap, Return toggles) | ⌘E |
 | Types page — Save current editor | ⌘S |
 | Query Search — Reset Due Dates | ⌘R |
 
