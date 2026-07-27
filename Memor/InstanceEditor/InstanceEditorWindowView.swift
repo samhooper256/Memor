@@ -3381,7 +3381,11 @@ private struct QueryTypeHighlightKeyHandler: NSViewRepresentable {
                     return event
                 }
 
+                // Arrow (and keypad) keys carry the .function/.numericPad
+                // flags on every press — strip them so "no modifiers" means
+                // no ⌘/⌥/⌃/⇧ held.
                 let modifierFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                    .subtracting([.function, .numericPad])
                 switch event.keyCode {
                 case 126 where modifierFlags.isEmpty: // up arrow
                     self.onMoveUp?()
