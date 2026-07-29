@@ -784,7 +784,7 @@ struct TypeDetailPageView: View {
                                     VStack(alignment: .leading, spacing: 8) {
                                         Text("The {{#InstanceID}} placeholder")
                                             .font(.headline)
-                                        Text("In a query type's HTML, {{#InstanceID}} substitutes to the instance's numeric id when the query renders. Think \"mail merge\"—every instance gets its own id stamped in. For example, <a href=\"id:{{#InstanceID}}\">details</a> makes a link that opens the instance being shown. It works in the question and answer HTML alike, including question content spliced into an answer by {{#QuestionContent}}. The preview on this page renders no specific instance, so the placeholder substitutes to nothing here.")
+                                        Text("In a query type's HTML, {{#InstanceID}} substitutes to the instance's numeric id when the query renders. For example, <a href=\"id:{{#InstanceID}}\">details</a> makes a link that opens the instance being shown. It works in the question and answer HTML alike, including question content spliced into an answer by {{#QuestionContent}}. The preview on this page renders no specific instance, so the placeholder substitutes to nothing here.")
                                             .font(.callout)
                                     }
                                     .frame(width: 360, alignment: .leading)
