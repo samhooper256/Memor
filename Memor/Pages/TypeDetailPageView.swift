@@ -70,6 +70,7 @@ struct TypeDetailPageView: View {
     @State private var personResetOnConnectionChange = false
     @State private var isPersonResetInfoPopoverPresented = false
     @State private var isPersonOfficesElementInfoPopoverPresented = false
+    @State private var isInstanceIDInfoPopoverPresented = false
     /// Live copy of the customizable built-in-query "details" HTML (Person only).
     @State private var personBuiltinQueryHTML = ""
     /// Live copy of the per-office question template HTML (Person only).
@@ -771,6 +772,25 @@ struct TypeDetailPageView: View {
                                 ) {
                                     selectedHTMLContentMode = .answer
                                 }
+
+                                Button {
+                                    isInstanceIDInfoPopoverPresented = true
+                                } label: {
+                                    Image(systemName: "questionmark.circle")
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.borderless)
+                                .popover(isPresented: $isInstanceIDInfoPopoverPresented, arrowEdge: .bottom) {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text("The {{#InstanceID}} placeholder")
+                                            .font(.headline)
+                                        Text("In a query type's HTML, {{#InstanceID}} substitutes to the instance's numeric id when the query renders. Think \"mail merge\"—every instance gets its own id stamped in. For example, <a href=\"id:{{#InstanceID}}\">details</a> makes a link that opens the instance being shown. It works in the question and answer HTML alike, including question content spliced into an answer by {{#QuestionContent}}. The preview on this page renders no specific instance, so the placeholder substitutes to nothing here.")
+                                            .font(.callout)
+                                    }
+                                    .frame(width: 360, alignment: .leading)
+                                    .padding(12)
+                                }
+                                .help("What is {{#InstanceID}}?")
                             }
 
                             if type.isPerson, !isAnyBuiltinSelected {
