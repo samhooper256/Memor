@@ -69,7 +69,6 @@ struct StudyModeView: View {
         let id = UUID()
         let color: Color
         let buttonFrame: CGRect
-        let dividerY: CGFloat
         let startDate = Date()
     }
     @State private var ratingFlash: RatingFlash?
@@ -88,10 +87,11 @@ struct StudyModeView: View {
         }
     }
 
-    // Object/Node queries get a slim bottom bar; map queries keep the taller one.
-    private var isStandardQuery: Bool {
-        currentQuery?.kind == .standard
-    }
+    // One height for the response/reveal bar in every state and query kind —
+    // sized to fit the tallest content (counts + Reveal button). A constant
+    // height keeps the divider from shifting between queries, which the
+    // rating flash bar's placement relies on.
+    private static let responseBarHeight: CGFloat = 84
 
     private var projectedIntervals: [(title: String, label: String, color: Color, isClamped: Bool, rating: StudyResponseRating)] {
         guard let currentQuery else { return [] }
@@ -293,8 +293,8 @@ struct StudyModeView: View {
                 Spacer()
             }
             .padding(.horizontal, 24)
-            .padding(.vertical, isStandardQuery ? 8 : 24)
-            .frame(maxWidth: .infinity, minHeight: isStandardQuery ? nil : 100)
+            .frame(maxWidth: .infinity)
+            .frame(height: Self.responseBarHeight)
             .background(.bar)
             .onGeometryChange(for: CGRect.self) { proxy in
                 proxy.frame(in: .named(Self.ratingFlashCoordinateSpace))
@@ -352,11 +352,12 @@ struct StudyModeView: View {
                 Capsule()
                     .fill(flash.color)
                     .frame(width: flash.buttonFrame.width, height: 4)
-                    // dividerY is the response bar's top edge; the divider line
-                    // sits immediately above it, so end the bar's bottom edge
-                    // exactly there — it covers the line and rises into the
-                    // query area rather than dipping below the divider.
-                    .offset(x: flash.buttonFrame.minX, y: flash.dividerY - 4)
+                    // The response bar's LIVE top edge (the divider line sits
+                    // immediately above it): the flash's bottom edge lands
+                    // exactly on the divider, covering the line and rising
+                    // into the query area — never dipping into the response
+                    // bar, even if the layout shifts under the fade.
+                    .offset(x: flash.buttonFrame.minX, y: bottomBarFrame.minY - 4)
                     .opacity(opacity)
             }
             .allowsHitTesting(false)
@@ -665,8 +666,7 @@ struct StudyModeView: View {
         if let buttonFrame = ratingButtonFrames[rating] {
             ratingFlash = RatingFlash(
                 color: Self.ratingColor(rating),
-                buttonFrame: buttonFrame,
-                dividerY: bottomBarFrame.minY
+                buttonFrame: buttonFrame
             )
         }
         let answeredAtTimestamp = Int64(Date().timeIntervalSince1970)
