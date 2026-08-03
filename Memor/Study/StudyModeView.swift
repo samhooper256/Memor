@@ -61,6 +61,33 @@ struct StudyModeView: View {
     /// state (exiting Study or the app forgets it).
     @State private var peekedNextQueryID: String?
 
+    // One-second colored flash over the divider above the rating just pressed
+    // (pure overlay — the query HTML is untouched). Geometry is snapshotted at
+    // submit time so the bar stays put while the next query's layout settles;
+    // a new response replaces any live flash instantly (fresh id).
+    private struct RatingFlash: Identifiable {
+        let id = UUID()
+        let color: Color
+        let buttonFrame: CGRect
+        let dividerY: CGFloat
+        let startDate = Date()
+    }
+    @State private var ratingFlash: RatingFlash?
+    @State private var ratingButtonFrames: [StudyResponseRating: CGRect] = [:]
+    @State private var bottomBarFrame: CGRect = .zero
+
+    private static let ratingFlashCoordinateSpace = "study-rating-flash"
+
+    // Same colors as the rating buttons (projectedIntervals).
+    private static func ratingColor(_ rating: StudyResponseRating) -> Color {
+        switch rating {
+        case .again: return .red
+        case .hard: return .orange
+        case .good: return .green
+        case .easy: return Color(red: 0.65, green: 0.86, blue: 0.65)
+        }
+    }
+
     // Object/Node queries get a slim bottom bar; map queries keep the taller one.
     private var isStandardQuery: Bool {
         currentQuery?.kind == .standard
@@ -254,6 +281,11 @@ struct StudyModeView: View {
                             ) {
                                 Task { await submit(item.rating) }
                             }
+                            .onGeometryChange(for: CGRect.self) { proxy in
+                                proxy.frame(in: .named(Self.ratingFlashCoordinateSpace))
+                            } action: { frame in
+                                ratingButtonFrames[item.rating] = frame
+                            }
                         }
                     }
                 }
@@ -264,6 +296,15 @@ struct StudyModeView: View {
             .padding(.vertical, isStandardQuery ? 8 : 24)
             .frame(maxWidth: .infinity, minHeight: isStandardQuery ? nil : 100)
             .background(.bar)
+            .onGeometryChange(for: CGRect.self) { proxy in
+                proxy.frame(in: .named(Self.ratingFlashCoordinateSpace))
+            } action: { frame in
+                bottomBarFrame = frame
+            }
+        }
+        .coordinateSpace(name: Self.ratingFlashCoordinateSpace)
+        .overlay(alignment: .topLeading) {
+            ratingFlashOverlay
         }
         .task {
             await loadStudySession()
@@ -295,6 +336,32 @@ struct StudyModeView: View {
         }
         .onDisappear {
             studyModeState.currentTypeID = nil
+        }
+    }
+
+    // The flash bar itself: 4pt capsule straddling the divider, spanning the
+    // pressed button's width. Opacity follows 1 − t² exactly (TimelineView
+    // recomputes it per frame — no approximated animation curve), and the
+    // flash state clears shortly after the second elapses.
+    @ViewBuilder
+    private var ratingFlashOverlay: some View {
+        if let flash = ratingFlash {
+            TimelineView(.animation) { context in
+                let t = context.date.timeIntervalSince(flash.startDate)
+                let opacity = max(0.0, 1.0 - t * t)
+                Capsule()
+                    .fill(flash.color)
+                    .frame(width: flash.buttonFrame.width, height: 4)
+                    .offset(x: flash.buttonFrame.minX, y: flash.dividerY - 2)
+                    .opacity(opacity)
+            }
+            .allowsHitTesting(false)
+            .task(id: flash.id) {
+                try? await Task.sleep(for: .seconds(1.05))
+                if ratingFlash?.id == flash.id {
+                    ratingFlash = nil
+                }
+            }
         }
     }
 
@@ -589,6 +656,15 @@ struct StudyModeView: View {
     @MainActor
     private func submit(_ rating: StudyResponseRating) async {
         guard let currentQuery else { return }
+        // Flash the pressed rating's bar over the divider (replacing any
+        // still-fading bar from the previous response outright).
+        if let buttonFrame = ratingButtonFrames[rating] {
+            ratingFlash = RatingFlash(
+                color: Self.ratingColor(rating),
+                buttonFrame: buttonFrame,
+                dividerY: bottomBarFrame.minY
+            )
+        }
         let answeredAtTimestamp = Int64(Date().timeIntervalSince1970)
 
         let isPointMap = currentQuery.kind == .pointMap
