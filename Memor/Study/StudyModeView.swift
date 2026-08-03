@@ -352,7 +352,11 @@ struct StudyModeView: View {
                 Capsule()
                     .fill(flash.color)
                     .frame(width: flash.buttonFrame.width, height: 4)
-                    .offset(x: flash.buttonFrame.minX, y: flash.dividerY - 2)
+                    // dividerY is the response bar's top edge; the divider line
+                    // sits immediately above it, so end the bar's bottom edge
+                    // exactly there — it covers the line and rises into the
+                    // query area rather than dipping below the divider.
+                    .offset(x: flash.buttonFrame.minX, y: flash.dividerY - 4)
                     .opacity(opacity)
             }
             .allowsHitTesting(false)
