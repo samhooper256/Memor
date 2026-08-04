@@ -5,7 +5,8 @@
 //  The built-in queries in the Person instance editor's query panel: one
 //  checkbox row per standalone relationship kind plus one "Children with
 //  {partner}" row per partner card, then an Offices section with one row per
-//  office card plus the "All Offices" row. A warning triangle appears when an
+//  DISTINCT held office (however many stint cards it has — the per-office
+//  query is shared) plus the "All Offices" row. A warning triangle appears when an
 //  enabled query's answer would currently be empty (every kind except Full
 //  Siblings and the per-office queries, whose answers always name the person)
 //  — the query stays enable-able regardless.
@@ -94,9 +95,14 @@ struct PersonQueryChecklist: View {
     }
 
     private var officeRows: [ChecklistRow] {
-        var rows: [ChecklistRow] = draft.personOffices.map { office in
-            ChecklistRow(
-                rowID: "office:\(office.id)",
+        // One row per DISTINCT office — a multi-stint office has ONE shared
+        // per-office query, so its cards collapse onto the first card's row
+        // (toggling writes every sibling card; see setEnabled).
+        var seenOfficeIDs: Set<Int64> = []
+        var rows: [ChecklistRow] = []
+        for office in draft.personOffices where seenOfficeIDs.insert(office.officeID).inserted {
+            rows.append(ChecklistRow(
+                rowID: "office:\(office.officeID)",
                 kind: .office,
                 partnerEntryID: nil,
                 officeEntryID: office.id,
@@ -104,7 +110,7 @@ struct PersonQueryChecklist: View {
                 showsEmptyWarning: false,
                 isEnabled: office.isOfficeQueryEnabled,
                 interval: office.officeQueryInterval
-            )
+            ))
         }
         let allOfficesEnabled = draft.personEnabledQueryKinds.contains(.allOffices)
         rows.append(ChecklistRow(
@@ -209,12 +215,16 @@ struct PersonQueryChecklist: View {
 
     private func setEnabled(_ isOn: Bool, row: ChecklistRow) {
         if let officeEntryID = row.officeEntryID {
-            guard let index = draft.personOffices.firstIndex(where: { $0.id == officeEntryID }) else { return }
-            draft.personOffices[index].isOfficeQueryEnabled = isOn
-            if !isOn {
-                draft.personOffices[index].officeQueryInterval = nil
-            } else if mode == .edit {
-                draft.personOffices[index].officeQueryInterval = 0
+            guard let entry = draft.personOffices.first(where: { $0.id == officeEntryID }) else { return }
+            // Every card of the office moves together — the per-office query
+            // is shared across stints, and the save ORs the cards' flags.
+            for index in draft.personOffices.indices where draft.personOffices[index].officeID == entry.officeID {
+                draft.personOffices[index].isOfficeQueryEnabled = isOn
+                if !isOn {
+                    draft.personOffices[index].officeQueryInterval = nil
+                } else if mode == .edit {
+                    draft.personOffices[index].officeQueryInterval = 0
+                }
             }
         } else if let partnerEntryID = row.partnerEntryID {
             guard let index = draft.personPartners.firstIndex(where: { $0.id == partnerEntryID }) else { return }

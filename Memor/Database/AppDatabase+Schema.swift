@@ -445,12 +445,16 @@ extension AppDatabase {
                     ON office(name COLLATE NOCASE)
                 """)
 
-            // One row per (person, office) holding. UNIQUE(instance_id, office_id)
-            // both enforces one holding per office per person and is the parent
-            // key for person_office_succession's composite FKs. order_index is
-            // the person's own office display/study order.
-            try db.execute(sql: """
-                CREATE TABLE IF NOT EXISTS person_office (
+            // One row per office STINT: a person may hold the same office
+            // multiple times (Grover Cleveland), each period with its own
+            // dates, note, order slot, and succession edges. The row id is the
+            // parent key for person_office_succession's holding FKs, so ids
+            // are STABLE across edits (kept stints UPDATE in place, matched to
+            // drafts by row id). order_index is the person's own office
+            // display/study order across ALL of their stints. The definition
+            // body is shared with the one-off rebuild below so the two can't
+            // drift.
+            let personOfficeTableBody = """
                     id INTEGER PRIMARY KEY,
                     instance_id INTEGER NOT NULL
                         REFERENCES instance_id_type_id(instance_id) ON DELETE CASCADE,
@@ -459,90 +463,173 @@ extension AppDatabase {
                     when_began TEXT NOT NULL DEFAULT '',
                     when_ended TEXT NOT NULL DEFAULT '',
                     note TEXT NOT NULL DEFAULT '',
-                    order_index INTEGER NOT NULL DEFAULT 0,
-                    UNIQUE (instance_id, office_id)
-                ) STRICT
-                """)
+                    order_index INTEGER NOT NULL DEFAULT 0
+                """
             try db.execute(sql: """
-                CREATE INDEX IF NOT EXISTS idx_person_office_office
-                    ON person_office(office_id)
+                CREATE TABLE IF NOT EXISTS person_office (
+                \(personOfficeTableBody)
+                ) STRICT
                 """)
 
             // One row per directed succession fact, stored ONCE (reciprocity by
             // construction, like person_partnership): "predecessor precedes
-            // successor in office". Each endpoint is a Person instance OR a
-            // bare name (exactly one of id/bare per side); at least one side
-            // must be an instance — that side owns the edge (a bare peer has
-            // no view of its own). The composite FKs to person_office mean an
-            // INSTANCE endpoint can only exist while that person holds the
-            // office (a NULL id disables its FK), and deleting a holding, an
-            // office, or a person cascades its edges. (X,A,B) and (X,B,A) may
-            // coexist (Cleveland/Harrison); exact duplicate edges (including
-            // bare ones, via the two partial unique indexes) and self-links
-            // cannot. The definition body is shared with the one-off rebuild
-            // below so the two can't drift.
+            // successor in office". Each endpoint is a specific STINT
+            // (person_office row) OR a bare name (exactly one of holding/bare
+            // per side); at least one side must be a stint — that side owns
+            // the edge (a bare peer has no view of its own). The holding FKs
+            // mean an endpoint can only exist while that exact stint exists
+            // (a NULL holding id disables its FK), and deleting a stint — or,
+            // transitively, its office or person — cascades exactly that
+            // stint's edges; sibling stints' edges survive. (A,B) and (B,A)
+            // may coexist (Cleveland/Harrison); exact duplicate edges
+            // (including bare ones, via the two partial unique indexes)
+            // cannot. Edges between two stints of the SAME person are blocked
+            // in Swift draft validation (a person cannot be their own
+            // predecessor/successor); the CHECK here only blocks a stint
+            // linking to itself. The definition body is shared with the
+            // one-off rebuild below so the two can't drift.
             let successionTableBody = """
                     id INTEGER PRIMARY KEY,
-                    office_id INTEGER NOT NULL
-                        REFERENCES office(id) ON DELETE CASCADE,
-                    predecessor_id INTEGER,
+                    predecessor_holding_id INTEGER
+                        REFERENCES person_office(id) ON DELETE CASCADE,
                     predecessor_bare TEXT,
-                    successor_id INTEGER,
+                    successor_holding_id INTEGER
+                        REFERENCES person_office(id) ON DELETE CASCADE,
                     successor_bare TEXT,
-                    CHECK ((predecessor_id IS NULL) != (predecessor_bare IS NULL)),
-                    CHECK ((successor_id IS NULL) != (successor_bare IS NULL)),
-                    CHECK (predecessor_id IS NOT NULL OR successor_id IS NOT NULL),
-                    CHECK (predecessor_id != successor_id),
-                    UNIQUE (office_id, predecessor_id, successor_id),
-                    FOREIGN KEY (predecessor_id, office_id)
-                        REFERENCES person_office(instance_id, office_id) ON DELETE CASCADE,
-                    FOREIGN KEY (successor_id, office_id)
-                        REFERENCES person_office(instance_id, office_id) ON DELETE CASCADE
+                    CHECK ((predecessor_holding_id IS NULL) != (predecessor_bare IS NULL)),
+                    CHECK ((successor_holding_id IS NULL) != (successor_bare IS NULL)),
+                    CHECK (predecessor_holding_id IS NOT NULL OR successor_holding_id IS NOT NULL),
+                    CHECK (predecessor_holding_id != successor_holding_id),
+                    UNIQUE (predecessor_holding_id, successor_holding_id)
                 """
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS person_office_succession (
                 \(successionTableBody)
                 ) STRICT
                 """)
-            // Bare-name endpoints were added July 2026. Databases from before
-            // then have NOT NULL endpoint ids and no bare columns; neither
-            // nullability nor table CHECKs can be ALTERed in, so rebuild once,
-            // preserving row ids (peers render in edge-creation order). The
-            // dropped indexes are recreated just below.
+
+            // Multi-stint holdings shipped August 2026: person_office lost its
+            // UNIQUE(instance_id, office_id) and succession endpoints were
+            // rekeyed from (person, office) composite FKs to person_office row
+            // ids. Neither a UNIQUE nor FK/CHECK shapes can be ALTERed away,
+            // so older databases rebuild both tables once, preserving BOTH
+            // tables' row ids (holding ids are the new FK anchors; edges
+            // render in creation order). The old succession rows are read into
+            // memory and the old table dropped FIRST — with foreign keys on,
+            // dropping person_office would run an implicit DELETE whose old
+            // composite-FK cascade silently wipes every edge. This also
+            // absorbs the July-2026 bare-endpoint rebuild: a pre-bare database
+            // (NOT NULL endpoint ids, no *_bare columns) takes the same path
+            // with its bare values read as NULL. Old instance endpoints map to
+            // the peer's single holding of the edge's office — unique under
+            // the old constraint.
             let successionColumns = try Row.fetchAll(db, sql: "PRAGMA table_info(person_office_succession)")
                 .map { $0["name"] as String }
-            if !successionColumns.contains("predecessor_bare") {
+            if !successionColumns.contains("predecessor_holding_id") {
+                let hasBareColumns = successionColumns.contains("predecessor_bare")
+                let oldEdges = try Row.fetchAll(
+                    db,
+                    sql: hasBareColumns
+                        ? """
+                          SELECT id, office_id, predecessor_id, predecessor_bare, successor_id, successor_bare
+                          FROM person_office_succession ORDER BY id
+                          """
+                        : """
+                          SELECT id, office_id, predecessor_id, NULL AS predecessor_bare,
+                                 successor_id, NULL AS successor_bare
+                          FROM person_office_succession ORDER BY id
+                          """
+                )
+                try db.execute(sql: "DROP TABLE person_office_succession")
+
+                let personOfficeSQL = try String.fetchOne(
+                    db,
+                    sql: "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'person_office'"
+                ) ?? ""
+                if personOfficeSQL.contains("UNIQUE") {
+                    try db.execute(sql: """
+                        CREATE TABLE person_office_new (
+                        \(personOfficeTableBody)
+                        ) STRICT
+                        """)
+                    try db.execute(sql: """
+                        INSERT INTO person_office_new (id, instance_id, office_id, when_began, when_ended, note, order_index)
+                        SELECT id, instance_id, office_id, when_began, when_ended, note, order_index FROM person_office
+                        """)
+                    try db.execute(sql: "DROP TABLE person_office")
+                    try db.execute(sql: "ALTER TABLE person_office_new RENAME TO person_office")
+                }
+
                 try db.execute(sql: """
-                    CREATE TABLE person_office_succession_new (
+                    CREATE TABLE person_office_succession (
                     \(successionTableBody)
                     ) STRICT
                     """)
-                try db.execute(sql: """
-                    INSERT INTO person_office_succession_new (id, office_id, predecessor_id, successor_id)
-                    SELECT id, office_id, predecessor_id, successor_id FROM person_office_succession
-                    """)
-                try db.execute(sql: "DROP TABLE person_office_succession")
-                try db.execute(sql: "ALTER TABLE person_office_succession_new RENAME TO person_office_succession")
+                for edge in oldEdges {
+                    func holdingID(ofPerson personID: Int64?, officeID: Int64) throws -> Int64? {
+                        guard let personID else { return nil }
+                        return try Int64.fetchOne(
+                            db,
+                            sql: "SELECT id FROM person_office WHERE instance_id = ? AND office_id = ? ORDER BY id LIMIT 1",
+                            arguments: [personID, officeID]
+                        )
+                    }
+                    let officeID = edge["office_id"] as Int64
+                    let predecessorID = edge["predecessor_id"] as Int64?
+                    let successorID = edge["successor_id"] as Int64?
+                    let predecessorHoldingID = try holdingID(ofPerson: predecessorID, officeID: officeID)
+                    let successorHoldingID = try holdingID(ofPerson: successorID, officeID: officeID)
+                    // An instance endpoint without a holding row would have
+                    // violated the old composite FK; skip rather than crash
+                    // the launch on an inconsistent database.
+                    if predecessorID != nil && predecessorHoldingID == nil { continue }
+                    if successorID != nil && successorHoldingID == nil { continue }
+                    try db.execute(
+                        sql: """
+                            INSERT OR IGNORE INTO person_office_succession
+                                (id, predecessor_holding_id, predecessor_bare, successor_holding_id, successor_bare)
+                            VALUES (?, ?, ?, ?, ?)
+                            """,
+                        arguments: [
+                            edge["id"] as Int64,
+                            predecessorHoldingID,
+                            predecessorHoldingID == nil ? edge["predecessor_bare"] as String? : nil,
+                            successorHoldingID,
+                            successorHoldingID == nil ? edge["successor_bare"] as String? : nil,
+                        ]
+                    )
+                }
             }
+
+            // person_office's old UNIQUE doubled as the (instance_id, ...)
+            // lookup index; keep per-person fetches indexed explicitly.
             try db.execute(sql: """
-                CREATE INDEX IF NOT EXISTS idx_person_office_succession_pred
-                    ON person_office_succession(predecessor_id, office_id)
+                CREATE INDEX IF NOT EXISTS idx_person_office_instance
+                    ON person_office(instance_id)
                 """)
             try db.execute(sql: """
-                CREATE INDEX IF NOT EXISTS idx_person_office_succession_succ
-                    ON person_office_succession(successor_id, office_id)
+                CREATE INDEX IF NOT EXISTS idx_person_office_office
+                    ON person_office(office_id)
+                """)
+            try db.execute(sql: """
+                CREATE INDEX IF NOT EXISTS idx_person_office_succession_pred_holding
+                    ON person_office_succession(predecessor_holding_id)
+                """)
+            try db.execute(sql: """
+                CREATE INDEX IF NOT EXISTS idx_person_office_succession_succ_holding
+                    ON person_office_succession(successor_holding_id)
                 """)
             // UNIQUE treats NULLs as distinct, so the table-level UNIQUE only
-            // covers instance-instance edges; these cover the two bare shapes.
+            // covers stint-stint edges; these cover the two bare shapes.
             try db.execute(sql: """
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_person_office_succession_unique_bare_pred
-                    ON person_office_succession(office_id, predecessor_bare, successor_id)
-                    WHERE predecessor_id IS NULL
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_person_office_succession_unique_bare_pred2
+                    ON person_office_succession(successor_holding_id, predecessor_bare)
+                    WHERE predecessor_holding_id IS NULL
                 """)
             try db.execute(sql: """
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_person_office_succession_unique_bare_succ
-                    ON person_office_succession(office_id, predecessor_id, successor_bare)
-                    WHERE successor_id IS NULL
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_person_office_succession_unique_bare_succ2
+                    ON person_office_succession(predecessor_holding_id, successor_bare)
+                    WHERE successor_holding_id IS NULL
                 """)
 
             // Built-in Person queries (Mother/Father/Parents/Adoptive Mother/

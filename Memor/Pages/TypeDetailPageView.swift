@@ -568,7 +568,7 @@ struct TypeDetailPageView: View {
 
     private var personOfficeQueryRows: [(String, String)] {
         [
-            ("Office: {office}", "One query per office the person holds; the answer shows predecessors, the person, and successors."),
+            ("Office: {office}", "One query per office the person holds, however many separate terms; the answer shows one predecessors/person/successors row per term."),
             ("All Offices", "Which offices has this person held?"),
         ]
     }
@@ -805,7 +805,7 @@ struct TypeDetailPageView: View {
                                     VStack(alignment: .leading, spacing: 8) {
                                         Text("The _offices element")
                                             .font(.headline)
-                                        Text("In a Person query's HTML, the first element with the id _offices—for example <div id=\"_offices\"></div>—has its contents replaced when the query renders. Later elements with the id are left alone. The replacement is one three-panel succession row per office this person holds, in the person's office order. The left and right panels list the office's predecessors and successors. The middle panel shows the office name, a colon, and the held period—not the person's name. The holding's note, when present, appears on its own line beneath. Style the rows with the .office-succession CSS classes. The preview on this page renders no specific person, so the element is left as typed here.")
+                                        Text("In a Person query's HTML, the first element with the id _offices—for example <div id=\"_offices\"></div>—has its contents replaced when the query renders. Later elements with the id are left alone. The replacement is one three-panel succession row per office term this person held—an office held twice gets two rows—in the person's office order. The left and right panels list that term's predecessors and successors. The middle panel shows the office name, a colon, and the held period—not the person's name. The term's note, when present, appears on its own line beneath. Style the rows with the .office-succession CSS classes. The preview on this page renders no specific person, so the element is left as typed here.")
                                             .font(.callout)
                                     }
                                     .frame(width: 360, alignment: .leading)

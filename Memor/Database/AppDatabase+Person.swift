@@ -275,20 +275,30 @@ extension AppDatabase {
 
             let ungrouped = try Self.fetchDirectChildRows(db: db, parentID: instanceID)
 
-            // Office holdings + their succession peers + per-office enablement.
+            // Office stints (one draft per person_office row) + each stint's
+            // own succession peers + per-OFFICE query enablement, stamped
+            // identically on every stint of an office (the query row is one
+            // per office, not per stint).
             var officeNamesByID: [Int64: String] = [:]
             var offices: [PersonOfficeDraft] = []
+            var enabledOfficeQueryIDs: Set<Int64> = []
+            var checkedOfficeIDs: Set<Int64> = []
             for holding in try Self.fetchPersonOfficeHoldings(db: db, instanceID: instanceID) {
                 officeNamesByID[holding.officeID] = holding.officeName
-                let peers = try Self.fetchOfficeSuccessionPeers(db: db, instanceID: instanceID, officeID: holding.officeID)
-                let queryEnabled = try Int.fetchOne(
-                    db,
-                    sql: """
-                        SELECT COUNT(*) FROM person_query
-                        WHERE instance_id = ? AND kind = 'office' AND office_id = ?
-                        """,
-                    arguments: [instanceID, holding.officeID]
-                ) ?? 0 > 0
+                let peers = try Self.fetchOfficeSuccessionPeers(db: db, holdingID: holding.personOfficeID)
+                if checkedOfficeIDs.insert(holding.officeID).inserted {
+                    let queryEnabled = try Int.fetchOne(
+                        db,
+                        sql: """
+                            SELECT COUNT(*) FROM person_query
+                            WHERE instance_id = ? AND kind = 'office' AND office_id = ?
+                            """,
+                        arguments: [instanceID, holding.officeID]
+                    ) ?? 0 > 0
+                    if queryEnabled {
+                        enabledOfficeQueryIDs.insert(holding.officeID)
+                    }
+                }
                 offices.append(PersonOfficeDraft(
                     personOfficeID: holding.personOfficeID,
                     officeID: holding.officeID,
@@ -297,7 +307,7 @@ extension AppDatabase {
                     note: holding.note,
                     predecessors: peers.predecessors,
                     successors: peers.successors,
-                    isQueryEnabled: queryEnabled
+                    isQueryEnabled: enabledOfficeQueryIDs.contains(holding.officeID)
                 ))
             }
 
@@ -351,6 +361,22 @@ extension AppDatabase {
                 }
             }
 
+            // Chip labels for succession-peer stints whose owner holds that
+            // office more than once (labels for ALL of the peer's stints of
+            // it, so a later pick in the same editor session has them too).
+            var officeStintLabels: [Int64: String] = [:]
+            for office in relations.offices {
+                for entry in office.predecessors + office.successors {
+                    guard case .holding(let holdingID, let peerID) = entry,
+                          officeStintLabels[holdingID] == nil else { continue }
+                    let peerStints = try Self.fetchOfficeStints(db: db, instanceID: peerID, officeID: office.officeID)
+                    guard peerStints.count > 1 else { continue }
+                    for (stintIndex, stint) in peerStints.enumerated() {
+                        officeStintLabels[stint.personOfficeID] = Self.officeStintLabel(stint, index: stintIndex)
+                    }
+                }
+            }
+
             var builtinQueries: [PersonBuiltinQueryInfo] = []
             for kind in PersonQueryKind.standaloneKinds {
                 let row = try Row.fetchOne(
@@ -373,9 +399,11 @@ extension AppDatabase {
                     lastAnsweredTimestamp: row?["last_answered_timestamp"]
                 ))
             }
-            // One `.office` info per holding (interval display on the editor's
-            // office checklist rows; enablement itself rides PersonOfficeDraft).
-            for office in relations.offices {
+            // One `.office` info per DISTINCT held office, in first-stint
+            // order (interval display on the editor's office checklist rows;
+            // enablement itself rides PersonOfficeDraft).
+            var infoOfficeIDs: Set<Int64> = []
+            for office in relations.offices where infoOfficeIDs.insert(office.officeID).inserted {
                 let row = try Row.fetchOne(
                     db,
                     sql: """
@@ -408,6 +436,7 @@ extension AppDatabase {
                 sexesByInstanceID: sexes,
                 timePeriodsByInstanceID: timePeriods,
                 officeNamesByID: officeNamesByID,
+                officeStintLabelsByHoldingID: officeStintLabels,
                 builtinQueries: builtinQueries
             )
         }
@@ -558,7 +587,7 @@ extension AppDatabase {
                 personTypeID: personTypeID,
                 relations: relations,
                 currentPartnershipIDs: Set(currentPartnerships.map(\.id)),
-                currentPersonOfficeIDs: Set(currentHoldings.map(\.personOfficeID))
+                currentHoldings: currentHoldings
             )
 
             // 4-5. Diff + conflict collection (read-only).
@@ -1124,39 +1153,53 @@ extension AppDatabase {
                 changes.insert(PersonRelationChange(instanceID: personID, kind: .children))
             }
 
-            // 6i. Offices: holdings, succession edges, and their change-set
+            // 6i. Offices: stints, succession edges, and their change-set
             // entries. Unlike the parent-slot fan-out (which over-approximates),
             // this set is exact: edge changes reset both endpoints' per-office
             // query but NOT peers' All Offices (that answer shows only the
             // person's own holdings, no succession content). Deletes first.
-            let currentHoldingsByOfficeID = Dictionary(uniqueKeysWithValues: currentHoldings.map { ($0.officeID, $0) })
+            // Stints are matched to drafts by person_office row id (nil = new
+            // stint), like partnerships — NEVER by office id, which no longer
+            // identifies a row.
+            let currentHoldingsByID = Dictionary(uniqueKeysWithValues: currentHoldings.map { ($0.personOfficeID, $0) })
+            let draftKeptHoldingIDs = Set(relations.offices.compactMap(\.personOfficeID))
             let draftOfficeIDs = Set(relations.offices.map(\.officeID))
 
-            // Removed holdings: capture edge peers first (their office answers
-            // lose this person), then delete the per-office query row explicitly
-            // (person_query FKs the office, not the holding) and the holding —
-            // whose composite-FK cascade removes this person's edges for the
-            // office in both directions.
-            for holding in currentHoldings where !draftOfficeIDs.contains(holding.officeID) {
-                let peers = try Self.fetchOfficeSuccessionPeers(db: db, instanceID: personID, officeID: holding.officeID)
+            // Removed stints: capture edge peers first (their office answers
+            // lose this person), then delete the row — the holding-FK cascade
+            // removes exactly this stint's edges in both directions. When
+            // other stints of the office remain, this person's own per-office
+            // answer just loses a row (the query row dies only with the LAST
+            // stint, next loop).
+            for holding in currentHoldings where !draftKeptHoldingIDs.contains(holding.personOfficeID) {
+                let peers = try Self.fetchOfficeSuccessionPeers(db: db, holdingID: holding.personOfficeID)
                 for peerID in Set((peers.predecessors + peers.successors).compactMap(\.instanceID)) {
                     changes.insert(PersonRelationChange(instanceID: peerID, kind: .office(officeID: holding.officeID)))
                 }
                 try db.execute(
-                    sql: "DELETE FROM person_query WHERE instance_id = ? AND kind = 'office' AND office_id = ?",
-                    arguments: [personID, holding.officeID]
-                )
-                try db.execute(
-                    sql: "DELETE FROM person_office WHERE instance_id = ? AND office_id = ?",
-                    arguments: [personID, holding.officeID]
+                    sql: "DELETE FROM person_office WHERE id = ?",
+                    arguments: [holding.personOfficeID]
                 )
                 changes.insert(PersonRelationChange(instanceID: personID, kind: .allOffices))
+                if draftOfficeIDs.contains(holding.officeID) {
+                    changes.insert(PersonRelationChange(instanceID: personID, kind: .office(officeID: holding.officeID)))
+                }
+            }
+            // Offices with no remaining stints lose their per-office query row
+            // (SRS loss; person_query FKs the office, not the holding).
+            for officeID in Set(currentHoldings.map(\.officeID)).subtracting(draftOfficeIDs).sorted() {
+                try db.execute(
+                    sql: "DELETE FROM person_query WHERE instance_id = ? AND kind = 'office' AND office_id = ?",
+                    arguments: [personID, officeID]
+                )
             }
 
-            // Kept holdings UPDATE in place; added holdings INSERT. order_index
-            // always follows the draft order.
+            // Kept stints UPDATE in place (row ids anchor succession edges);
+            // added stints INSERT, capturing their new row ids for the edge
+            // pass below. order_index always follows the draft order.
+            var holdingIDByDraftIndex: [Int: Int64] = [:]
             for (index, draft) in relations.offices.enumerated() {
-                if let current = currentHoldingsByOfficeID[draft.officeID] {
+                if let holdingRowID = draft.personOfficeID, let current = currentHoldingsByID[holdingRowID] {
                     if current.whenBegan != draft.whenBegan
                         || current.whenEnded != draft.whenEnded
                         || current.note != draft.note {
@@ -1166,10 +1209,11 @@ extension AppDatabase {
                     try db.execute(
                         sql: """
                             UPDATE person_office SET when_began = ?, when_ended = ?, note = ?, order_index = ?
-                            WHERE instance_id = ? AND office_id = ?
+                            WHERE id = ?
                             """,
-                        arguments: [draft.whenBegan, draft.whenEnded, draft.note, index, personID, draft.officeID]
+                        arguments: [draft.whenBegan, draft.whenEnded, draft.note, index, holdingRowID]
                     )
+                    holdingIDByDraftIndex[index] = holdingRowID
                 } else {
                     try db.execute(
                         sql: """
@@ -1178,91 +1222,131 @@ extension AppDatabase {
                             """,
                         arguments: [personID, draft.officeID, draft.whenBegan, draft.whenEnded, draft.note, index]
                     )
+                    holdingIDByDraftIndex[index] = db.lastInsertedRowID
                     changes.insert(PersonRelationChange(instanceID: personID, kind: .allOffices))
+                    // A new stint also changes the per-office answer (it gains
+                    // a row); for a first-held office the reset is a no-op.
+                    changes.insert(PersonRelationChange(instanceID: personID, kind: .office(officeID: draft.officeID)))
                 }
             }
-            // Order-only changes still re-render the All Offices answer.
-            if currentHoldings.map(\.officeID) != relations.offices.map(\.officeID) {
+            // Order-only changes still re-render the All Offices answer; two
+            // stints of one office trading places re-render that office's
+            // answer too (its rows follow the person's office order).
+            if currentHoldings.map(\.personOfficeID) != relations.offices.indices.map({ holdingIDByDraftIndex[$0]! }) {
                 changes.insert(PersonRelationChange(instanceID: personID, kind: .allOffices))
             }
+            for officeID in draftOfficeIDs {
+                let currentSequence = currentHoldings
+                    .filter { $0.officeID == officeID && draftKeptHoldingIDs.contains($0.personOfficeID) }
+                    .map(\.personOfficeID)
+                let draftSequence = relations.offices
+                    .filter { $0.officeID == officeID }
+                    .compactMap(\.personOfficeID)
+                if currentSequence != draftSequence {
+                    changes.insert(PersonRelationChange(instanceID: personID, kind: .office(officeID: officeID)))
+                }
+            }
 
-            // Succession edges, per draft holding, predecessors and successors
-            // symmetric. An added edge to an INSTANCE peer who doesn't yet hold
-            // the office AUTO-ADDS the holding (empty fields, end of the peer's
-            // order) — the composite FK requires it, and the linked person did
-            // hold the office by definition. Bare-name peers anchor to this
-            // person's holding alone: no reciprocity, no AUTO-ADD, no peer
-            // change entry.
-            func ensurePeerHolding(_ peerID: Int64, officeID: Int64) throws {
+            // Succession edges, per draft stint, predecessors and successors
+            // symmetric. Peer entries resolve to a SPECIFIC peer stint before
+            // diffing: .holding entries were validated in step 3; a .instance
+            // peer with no stint of the office AUTO-ADDS one (empty fields,
+            // end of the peer's order — the holding FK requires it, and the
+            // linked person did hold the office by definition), a single-stint
+            // peer binds to that stint, and a multi-stint peer was rejected in
+            // step 3 (the caller must name the stint). Bare-name peers anchor
+            // to this person's stint alone: no reciprocity, no AUTO-ADD, no
+            // peer change entry.
+            func resolvedSuccessionPeer(_ peer: PersonSuccessionPeer, officeID: Int64) throws -> PersonSuccessionPeer {
+                guard case .instance(let peerID) = peer else { return peer }
+                let stintIDs = try Int64.fetchAll(
+                    db,
+                    sql: "SELECT id FROM person_office WHERE instance_id = ? AND office_id = ? ORDER BY order_index, id",
+                    arguments: [peerID, officeID]
+                )
+                if let only = stintIDs.first {
+                    // Step 3 rejected ambiguous (2+) peers, so first == only.
+                    return .holding(holdingID: only, instanceID: peerID)
+                }
                 try db.execute(
                     sql: """
-                        INSERT OR IGNORE INTO person_office (instance_id, office_id, order_index)
+                        INSERT INTO person_office (instance_id, office_id, order_index)
                         VALUES (?1, ?2, (SELECT COALESCE(MAX(order_index) + 1, 0) FROM person_office WHERE instance_id = ?1))
                         """,
                     arguments: [peerID, officeID]
                 )
-                if db.changesCount == 1 {
-                    changes.insert(PersonRelationChange(instanceID: peerID, kind: .allOffices))
-                }
+                changes.insert(PersonRelationChange(instanceID: peerID, kind: .allOffices))
+                return .holding(holdingID: db.lastInsertedRowID, instanceID: peerID)
             }
 
-            for draft in relations.offices {
+            for (index, draft) in relations.offices.enumerated() {
                 let officeID = draft.officeID
-                let currentPeers = try Self.fetchOfficeSuccessionPeers(db: db, instanceID: personID, officeID: officeID)
+                let holdingRowID = holdingIDByDraftIndex[index]!
+                let currentPeers = draft.personOfficeID != nil
+                    ? try Self.fetchOfficeSuccessionPeers(db: db, holdingID: holdingRowID)
+                    : (predecessors: [PersonSuccessionPeer](), successors: [PersonSuccessionPeer]())
 
                 // (isPredecessorSide: drafted peers precede this person.)
                 for (drafted, current, isPredecessorSide) in [
                     (draft.predecessors, currentPeers.predecessors, true),
                     (draft.successors, currentPeers.successors, false),
                 ] {
+                    // Post-resolution exact duplicates (an .instance shorthand
+                    // that resolved onto an explicitly listed stint) collapse,
+                    // keeping the first — mirroring the DB's edge uniqueness.
+                    var seen: Set<PersonSuccessionPeer> = []
+                    let resolved = try drafted
+                        .map { try resolvedSuccessionPeer($0, officeID: officeID) }
+                        .filter { seen.insert($0).inserted }
                     let currentSet = Set(current)
-                    let draftedSet = Set(drafted)
-                    for peer in drafted where !currentSet.contains(peer) {
+                    let draftedSet = Set(resolved)
+                    for peer in resolved where !currentSet.contains(peer) {
                         switch peer {
-                        case .instance(let peerID):
-                            try ensurePeerHolding(peerID, officeID: officeID)
+                        case .holding(let peerHoldingID, let peerID):
                             try db.execute(
                                 sql: """
-                                    INSERT OR IGNORE INTO person_office_succession (office_id, predecessor_id, successor_id)
-                                    VALUES (?, ?, ?)
+                                    INSERT OR IGNORE INTO person_office_succession (predecessor_holding_id, successor_holding_id)
+                                    VALUES (?, ?)
                                     """,
                                 arguments: isPredecessorSide
-                                    ? [officeID, peerID, personID]
-                                    : [officeID, personID, peerID]
+                                    ? [peerHoldingID, holdingRowID]
+                                    : [holdingRowID, peerHoldingID]
                             )
                             changes.insert(PersonRelationChange(instanceID: peerID, kind: .office(officeID: officeID)))
                         case .bare(let name):
                             if isPredecessorSide {
                                 try db.execute(
                                     sql: """
-                                        INSERT OR IGNORE INTO person_office_succession (office_id, predecessor_bare, successor_id)
-                                        VALUES (?, ?, ?)
+                                        INSERT OR IGNORE INTO person_office_succession (predecessor_bare, successor_holding_id)
+                                        VALUES (?, ?)
                                         """,
-                                    arguments: [officeID, name, personID]
+                                    arguments: [name, holdingRowID]
                                 )
                             } else {
                                 try db.execute(
                                     sql: """
-                                        INSERT OR IGNORE INTO person_office_succession (office_id, predecessor_id, successor_bare)
-                                        VALUES (?, ?, ?)
+                                        INSERT OR IGNORE INTO person_office_succession (predecessor_holding_id, successor_bare)
+                                        VALUES (?, ?)
                                         """,
-                                    arguments: [officeID, personID, name]
+                                    arguments: [holdingRowID, name]
                                 )
                             }
+                        case .instance:
+                            break // unreachable: resolvedSuccessionPeer never returns .instance
                         }
                         changes.insert(PersonRelationChange(instanceID: personID, kind: .office(officeID: officeID)))
                     }
                     for peer in current where !draftedSet.contains(peer) {
                         switch peer {
-                        case .instance(let peerID):
+                        case .holding(let peerHoldingID, let peerID):
                             try db.execute(
                                 sql: """
                                     DELETE FROM person_office_succession
-                                    WHERE office_id = ? AND predecessor_id = ? AND successor_id = ?
+                                    WHERE predecessor_holding_id = ? AND successor_holding_id = ?
                                     """,
                                 arguments: isPredecessorSide
-                                    ? [officeID, peerID, personID]
-                                    : [officeID, personID, peerID]
+                                    ? [peerHoldingID, holdingRowID]
+                                    : [holdingRowID, peerHoldingID]
                             )
                             changes.insert(PersonRelationChange(instanceID: peerID, kind: .office(officeID: officeID)))
                         case .bare(let name):
@@ -1270,19 +1354,21 @@ extension AppDatabase {
                                 try db.execute(
                                     sql: """
                                         DELETE FROM person_office_succession
-                                        WHERE office_id = ? AND predecessor_bare = ? AND successor_id = ?
+                                        WHERE predecessor_bare = ? AND successor_holding_id = ?
                                         """,
-                                    arguments: [officeID, name, personID]
+                                    arguments: [name, holdingRowID]
                                 )
                             } else {
                                 try db.execute(
                                     sql: """
                                         DELETE FROM person_office_succession
-                                        WHERE office_id = ? AND predecessor_id = ? AND successor_bare = ?
+                                        WHERE predecessor_holding_id = ? AND successor_bare = ?
                                         """,
-                                    arguments: [officeID, personID, name]
+                                    arguments: [holdingRowID, name]
                                 )
                             }
+                        case .instance:
+                            break // unreachable: fetched peers are never .instance
                         }
                         changes.insert(PersonRelationChange(instanceID: personID, kind: .office(officeID: officeID)))
                     }
@@ -1326,19 +1412,23 @@ extension AppDatabase {
                     )
                 }
             }
-            for draft in relations.offices {
-                if draft.isQueryEnabled {
+            // The office query row is one per (person, office): enabled iff
+            // ANY stint draft of that office says so (stints of one office
+            // normally agree — fetch stamps them identically).
+            for officeID in draftOfficeIDs.sorted() {
+                let enabled = relations.offices.contains { $0.officeID == officeID && $0.isQueryEnabled }
+                if enabled {
                     try db.execute(
                         sql: """
                             INSERT OR IGNORE INTO person_query (instance_id, kind, office_id)
                             VALUES (?, 'office', ?)
                             """,
-                        arguments: [personID, draft.officeID]
+                        arguments: [personID, officeID]
                     )
                 } else {
                     try db.execute(
                         sql: "DELETE FROM person_query WHERE instance_id = ? AND kind = 'office' AND office_id = ?",
-                        arguments: [personID, draft.officeID]
+                        arguments: [personID, officeID]
                     )
                 }
             }
@@ -1375,7 +1465,7 @@ extension AppDatabase {
         personTypeID: Int64,
         relations: PersonRelationsDraft,
         currentPartnershipIDs: Set<Int64>,
-        currentPersonOfficeIDs: Set<Int64>
+        currentHoldings: [PersonOfficeHolding]
     ) throws {
         var instanceRefs: [Int64] = []
         var bareNames: [String] = []
@@ -1426,26 +1516,70 @@ extension AppDatabase {
 
         // Office shape checks. Self-links get their office-specific message
         // BEFORE the peers merge into instanceRefs (whose generic self-relative
-        // check already ran above on relationship refs only).
+        // check already ran above on relationship refs only). Duplicate
+        // OFFICES are legal now (one draft per stint); duplicate STINTS are
+        // not, and kept stints must still belong to their drafted office
+        // (stints never move between offices — the save UPDATEs dates/note
+        // only, and succession edges resolve against the drafted office).
+        let currentHoldingsByRowID = Dictionary(uniqueKeysWithValues: currentHoldings.map { ($0.personOfficeID, $0) })
         let draftOfficeIDs = relations.offices.map(\.officeID)
-        if draftOfficeIDs.count != Set(draftOfficeIDs).count {
-            throw DatabaseError(message: "The same office cannot be added to a person twice.")
+        let draftHoldingIDs = relations.offices.compactMap(\.personOfficeID)
+        if draftHoldingIDs.count != Set(draftHoldingIDs).count {
+            throw DatabaseError(message: "The same office entry cannot be listed twice.")
         }
         for office in relations.offices {
-            if (office.predecessors + office.successors).contains(.instance(personID)) {
+            if let personOfficeID = office.personOfficeID {
+                guard let current = currentHoldingsByRowID[personOfficeID] else {
+                    throw DatabaseError(message: "Unknown office entry for this person.")
+                }
+                guard current.officeID == office.officeID else {
+                    throw DatabaseError(message: "An office entry cannot change which office it is for — remove it and add the other office instead.")
+                }
+            }
+            if (office.predecessors + office.successors).contains(where: { $0.instanceID == personID }) {
                 throw DatabaseError(message: "A person cannot be their own predecessor or successor.")
             }
             // Exact duplicates per side are blocked for bare names too — the
             // partial unique indexes would silently drop the second edge and
-            // break the save's full-state contract.
+            // break the save's full-state contract. Two entries for the same
+            // peer are fine when they name DIFFERENT stints of the peer.
             if office.predecessors.count != Set(office.predecessors).count
                 || office.successors.count != Set(office.successors).count {
-                throw DatabaseError(message: "The same person or name cannot be listed as a predecessor or successor twice for one office.")
+                throw DatabaseError(message: "The same person, term, or name cannot be listed as a predecessor or successor twice for one office entry.")
             }
-            if let personOfficeID = office.personOfficeID, !currentPersonOfficeIDs.contains(personOfficeID) {
-                throw DatabaseError(message: "Unknown office entry for this person.")
+            for entry in office.predecessors + office.successors {
+                switch entry {
+                case .holding(let holdingID, let peerID):
+                    // The named peer stint must exist, belong to that peer,
+                    // and be a stint of THIS office.
+                    let row = try Row.fetchOne(
+                        db,
+                        sql: "SELECT instance_id, office_id FROM person_office WHERE id = ?",
+                        arguments: [holdingID]
+                    )
+                    guard let row,
+                          row["instance_id"] as Int64 == peerID,
+                          row["office_id"] as Int64 == office.officeID else {
+                        throw DatabaseError(message: "A predecessor/successor entry names an office term that no longer exists.")
+                    }
+                    instanceRefs.append(peerID)
+                case .instance(let peerID):
+                    // Unresolved shorthand: unambiguous only when the peer
+                    // holds the office at most once (0 → AUTO-ADD at save).
+                    let stintCount = try Int.fetchOne(
+                        db,
+                        sql: "SELECT COUNT(*) FROM person_office WHERE instance_id = ? AND office_id = ?",
+                        arguments: [peerID, office.officeID]
+                    ) ?? 0
+                    if stintCount > 1 {
+                        let peerName = try displayNameOrUnknown(db: db, instanceID: peerID)
+                        throw DatabaseError(message: "\(peerName) holds this office more than once — specify which of their terms the succession link refers to.")
+                    }
+                    instanceRefs.append(peerID)
+                case .bare(let name):
+                    bareNames.append(name)
+                }
             }
-            for ref in office.predecessors + office.successors { collect(ref) }
         }
         for name in bareNames where name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw DatabaseError(message: "A name-only entry cannot be blank.")
@@ -1832,11 +1966,15 @@ extension AppDatabase {
                             JOIN person_partnership pp ON pp.id = ppc.partnership_id
                             WHERE (pp.a_id = ?1 OR pp.b_id = ?1) AND ppc.child_id IS NOT NULL
                         UNION
-                        SELECT successor_id FROM person_office_succession
-                            WHERE predecessor_id = ?1 AND successor_id IS NOT NULL
+                        SELECT po_succ.instance_id FROM person_office_succession s
+                            JOIN person_office po_pred ON po_pred.id = s.predecessor_holding_id
+                            JOIN person_office po_succ ON po_succ.id = s.successor_holding_id
+                            WHERE po_pred.instance_id = ?1
                         UNION
-                        SELECT predecessor_id FROM person_office_succession
-                            WHERE successor_id = ?1 AND predecessor_id IS NOT NULL
+                        SELECT po_pred.instance_id FROM person_office_succession s
+                            JOIN person_office po_pred ON po_pred.id = s.predecessor_holding_id
+                            JOIN person_office po_succ ON po_succ.id = s.successor_holding_id
+                            WHERE po_succ.instance_id = ?1
                     )
                     """,
                 arguments: [instanceID]
@@ -1873,8 +2011,10 @@ extension AppDatabase {
                                    WHERE (pp2.a_id = i.instance_id OR pp2.b_id = i.instance_id)
                                      AND ppc.child_id IS NOT NULL)
                         OR EXISTS (SELECT 1 FROM person_office_succession s
-                                   WHERE (s.predecessor_id = i.instance_id AND s.successor_id IS NOT NULL)
-                                      OR (s.successor_id = i.instance_id AND s.predecessor_id IS NOT NULL))
+                                   JOIN person_office po_pred ON po_pred.id = s.predecessor_holding_id
+                                   JOIN person_office po_succ ON po_succ.id = s.successor_holding_id
+                                   WHERE po_pred.instance_id = i.instance_id
+                                      OR po_succ.instance_id = i.instance_id)
                       )
                     """,
                 arguments: [personTypeID]
@@ -1894,22 +2034,28 @@ extension AppDatabase {
 
         // Gather the affected-query set BEFORE mutating.
         // Office succession peers: their per-office answers change (this
-        // person's entry becomes a bare name). Bare endpoints have no peer.
-        let successionRows = try Row.fetchAll(
+        // person's entry becomes a bare name). Bare endpoints have no peer;
+        // same-person edges are unrepresentable, so both arms only ever
+        // surface OTHER people's stints.
+        let successionPeerRows = try Row.fetchAll(
             db,
             sql: """
-                SELECT office_id, predecessor_id, successor_id
-                FROM person_office_succession
-                WHERE predecessor_id = ?1 OR successor_id = ?1
+                SELECT po_succ.instance_id AS peer_id, po_succ.office_id AS office_id
+                FROM person_office_succession s
+                JOIN person_office po_pred ON po_pred.id = s.predecessor_holding_id
+                JOIN person_office po_succ ON po_succ.id = s.successor_holding_id
+                WHERE po_pred.instance_id = ?1
+                UNION ALL
+                SELECT po_pred.instance_id, po_pred.office_id
+                FROM person_office_succession s
+                JOIN person_office po_pred ON po_pred.id = s.predecessor_holding_id
+                JOIN person_office po_succ ON po_succ.id = s.successor_holding_id
+                WHERE po_succ.instance_id = ?1
                 """,
             arguments: [instanceID]
         )
-        for row in successionRows {
-            let predecessorID = row["predecessor_id"] as Int64?
-            let successorID = row["successor_id"] as Int64?
-            let peer = predecessorID == instanceID ? successorID : predecessorID
-            guard let peer else { continue }
-            changes.insert(PersonRelationChange(instanceID: peer, kind: .office(officeID: row["office_id"])))
+        for row in successionPeerRows {
+            changes.insert(PersonRelationChange(instanceID: row["peer_id"], kind: .office(officeID: row["office_id"])))
         }
 
         let partnerships = try fetchPartnershipsInvolving(db: db, personID: instanceID)
@@ -2023,33 +2169,42 @@ extension AppDatabase {
             arguments: [name, instanceID]
         )
 
-        // 7. Office succession: edges whose OTHER endpoint is an instance keep
+        // 7. Office succession: edges whose OTHER endpoint is a stint keep
         // the fact as a bare name (OR IGNORE skips one that would duplicate an
-        // existing bare edge); whatever still references X afterwards had a
-        // bare other side — a bare-bare edge has no owner, so it's deleted.
-        // Doing this here (not via cascade) keeps peers' answers intact.
+        // existing bare edge on that stint); whatever still references X's
+        // stints afterwards had a bare other side — a bare-bare edge has no
+        // owner, so it's deleted. Doing this here (not via the holding-FK
+        // cascade of the instance delete) keeps peers' answers intact.
         try db.execute(
             sql: """
                 UPDATE OR IGNORE person_office_succession
-                SET predecessor_id = NULL, predecessor_bare = ?
-                WHERE predecessor_id = ? AND successor_id IS NOT NULL
+                SET predecessor_holding_id = NULL, predecessor_bare = ?1
+                WHERE predecessor_holding_id IN (SELECT id FROM person_office WHERE instance_id = ?2)
+                  AND successor_holding_id IS NOT NULL
                 """,
             arguments: [name, instanceID]
         )
         try db.execute(
-            sql: "DELETE FROM person_office_succession WHERE predecessor_id = ?",
+            sql: """
+                DELETE FROM person_office_succession
+                WHERE predecessor_holding_id IN (SELECT id FROM person_office WHERE instance_id = ?)
+                """,
             arguments: [instanceID]
         )
         try db.execute(
             sql: """
                 UPDATE OR IGNORE person_office_succession
-                SET successor_id = NULL, successor_bare = ?
-                WHERE successor_id = ? AND predecessor_id IS NOT NULL
+                SET successor_holding_id = NULL, successor_bare = ?1
+                WHERE successor_holding_id IN (SELECT id FROM person_office WHERE instance_id = ?2)
+                  AND predecessor_holding_id IS NOT NULL
                 """,
             arguments: [name, instanceID]
         )
         try db.execute(
-            sql: "DELETE FROM person_office_succession WHERE successor_id = ?",
+            sql: """
+                DELETE FROM person_office_succession
+                WHERE successor_holding_id IN (SELECT id FROM person_office WHERE instance_id = ?)
+                """,
             arguments: [instanceID]
         )
         // X's own person_query rows die via the instance_id_type_id FK cascade.

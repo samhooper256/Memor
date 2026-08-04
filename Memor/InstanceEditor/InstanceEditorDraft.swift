@@ -39,11 +39,17 @@ struct PersonPartnerDraftEntry: Identifiable, Hashable {
     var childrenQueryInterval: Int64?
 }
 
-/// One office card in the Person editor. `holdingID` is the persisted
-/// person_office row id (nil until first save); `officeID` always references
-/// an existing office row — offices are created in the DB before entering a
-/// draft. Predecessors/successors are Person instances or bare names, like
-/// the relationship slots.
+/// One office card in the Person editor — one card per STINT (a person may
+/// hold the same office multiple times, so two cards may share an officeID).
+/// `holdingID` is the persisted person_office row id (nil = a brand-new stint,
+/// even when another card already holds the office) and is the card's ONLY
+/// stable identity; `officeID` always references an existing office row —
+/// offices are created in the DB before entering a draft. Predecessors/
+/// successors are peer STINTS (resolved at pick time), unresolved peer
+/// instances (peer holds nothing yet — save AUTO-ADDS), or bare names.
+/// isOfficeQueryEnabled/officeQueryInterval describe the office's SHARED
+/// per-office query — the load path and checklist keep every card of one
+/// office in lockstep.
 struct PersonOfficeDraftEntry: Identifiable, Hashable {
     let id = UUID()
     var holdingID: Int64?
@@ -52,8 +58,8 @@ struct PersonOfficeDraftEntry: Identifiable, Hashable {
     var whenBeganText = ""
     var whenEndedText = ""
     var noteText = ""
-    var predecessors: [PersonRef] = []
-    var successors: [PersonRef] = []
+    var predecessors: [PersonSuccessionPeer] = []
+    var successors: [PersonSuccessionPeer] = []
     var isOfficeQueryEnabled = false
     /// Edit-mode SRS display for the per-office query (nil = never seen).
     var officeQueryInterval: Int64?
@@ -115,6 +121,11 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
     /// TimePeriod values for referenced instances (shown beside grouped-children
     /// chips). Grows as the picker adds people, like the maps above.
     @Published var personTimePeriodsByID: [Int64: String] = [:]
+    /// Date labels for succession-peer stints whose owner holds that office
+    /// more than once (chips append them to tell two terms of one peer
+    /// apart). Keyed by the peer's person_office row id; grows as the term
+    /// chooser resolves picks.
+    @Published var personStintLabelsByHoldingID: [Int64: String] = [:]
 
     /// The draft's current Sex value ("Male" unless explicitly set to "Female").
     var personSexValue: String {
@@ -142,6 +153,7 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
         personDisplayNamesByID = [:]
         personSexesByID = [:]
         personTimePeriodsByID = [:]
+        personStintLabelsByHoldingID = [:]
     }
 
     /// The relations payload for savePersonInstance.

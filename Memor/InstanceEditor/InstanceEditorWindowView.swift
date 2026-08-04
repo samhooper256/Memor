@@ -2993,13 +2993,15 @@ struct InstanceEditorWindowView: View {
         return draft.personPartners.first(where: { $0.id == entryID })?.partnershipID
     }
 
-    /// The persisted office id for an office checklist row, or nil when the
-    /// card was added this session and hasn't been saved yet (no holding row,
-    /// so no per-office query exists to preview/reset).
+    /// The persisted office id for an office checklist row, or nil when NO
+    /// card of that office has been saved yet (no holding row anywhere means
+    /// no per-office query exists to preview/reset). The query is per office,
+    /// so an unsaved second stint of an already-saved office still resolves.
     private func personSavedOfficeID(forEntryID officeEntryID: UUID?) -> Int64? {
         guard let officeEntryID,
               let entry = draft.personOffices.first(where: { $0.id == officeEntryID }),
-              entry.holdingID != nil else { return nil }
+              draft.personOffices.contains(where: { $0.officeID == entry.officeID && $0.holdingID != nil })
+        else { return nil }
         return entry.officeID
     }
 
@@ -3047,8 +3049,12 @@ struct InstanceEditorWindowView: View {
                 personOfficeID: personSavedOfficeID(forEntryID: officeEntryID)
             )])
             if let officeEntryID,
-               let index = draft.personOffices.firstIndex(where: { $0.id == officeEntryID }) {
-                draft.personOffices[index].officeQueryInterval = 0
+               let entry = draft.personOffices.first(where: { $0.id == officeEntryID }) {
+                // The interval display is mirrored on every card of the
+                // office (the query is per office, not per stint).
+                for index in draft.personOffices.indices where draft.personOffices[index].officeID == entry.officeID {
+                    draft.personOffices[index].officeQueryInterval = 0
+                }
             } else if let partnerEntryID,
                let index = draft.personPartners.firstIndex(where: { $0.id == partnerEntryID }) {
                 draft.personPartners[index].childrenQueryInterval = 0
@@ -3120,6 +3126,7 @@ struct InstanceEditorWindowView: View {
         draft.personDisplayNamesByID = data.displayNamesByInstanceID
         draft.personSexesByID = data.sexesByInstanceID
         draft.personTimePeriodsByID = data.timePeriodsByInstanceID
+        draft.personStintLabelsByHoldingID = data.officeStintLabelsByHoldingID
     }
 
     @MainActor
@@ -3175,6 +3182,15 @@ struct InstanceEditorWindowView: View {
             case .edit:
                 onEditSaved?(result.instanceID)
                 if result.resetQueryCount > 0 {
+                    // The window stays interactive until the deferred dismiss
+                    // below, and office stints are matched to drafts strictly
+                    // by person_office row id (nil = new) — refresh the draft
+                    // from the saved state so a second ⌘S inside that window
+                    // is idempotent (this session's new cards learn their row
+                    // ids) instead of INSERTing duplicate stints and edges.
+                    if let refreshed = try? appDatabase.fetchPersonEditorData(instanceID: result.instanceID) {
+                        applyPersonEditorData(refreshed)
+                    }
                     // Leave the toast on screen long enough to read the count.
                     showToast(message: "Changes saved.\(resetSuffix)", style: .success)
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {

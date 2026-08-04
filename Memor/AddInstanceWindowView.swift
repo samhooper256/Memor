@@ -206,7 +206,8 @@ final class QueryPreviewWindowState: ObservableObject {
     /// draft state (Add and Edit modes alike): relations, offices, and field
     /// values come from the editor rather than the database, so unsaved edits
     /// render. `partnerIndex` picks the childrenWith partner entry;
-    /// `officeIndex` picks the previewed holding for .office;
+    /// `officeIndex` picks the previewed OFFICE for .office (via any of its
+    /// draft entries — the preview renders every stint of that office);
     /// `selfInstanceID` is nil for a person with no row yet (Add mode).
     func requestOpenPersonDraft(
         kind: PersonQueryKind,

@@ -25,7 +25,9 @@ nonisolated struct OfficeCandidate: Identifiable, Hashable {
     let name: String
 }
 
-/// One (person, office) holding, as read for rendering and the editor.
+/// One office stint, as read for rendering and the editor. A person may hold
+/// the same office multiple times — one row per stint; `personOfficeID` is
+/// the stint's stable identity (succession edges anchor to it).
 nonisolated struct PersonOfficeHolding: Hashable {
     let personOfficeID: Int64
     let officeID: Int64
@@ -40,7 +42,8 @@ extension AppDatabase {
     // MARK: - Office CRUD
 
     /// Manager list + picker backing: every office (optionally name-filtered)
-    /// with its holder count. nil/blank query lists all.
+    /// with its holder count. nil/blank query lists all. Holder counts are
+    /// DISTINCT people — a multi-stint holder counts once.
     func fetchOffices(matching query: String? = nil) throws -> [OfficeSummary] {
         try dbQueue.read { db in
             var whereClause = ""
@@ -53,7 +56,7 @@ extension AppDatabase {
             let rows = try Row.fetchAll(
                 db,
                 sql: """
-                    SELECT o.id, o.name, o.description, COUNT(po.id) AS holderCount
+                    SELECT o.id, o.name, o.description, COUNT(DISTINCT po.instance_id) AS holderCount
                     FROM office o
                     LEFT JOIN person_office po ON po.office_id = o.id
                     \(whereClause)
@@ -73,7 +76,7 @@ extension AppDatabase {
             try Row.fetchOne(
                 db,
                 sql: """
-                    SELECT o.id, o.name, o.description, COUNT(po.id) AS holderCount
+                    SELECT o.id, o.name, o.description, COUNT(DISTINCT po.instance_id) AS holderCount
                     FROM office o
                     LEFT JOIN person_office po ON po.office_id = o.id
                     WHERE o.id = ?
@@ -136,7 +139,7 @@ extension AppDatabase {
         try dbQueue.write { db in
             let holderIDs = try Int64.fetchAll(
                 db,
-                sql: "SELECT instance_id FROM person_office WHERE office_id = ?",
+                sql: "SELECT DISTINCT instance_id FROM person_office WHERE office_id = ?",
                 arguments: [officeID]
             )
             try db.execute(sql: "DELETE FROM office WHERE id = ?", arguments: [officeID])
@@ -217,7 +220,7 @@ extension AppDatabase {
         try String.fetchOne(db, sql: "SELECT name FROM office WHERE id = ?", arguments: [officeID])
     }
 
-    /// One person's office holdings, in their own office order.
+    /// One person's office stints, in their own office order.
     nonisolated static func fetchPersonOfficeHoldings(db: Database, instanceID: Int64) throws -> [PersonOfficeHolding] {
         try Row.fetchAll(
             db,
@@ -241,37 +244,68 @@ extension AppDatabase {
         }
     }
 
-    /// One person's predecessors/successors in one office — instance refs and
-    /// bare names — each in edge-creation order (edge row ids are stable — the
-    /// save engine only inserts/deletes exact edges, never rewrites surviving
-    /// ones). Bare-endpoint edges appear only in the instance endpoint's view.
+    /// One person's stints of ONE office, in their own office order — the
+    /// stint-disambiguation lookup (succession-peer resolution, chip labels).
+    nonisolated static func fetchOfficeStints(db: Database, instanceID: Int64, officeID: Int64) throws -> [PersonOfficeHolding] {
+        try fetchPersonOfficeHoldings(db: db, instanceID: instanceID).filter { $0.officeID == officeID }
+    }
+
+    /// UI-facing wrapper: the succession-peer picker resolves which stint of
+    /// the picked peer an edge should bind to.
+    func fetchOfficeStints(instanceID: Int64, officeID: Int64) throws -> [PersonOfficeHolding] {
+        try dbQueue.read { db in
+            try Self.fetchOfficeStints(db: db, instanceID: instanceID, officeID: officeID)
+        }
+    }
+
+    /// How a stint is told apart from its siblings in chips and rendered
+    /// answers: its dates when it has any, else "term N" (1-based position
+    /// among the person's stints of that office).
+    nonisolated static func officeStintLabel(_ holding: PersonOfficeHolding, index: Int) -> String {
+        let began = holding.whenBegan.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ended = holding.whenEnded.trimmingCharacters(in: .whitespacesAndNewlines)
+        if began.isEmpty && ended.isEmpty {
+            return "term \(index + 1)"
+        }
+        return "\(began)\u{2013}\(ended)"
+    }
+
+    /// One stint's predecessors/successors — peer stints and bare names —
+    /// each in edge-creation order (edge row ids are stable — the save engine
+    /// only inserts/deletes exact edges, never rewrites surviving ones).
+    /// Bare-endpoint edges appear only in the stint endpoint's view.
     nonisolated static func fetchOfficeSuccessionPeers(
         db: Database,
-        instanceID: Int64,
-        officeID: Int64
-    ) throws -> (predecessors: [PersonRef], successors: [PersonRef]) {
-        func ref(id: Int64?, bare: String?) -> PersonRef {
-            if let id { return .instance(id) }
+        holdingID: Int64
+    ) throws -> (predecessors: [PersonSuccessionPeer], successors: [PersonSuccessionPeer]) {
+        func peer(holdingID: Int64?, instanceID: Int64?, bare: String?) -> PersonSuccessionPeer {
+            if let holdingID, let instanceID {
+                return .holding(holdingID: holdingID, instanceID: instanceID)
+            }
             return .bare(bare ?? "")
         }
         let predecessors = try Row.fetchAll(
             db,
             sql: """
-                SELECT predecessor_id, predecessor_bare FROM person_office_succession
-                WHERE office_id = ? AND successor_id = ?
-                ORDER BY id
+                SELECT s.predecessor_holding_id AS holding_id, s.predecessor_bare AS bare, po.instance_id AS peer_id
+                FROM person_office_succession s
+                LEFT JOIN person_office po ON po.id = s.predecessor_holding_id
+                WHERE s.successor_holding_id = ?
+                ORDER BY s.id
                 """,
-            arguments: [officeID, instanceID]
-        ).map { ref(id: $0["predecessor_id"], bare: $0["predecessor_bare"]) }
+            arguments: [holdingID]
+        ).map { peer(holdingID: $0["holding_id"], instanceID: $0["peer_id"], bare: $0["bare"]) }
         let successors = try Row.fetchAll(
             db,
             sql: """
-                SELECT successor_id, successor_bare FROM person_office_succession
-                WHERE office_id = ? AND predecessor_id = ?
-                ORDER BY id
+                SELECT s.successor_holding_id AS holding_id, s.successor_bare AS bare, po.instance_id AS peer_id
+                FROM person_office_succession s
+                LEFT JOIN person_office po ON po.id = s.successor_holding_id
+                WHERE s.predecessor_holding_id = ?
+                ORDER BY s.id
                 """,
-            arguments: [officeID, instanceID]
-        ).map { ref(id: $0["successor_id"], bare: $0["successor_bare"]) }
+            arguments: [holdingID]
+        ).map { peer(holdingID: $0["holding_id"], instanceID: $0["peer_id"], bare: $0["bare"]) }
         return (predecessors, successors)
     }
 }

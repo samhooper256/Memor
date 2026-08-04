@@ -456,7 +456,9 @@ enum MemorMCPTools {
             try validatePersonSexValues(typeID: current.typeID, fieldValues: mergedFieldValues, appDatabase: appDatabase)
             let personData = try appDatabase.fetchPersonEditorData(instanceID: instanceID)
             let enabledStandaloneKinds = Set(
-                personData.builtinQueries.filter { $0.enabled && $0.partnershipID == nil }.map(\.kind)
+                personData.builtinQueries
+                    .filter { $0.enabled && $0.partnershipID == nil && $0.officeID == nil }
+                    .map(\.kind)
             )
             do {
                 _ = try appDatabase.savePersonInstance(
@@ -666,6 +668,46 @@ enum MemorMCPTools {
         return try values.map { try parsePersonListRef($0, argumentLabel: "\(label).\(key)") }
     }
 
+    /// Parses one succession entry: an integer instance id (stint resolved at
+    /// save — AUTO-ADD / single stint / error when ambiguous), a bare-name
+    /// string, or an object form; {"instance_id", "person_office_id"} names a
+    /// specific stint of the peer.
+    private static func parseSuccessionPeer(_ value: Value, argumentLabel: String) throws -> PersonSuccessionPeer {
+        if let id = value.intValue { return .instance(Int64(id)) }
+        if let name = value.stringValue { return .bare(name) }
+        if let obj = value.objectValue {
+            if let idValue = obj["instance_id"], let id = idValue.intValue {
+                // A PRESENT person_office_id must parse (string ints coerce,
+                // like optionalInt64) — silently dropping a malformed one
+                // would degrade the entry to the ambiguous .instance
+                // shorthand and discard the caller's explicit stint.
+                if let holdingValue = obj["person_office_id"] {
+                    guard let holdingID = holdingValue.intValue
+                        ?? holdingValue.stringValue.flatMap({ Int($0) }) else {
+                        throw MemorMCPToolError(message: "`\(argumentLabel)`: person_office_id must be an integer (the peer's person_office row id from get_instance).")
+                    }
+                    return .holding(holdingID: Int64(holdingID), instanceID: Int64(id))
+                }
+                return .instance(Int64(id))
+            }
+            if let nameValue = obj["name"], let name = nameValue.stringValue { return .bare(name) }
+        }
+        throw MemorMCPToolError(message: "Every entry in `\(argumentLabel)` must be an instance id, a name string, {\"instance_id\"}/{\"name\"}, or {\"instance_id\", \"person_office_id\"} naming a specific stint of the peer.")
+    }
+
+    /// Parses an optional array of succession entries (nil = key absent).
+    private static func parseSuccessionPeerArray(
+        _ item: [String: Value],
+        key: String,
+        label: String
+    ) throws -> [PersonSuccessionPeer]? {
+        guard let value = item[key] else { return nil }
+        guard let values = value.arrayValue else {
+            throw MemorMCPToolError(message: "`\(label).\(key)` must be an array of instance ids, name strings, and/or {\"instance_id\", \"person_office_id\"} objects.")
+        }
+        return try values.map { try parseSuccessionPeer($0, argumentLabel: "\(label).\(key)") }
+    }
+
     /// Full-state relationship editor: a present key replaces that slot; an
     /// absent key keeps it. A present `partnerships` array is the COMPLETE list
     /// (omitted existing ids are removed; items without partnership_id create).
@@ -787,12 +829,17 @@ enum MemorMCPTools {
     }
 
     /// Full-state office editing for one Person: `offices` is the COMPLETE
-    /// ordered list of holdings (an omitted office is REMOVED, deleting its
-    /// per-office query SRS and this person's succession links for it).
-    /// Items name an EXISTING office by office_id or office_name; absent
-    /// sub-keys inherit from the current holding. Predecessors/successors are
-    /// instance ids and/or bare-name strings; linking an INSTANCE peer
-    /// AUTO-ADDS that office to them (bare names carry no reciprocity).
+    /// ordered list of STINTS (a person may hold the same office multiple
+    /// times; an omitted stint is REMOVED with its succession links, and the
+    /// office's shared per-office query SRS dies with its LAST stint).
+    /// Items name an EXISTING office by office_id or office_name and match an
+    /// existing stint by person_office_id — items without one consume the
+    /// person's remaining unmatched stints of that office positionally, and
+    /// left-over items create new stints. Absent sub-keys inherit from the
+    /// MATCHED stint. Predecessors/successors are instance ids, bare-name
+    /// strings, and/or explicit peer-stint objects; a plain instance id
+    /// AUTO-ADDS the office to a non-holder and errors when the peer is a
+    /// multi-stint holder (bare names carry no reciprocity).
     private static func updatePersonOffices(
         arguments: [String: Value],
         appDatabase: AppDatabase
@@ -806,34 +853,68 @@ enum MemorMCPTools {
         }
 
         let allOffices = try appDatabase.fetchOffices()
-        var newOffices: [PersonOfficeDraft] = []
+        var itemOfficeIDs: [Int64] = []
         for (index, item) in items.enumerated() {
             let label = "offices[\(index)]"
-
-            let officeID: Int64
             if let id = try item.optionalInt64("office_id") {
                 guard allOffices.contains(where: { $0.id == id }) else {
                     throw MemorMCPToolError(message: "\(label): office_id \(id) does not exist. Use list_offices or create_office first.")
                 }
-                officeID = id
+                itemOfficeIDs.append(id)
             } else if let name = try item.optionalString("office_name") {
                 guard let office = allOffices.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
                     throw MemorMCPToolError(message: "\(label): no office named \u{201C}\(name)\u{201D} exists. Use create_office first (offices are never created implicitly).")
                 }
-                officeID = office.id
+                itemOfficeIDs.append(office.id)
             } else {
                 throw MemorMCPToolError(message: "\(label): exactly one of office_id / office_name is required.")
             }
+        }
 
-            let existing = current.relations.offices.first { $0.officeID == officeID }
+        // Match items to existing stints. Pass 1: explicit person_office_id
+        // claims (validated against this person + the item's office). Pass 2:
+        // id-less items consume the remaining unmatched stints of their
+        // office positionally; left-overs become new stints.
+        var claimedHoldingIDs: Set<Int64> = []
+        var matchedByItemIndex: [Int: PersonOfficeDraft] = [:]
+        for (index, item) in items.enumerated() {
+            let label = "offices[\(index)]"
+            guard let holdingID = try item.optionalInt64("person_office_id") else { continue }
+            guard let existing = current.relations.offices.first(where: { $0.personOfficeID == holdingID }) else {
+                throw MemorMCPToolError(message: "\(label): person_office_id \(holdingID) is not one of this person's office stints (see get_instance).")
+            }
+            guard existing.officeID == itemOfficeIDs[index] else {
+                throw MemorMCPToolError(message: "\(label): person_office_id \(holdingID) belongs to a different office than the item names.")
+            }
+            guard claimedHoldingIDs.insert(holdingID).inserted else {
+                throw MemorMCPToolError(message: "\(label): person_office_id \(holdingID) is listed twice.")
+            }
+            matchedByItemIndex[index] = existing
+        }
+        for (index, item) in items.enumerated() {
+            guard try item.optionalInt64("person_office_id") == nil else { continue }
+            let officeID = itemOfficeIDs[index]
+            guard let existing = current.relations.offices.first(where: {
+                $0.officeID == officeID
+                    && $0.personOfficeID != nil
+                    && !claimedHoldingIDs.contains($0.personOfficeID!)
+            }) else { continue }
+            claimedHoldingIDs.insert(existing.personOfficeID!)
+            matchedByItemIndex[index] = existing
+        }
+
+        var newOffices: [PersonOfficeDraft] = []
+        for (index, item) in items.enumerated() {
+            let label = "offices[\(index)]"
+            let existing = matchedByItemIndex[index]
             newOffices.append(PersonOfficeDraft(
                 personOfficeID: existing?.personOfficeID,
-                officeID: officeID,
+                officeID: itemOfficeIDs[index],
                 whenBegan: try item.optionalString("when_began") ?? existing?.whenBegan ?? "",
                 whenEnded: try item.optionalString("when_ended") ?? existing?.whenEnded ?? "",
                 note: try item.optionalString("note") ?? existing?.note ?? "",
-                predecessors: try parsePersonRefArray(item, key: "predecessors", label: label) ?? existing?.predecessors ?? [],
-                successors: try parsePersonRefArray(item, key: "successors", label: label) ?? existing?.successors ?? [],
+                predecessors: try parseSuccessionPeerArray(item, key: "predecessors", label: label) ?? existing?.predecessors ?? [],
+                successors: try parseSuccessionPeerArray(item, key: "successors", label: label) ?? existing?.successors ?? [],
                 isQueryEnabled: try item.optionalBool("query_enabled") ?? existing?.isQueryEnabled ?? false
             ))
         }
@@ -1991,29 +2072,33 @@ enum MemorMCPTools {
 
             Tool(
                 name: "update_person_offices",
-                description: "Edit a Person instance's office holdings. `offices` is the COMPLETE ordered list: an omitted office is REMOVED from this person (deleting its per-office query's SRS progress and this person's succession links for it — irreversible). Each item names an EXISTING office via exactly one of office_id / office_name (case-insensitive; unknown names are an error — offices are never created implicitly, use create_office first). Optional per item: when_began, when_ended, note (freetext; absent keys keep the current holding's values), predecessors, successors (COMPLETE ordered arrays for that office; absent keeps current; each entry is a Person instance id or a bare-name string for someone without an instance. Instance links are reciprocal — if A precedes B then B succeeds A — and linking a person who doesn't hold the office AUTO-ADDS it to them with empty fields; bare names live only on this person's side, carry no reciprocity, and cannot repeat within one side), and query_enabled (the per-office built-in query; default keeps current / false for new holdings). Returns the person's updated relations (including offices) plus reset_query_count (non-zero when the Person type's reset-on-connection-change option is on).",
+                description: "Edit a Person instance's office holdings. A person may hold the same office multiple times — each item is one STINT (term) with its own dates, note, and succession links. `offices` is the COMPLETE ordered list of stints: an omitted stint is REMOVED (deleting that stint's succession links; the office's per-office query — one per office, however many stints — loses its SRS progress only when the office's LAST stint is removed — irreversible). Each item names an EXISTING office via exactly one of office_id / office_name (case-insensitive; unknown names are an error — offices are never created implicitly, use create_office first). Items match existing stints by `person_office_id` (from get_instance; must belong to this person and that office); items WITHOUT it consume the person's remaining unmatched stints of that office positionally (item order vs the person's current order), and left-over items create new stints. Optional per item: when_began, when_ended, note (freetext; absent keys keep the matched stint's values), predecessors, successors (COMPLETE ordered arrays for that stint; absent keeps current; each entry is a Person instance id, a bare-name string for someone without an instance, or {\"instance_id\", \"person_office_id\"} naming a specific stint of the peer. A plain instance id is resolved automatically: peer doesn't hold the office → it is AUTO-ADDED to them with empty fields; exactly one stint → that stint; several stints → error, pass person_office_id. Instance links are reciprocal — if A precedes B then B succeeds A; bare names live only on this person's side, carry no reciprocity, and cannot repeat within one stint's side), and query_enabled (the office's shared built-in query; enabled iff ANY of that office's items says true; default keeps current / false for new offices). Returns the person's updated relations (including per-stint person_office_id values) plus reset_query_count (non-zero when the Person type's reset-on-connection-change option is on).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
                         "instance_id": int64Number,
                         "offices": .object([
                             "type": .string("array"),
-                            "description": .string("Complete ordered holdings list; see the tool description for item shape."),
+                            "description": .string("Complete ordered stint list; see the tool description for item shape and stint matching."),
                             "items": .object([
                                 "type": .string("object"),
                                 "properties": .object([
                                     "office_id": int64Number,
                                     "office_name": stringValue,
+                                    "person_office_id": .object([
+                                        "type": .string("number"),
+                                        "description": .string("The existing stint (person_office row id, from get_instance) this item updates. Absent = positional match against the person's remaining stints of the office, else a new stint.")
+                                    ]),
                                     "when_began": stringValue,
                                     "when_ended": stringValue,
                                     "note": stringValue,
                                     "predecessors": .object([
                                         "type": .string("array"),
-                                        "description": .string("Ordered predecessors for that office: instance ids and/or bare name strings.")
+                                        "description": .string("Ordered predecessors for this stint: instance ids, bare name strings, and/or {\"instance_id\", \"person_office_id\"} objects naming a specific stint of the peer.")
                                     ]),
                                     "successors": .object([
                                         "type": .string("array"),
-                                        "description": .string("Ordered successors for that office: instance ids and/or bare name strings.")
+                                        "description": .string("Ordered successors for this stint: instance ids, bare name strings, and/or {\"instance_id\", \"person_office_id\"} objects naming a specific stint of the peer.")
                                     ]),
                                     "query_enabled": boolValue
                                 ])
@@ -2061,7 +2146,7 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "delete_office",
-                description: "Delete an office. This cascades IRREVERSIBLY with no confirmation: every Person's holding of it, all of its succession links, and every enabled per-office query (including SRS progress) are removed. Check holder_count via list_offices first.",
+                description: "Delete an office. This cascades IRREVERSIBLY with no confirmation: every Person's stint of it, all of its succession links, and every enabled per-office query (including SRS progress) are removed. Check holder_count via list_offices first.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -2428,7 +2513,7 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "render_query",
-                description: "Render a flashcard exactly as the user will see it. For Object-type queries, returns the final question_html and answer_html with field values substituted, the global template applied, and CSS inlined. For a Person's built-in queries, pass person_kind (plus partnership_id for children_with, or office_id for office) instead of query_type_id — the result is HTML like a standard query, with the answer computed from the current relationships/office holdings (a per-office answer is the fixed predecessors/person/successors layout; all_offices lists every holding via the office question template). For PointMap/BoundaryMap instances, pass a point/attachment ID as query_type_id and the result describes the map card (highlighted point or boundary) instead of HTML. Omit query_type_id to render the instance's first query.",
+                description: "Render a flashcard exactly as the user will see it. For Object-type queries, returns the final question_html and answer_html with field values substituted, the global template applied, and CSS inlined. For a Person's built-in queries, pass person_kind (plus partnership_id for children_with, or office_id for office) instead of query_type_id — the result is HTML like a standard query, with the answer computed from the current relationships/office holdings (a per-office answer is the fixed predecessors/person/successors layout, one row per stint when the person held the office multiple times; all_offices lists every stint via the office question template). For PointMap/BoundaryMap instances, pass a point/attachment ID as query_type_id and the result describes the map card (highlighted point or boundary) instead of HTML. Omit query_type_id to render the instance's first query.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -2737,28 +2822,62 @@ private struct PersonRelationsDTO: Encodable {
         }
         offices = relations.offices.map { office in
             PersonOfficeDTO(
+                personOfficeId: office.personOfficeID,
                 officeId: office.officeID,
                 officeName: officeNames[office.officeID] ?? "",
                 whenBegan: office.whenBegan,
                 whenEnded: office.whenEnded,
                 note: office.note,
-                predecessors: office.predecessors.map { PersonRefDTO($0, displayNames: displayNames) },
-                successors: office.successors.map { PersonRefDTO($0, displayNames: displayNames) },
+                predecessors: office.predecessors.map { PersonSuccessionPeerDTO($0, displayNames: displayNames) },
+                successors: office.successors.map { PersonSuccessionPeerDTO($0, displayNames: displayNames) },
                 queryEnabled: office.isQueryEnabled
             )
         }
     }
 }
 
+/// One office STINT (a person may hold the same office multiple times).
+/// `personOfficeId` is the stint's stable id — pass it back to
+/// update_person_offices to address this stint.
 private struct PersonOfficeDTO: Encodable {
+    let personOfficeId: Int64?
     let officeId: Int64
     let officeName: String
     let whenBegan: String
     let whenEnded: String
     let note: String
-    let predecessors: [PersonRefDTO]
-    let successors: [PersonRefDTO]
+    let predecessors: [PersonSuccessionPeerDTO]
+    let successors: [PersonSuccessionPeerDTO]
     let queryEnabled: Bool
+}
+
+/// A succession entry: a specific stint of a peer ({instance_id,
+/// person_office_id, display_value}) or a bare name ({name}).
+private struct PersonSuccessionPeerDTO: Encodable {
+    let instanceId: Int64?
+    let personOfficeId: Int64?
+    let displayValue: String?
+    let name: String?
+
+    init(_ peer: PersonSuccessionPeer, displayNames: [Int64: String]) {
+        switch peer {
+        case .holding(let holdingID, let instanceID):
+            instanceId = instanceID
+            personOfficeId = holdingID
+            displayValue = displayNames[instanceID] ?? ""
+            name = nil
+        case .instance(let instanceID):
+            instanceId = instanceID
+            personOfficeId = nil
+            displayValue = displayNames[instanceID] ?? ""
+            name = nil
+        case .bare(let bareName):
+            instanceId = nil
+            personOfficeId = nil
+            displayValue = nil
+            name = bareName
+        }
+    }
 }
 
 private struct OfficeSummaryDTO: Encodable {

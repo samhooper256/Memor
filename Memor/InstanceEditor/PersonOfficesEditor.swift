@@ -5,10 +5,13 @@
 //  The Person instance editor's Offices panel: ordered office cards (office
 //  chip, Began/Ended/Note fields, predecessor/successor entries) plus the
 //  office picker popover, which suggests existing offices by name and can
-//  create a new one inline. Every card references an existing office row.
-//  Predecessors/successors are Person instances (reciprocal by construction on
-//  save) or bare names (free text with no reciprocity), like the relationship
-//  slots. The Began/Ended/Note fields are the same InstanceTextView the main
+//  create a new one inline. Every card references an existing office row, and
+//  a card is one STINT — adding an office the person already holds makes a
+//  second card with its own dates/note/succession entries (Grover Cleveland).
+//  Predecessors/successors are peer STINTS (reciprocal by construction on
+//  save; picking a multi-term peer runs a term chooser) or bare names (free
+//  text with no reciprocity), like the relationship slots.
+//  The Began/Ended/Note fields are the same InstanceTextView the main
 //  field editors use (HTML highlighting, ⌘K hyperlinks), registered with the
 //  editor's shared focus controller under synthetic NEGATIVE field ids.
 //
@@ -72,13 +75,23 @@ struct PersonOfficesEditor: View {
                 Spacer(minLength: 0)
                 OfficeAddButton(
                     appDatabase: appDatabase,
-                    alreadySelectedOfficeIDs: Set(draft.personOffices.map(\.officeID)),
                     onSelectOffice: { officeID, officeName in
-                        let entry = PersonOfficeDraftEntry(
+                        var entry = PersonOfficeDraftEntry(
                             holdingID: nil,
                             officeID: officeID,
                             officeName: officeName
                         )
+                        // The per-office query is shared across stints, so a
+                        // second card of an already-held office must carry the
+                        // office's current enablement/interval — every card of
+                        // one office stays in lockstep (the save ORs the
+                        // flags; a default-false card would let deleting the
+                        // original card silently disable the query and drop
+                        // its SRS).
+                        if let sibling = draft.personOffices.first(where: { $0.officeID == officeID }) {
+                            entry.isOfficeQueryEnabled = sibling.isOfficeQueryEnabled
+                            entry.officeQueryInterval = sibling.officeQueryInterval
+                        }
                         draft.personOffices.append(entry)
                         // Deferred a tick: the card's Began field doesn't exist
                         // until SwiftUI commits the append, and the closing
@@ -190,8 +203,8 @@ struct PersonOfficesEditor: View {
                 officeFieldView(entryID: entry.id, slot: .note, keyPath: \.noteText)
             }
 
-            successionRow(title: "Predecessors", refs: office.predecessors)
-            successionRow(title: "Successors", refs: office.successors)
+            successionRow(title: "Predecessors", entry: entry, refs: office.predecessors)
+            successionRow(title: "Successors", entry: entry, refs: office.successors)
         }
         .padding(8)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.6))
@@ -270,7 +283,11 @@ struct PersonOfficesEditor: View {
         focusController.focusField(ids[ids.index(before: currentIndex)])
     }
 
-    private func successionRow(title: String, refs: Binding<[PersonRef]>) -> some View {
+    private func successionRow(
+        title: String,
+        entry: PersonOfficeDraftEntry,
+        refs: Binding<[PersonSuccessionPeer]>
+    ) -> some View {
         // One flow: the title, Add button, and chips share the first line and
         // only wrap when the card runs out of width.
         FlowLayout(spacing: 6) {
@@ -280,17 +297,25 @@ struct PersonOfficesEditor: View {
             PersonAddButton(
                 appDatabase: appDatabase,
                 excludingInstanceID: draft.loadedInstanceID,
-                alreadySelected: Set(refs.wrappedValue.compactMap(\.instanceID)),
+                // Only unresolved-.instance peers are grayed out (they hold no
+                // stint of the office, so a second entry could never differ).
+                // A stint-bound peer stays pickable — a multi-term peer may
+                // legitimately appear once per term; appendSuccessionPeer
+                // filters out the terms already linked on this side.
+                alreadySelected: Set(refs.wrappedValue.compactMap { peer in
+                    if case .instance(let id) = peer { return id }
+                    return nil
+                }),
                 onSelectInstance: { candidate in
                     draft.personDisplayNamesByID[candidate.id] = candidate.preferredName
                     draft.personSexesByID[candidate.id] = candidate.sex
-                    refs.wrappedValue.append(.instance(candidate.id))
+                    appendSuccessionPeer(candidate: candidate, entry: entry, refs: refs)
                 },
                 onSelectBareName: { name in
                     // Exact duplicates per side are rejected by the save (they
                     // would collide in the DB), so don't let one into the draft;
                     // ForEach ids also stay unique this way.
-                    let ref = PersonRef.bare(name)
+                    let ref = PersonSuccessionPeer.bare(name)
                     if !refs.wrappedValue.contains(ref) {
                         refs.wrappedValue.append(ref)
                     }
@@ -306,11 +331,81 @@ struct PersonOfficesEditor: View {
         }
     }
 
-    private func refLabel(_ ref: PersonRef) -> String {
-        switch ref {
-        case .instance(let personID):
+    /// Resolves WHICH stint of the picked peer the edge binds to. Terms
+    /// already linked on this side are excluded (the same peer may appear
+    /// once per term): none held → an unresolved entry the save AUTO-ADDS a
+    /// holding for; every term linked → an informational alert; exactly one
+    /// term left → bind it; several → a blocking term chooser. Alerts are
+    /// deferred a tick so the picker popover finishes closing first.
+    private func appendSuccessionPeer(
+        candidate: PersonCandidate,
+        entry: PersonOfficeDraftEntry,
+        refs: Binding<[PersonSuccessionPeer]>
+    ) {
+        let stints = (try? appDatabase.fetchOfficeStints(instanceID: candidate.id, officeID: entry.officeID)) ?? []
+        guard !stints.isEmpty else {
+            refs.wrappedValue.append(.instance(candidate.id))
+            return
+        }
+        // A multi-term peer's chips need term suffixes to stay tellable
+        // apart, whichever branch appends below.
+        if stints.count > 1 {
+            for (index, stint) in stints.enumerated() {
+                draft.personStintLabelsByHoldingID[stint.personOfficeID] = AppDatabase.officeStintLabel(stint, index: index)
+            }
+        }
+        let linkedHoldingIDs = Set(refs.wrappedValue.compactMap(\.holdingID))
+        // (index, stint) pairs keep the ORIGINAL term numbering for labels.
+        let available = stints.enumerated().filter { !linkedHoldingIDs.contains($0.element.personOfficeID) }
+        let officeName = formatFieldDisplayValue(entry.officeName)
+
+        if available.isEmpty {
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "Already linked"
+                alert.informativeText = "Every term of \(candidate.preferredName) in \(officeName) is already listed on this side."
+                alert.runModal()
+            }
+        } else if available.count == 1 {
+            refs.wrappedValue.append(.holding(
+                holdingID: available[0].element.personOfficeID,
+                instanceID: candidate.id
+            ))
+        } else {
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "Which term?"
+                alert.informativeText = "\(candidate.preferredName) holds \(officeName) \(stints.count) times. Choose the term this succession link refers to."
+                for (index, stint) in available {
+                    alert.addButton(withTitle: AppDatabase.officeStintLabel(stint, index: index))
+                }
+                alert.addButton(withTitle: "Cancel")
+                let response = alert.runModal()
+                let chosenOffset = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+                guard available.indices.contains(chosenOffset) else { return }
+                refs.wrappedValue.append(.holding(
+                    holdingID: available[chosenOffset].element.personOfficeID,
+                    instanceID: candidate.id
+                ))
+            }
+        }
+    }
+
+    private func refLabel(_ ref: PersonSuccessionPeer) -> String {
+        func personLabel(_ personID: Int64) -> String {
             let name = (draft.personDisplayNamesByID[personID] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             return name.isEmpty ? "#\(personID)" : name
+        }
+        switch ref {
+        case .holding(let holdingID, let personID):
+            // The term suffix appears only for peers holding the office more
+            // than once (the label map is populated exactly for those).
+            if let stintLabel = draft.personStintLabelsByHoldingID[holdingID] {
+                return "\(personLabel(personID)) (\(stintLabel))"
+            }
+            return personLabel(personID)
+        case .instance(let personID):
+            return personLabel(personID)
         case .bare(let name):
             return name
         }
@@ -366,7 +461,6 @@ private struct OfficeInlineTextField: View {
 
 private struct OfficeAddButton: View {
     let appDatabase: AppDatabase
-    let alreadySelectedOfficeIDs: Set<Int64>
     let onSelectOffice: (_ officeID: Int64, _ officeName: String) -> Void
 
     // Item-based presentation, NOT isPresented + `if let` content: gating the
@@ -399,13 +493,11 @@ private struct OfficeAddButton: View {
             // its results, so each keystroke re-queries the DB and the cap
             // applies to the matches rather than to the whole office list.
             itemsProvider: { query in
+                // Every office stays selectable — picking one the person
+                // already holds adds another stint (a second card).
                 let candidates = (try? appDatabase.fetchOfficeCandidates(matching: query)) ?? []
                 return candidates.map { candidate in
-                    PickerPanelItem(
-                        id: candidate.id,
-                        title: candidate.name,
-                        isSelectable: !alreadySelectedOfficeIDs.contains(candidate.id)
-                    )
+                    PickerPanelItem(id: candidate.id, title: candidate.name)
                 }
             },
             onSelect: { item in

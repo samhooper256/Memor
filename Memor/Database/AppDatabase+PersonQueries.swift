@@ -116,8 +116,9 @@ extension AppDatabase {
 
     /// Full built-in query list for one instance: the standalone kinds
     /// (including All Offices), one "Children with {partner}" per partnership
-    /// (in this person's partner order), and one "Office: {name}" per office
-    /// holding (in this person's office order), each with enablement + SRS state.
+    /// (in this person's partner order), and one "Office: {name}" per
+    /// DISTINCT held office (in first-stint order — the query is per office,
+    /// however many stints), each with enablement + SRS state.
     func fetchPersonBuiltinQueryInfos(instanceID: Int64) throws -> [PersonBuiltinQueryInfo] {
         try dbQueue.read { db in
             try Self.fetchPersonBuiltinQueryInfos(db: db, instanceID: instanceID)
@@ -161,7 +162,9 @@ extension AppDatabase {
                 displayName: try personChildrenWithDisplayName(db: db, partnerRef: partnership.partner)
             )
         }
-        for holding in try fetchPersonOfficeHoldings(db: db, instanceID: instanceID) {
+        var seenOfficeIDs: Set<Int64> = []
+        for holding in try fetchPersonOfficeHoldings(db: db, instanceID: instanceID)
+        where seenOfficeIDs.insert(holding.officeID).inserted {
             try appendInfo(
                 kind: .office,
                 partnershipID: nil,
@@ -573,6 +576,7 @@ extension AppDatabase {
         .office-succession-preds, .office-succession-succs { flex: 0 0 20%; }
         .office-succession-holder { flex: 0 0 60%; border-left: 1px solid white; border-right: 1px solid white; }
         .office-succession-note { color: gray; }
+        .office-succession-dates { color: gray; }
         """
 
     /// Assembles one built-in Person query as a renderable StudyQuery: fixed
@@ -748,14 +752,22 @@ extension AppDatabase {
             } else {
                 draftPartner = nil
             }
+            // officeIndex identifies the OFFICE (via the draft entry at that
+            // index); the preview renders every stint of it, matching the
+            // saved-state per-office answer.
             let draftOffice: PersonOfficeDraft?
+            let officeStintIndices: [Int]
             if kind == .office {
                 guard let officeIndex, relations.offices.indices.contains(officeIndex) else {
                     throw DatabaseError(message: "Office holding not found.")
                 }
                 draftOffice = relations.offices[officeIndex]
+                officeStintIndices = relations.offices.indices.filter {
+                    relations.offices[$0].officeID == relations.offices[officeIndex].officeID
+                }
             } else {
                 draftOffice = nil
+                officeStintIndices = []
             }
 
             func entryHTML(_ ref: PersonRef) throws -> String {
@@ -767,10 +779,13 @@ extension AppDatabase {
             }
 
             // Question: same shapes as personQuestionHTML, with the
-            // childrenWith partner line drawn from the DRAFTED partner.
+            // childrenWith partner line drawn from the DRAFTED partner and
+            // the office template rendered once per drafted stint.
             let questionHTML: String
-            if kind == .office, let officeIndex {
-                questionHTML = Self.renderedOfficeTemplate(template, holding: holdings[officeIndex])
+            if kind == .office {
+                questionHTML = officeStintIndices
+                    .map { Self.renderedOfficeTemplate(template, holding: holdings[$0]) }
+                    .joined(separator: "\n")
             } else {
                 var lines = ["<div class=\"person-question-title\">\(Self.personQuestionTitle(kind))</div>"]
                 let detailsHTML = try Self.personBuiltinQueryHTML(db: db)
@@ -839,12 +854,23 @@ extension AppDatabase {
                     slots: slots
                 )
             case .office:
-                body = try Self.officeSuccessionRowHTML(
-                    db: db,
-                    predecessors: draftOffice?.predecessors ?? [],
-                    successors: draftOffice?.successors ?? [],
-                    centerHTML: selfHTML
-                )
+                // One row per drafted stint of the office, mirroring
+                // personOfficeSuccessionBody (dates under the name only when
+                // the office has several stints).
+                body = try officeStintIndices.enumerated().map { stintIndex, draftIndex -> String in
+                    let stint = relations.offices[draftIndex]
+                    var center = selfHTML
+                    if officeStintIndices.count > 1 {
+                        center += "\n<div class=\"office-succession-dates\">\(Self.officeStintLabel(holdings[draftIndex], index: stintIndex))</div>"
+                    }
+                    return try Self.officeSuccessionRowHTML(
+                        db: db,
+                        predecessors: stint.predecessors,
+                        successors: stint.successors,
+                        centerHTML: center
+                    )
+                }
+                .joined(separator: "\n")
             case .allOffices:
                 body = holdings.isEmpty
                     ? Self.personNAHTML
@@ -934,14 +960,18 @@ extension AppDatabase {
     ) throws -> String {
         // A per-office question is the rendered office template alone — no
         // fixed title and no details block, since both would name the person
-        // the answer reveals.
+        // the answer reveals. Rendered once per stint of the office, in the
+        // person's office order (a multi-term holder sees every term's dates).
         if kind == .office {
-            guard let officeID,
-                  let holding = try fetchPersonOfficeHoldings(db: db, instanceID: personID)
-                      .first(where: { $0.officeID == officeID }) else {
+            guard let officeID else {
                 throw DatabaseError(message: "Office holding not found.")
             }
-            return renderedOfficeTemplate(try personOfficeQueryHTML(db: db), holding: holding)
+            let stints = try fetchOfficeStints(db: db, instanceID: personID, officeID: officeID)
+            guard !stints.isEmpty else {
+                throw DatabaseError(message: "Office holding not found.")
+            }
+            let template = try personOfficeQueryHTML(db: db)
+            return stints.map { renderedOfficeTemplate(template, holding: $0) }.joined(separator: "\n")
         }
 
         var lines = ["<div class=\"person-question-title\">\(personQuestionTitle(kind))</div>"]
@@ -1065,28 +1095,39 @@ extension AppDatabase {
         }
     }
 
-    /// The fixed per-office answer: a 20%/60%/20% three-panel row — the
-    /// person's predecessors in the office (one per line), the person's
-    /// hyperlinked name, and their successors — with thin white dividers on
-    /// either side of the middle panel (see personBuiltinQueryDefaultCSS).
+    /// The fixed per-office answer: one 20%/60%/20% three-panel row PER STINT
+    /// of the office, in the person's office order — that stint's
+    /// predecessors (one per line), the person's hyperlinked name, and that
+    /// stint's successors — with thin white dividers on either side of the
+    /// middle panel (see personBuiltinQueryDefaultCSS). A multi-term holder's
+    /// rows carry the stint's dates under the name so the terms are tellable
+    /// apart; a single-term holder keeps the bare name.
     private nonisolated static func personOfficeSuccessionBody(
         db: Database,
         personID: Int64,
         officeID: Int64
     ) throws -> String {
         let selfLink = try personEntryHTML(db: db, ref: .instance(personID))
-        return try officeSuccessionRowHTML(db: db, personID: personID, officeID: officeID, centerHTML: selfLink)
+        let stints = try fetchOfficeStints(db: db, instanceID: personID, officeID: officeID)
+        guard !stints.isEmpty else { return personNAHTML }
+        let rows = try stints.enumerated().map { index, stint -> String in
+            var center = selfLink
+            if stints.count > 1 {
+                center += "\n<div class=\"office-succession-dates\">\(officeStintLabel(stint, index: index))</div>"
+            }
+            return try officeSuccessionRowHTML(db: db, holdingID: stint.personOfficeID, centerHTML: center)
+        }
+        return rows.joined(separator: "\n")
     }
 
-    /// One 20%/60%/20% three-panel succession row for (person, office):
-    /// predecessors | centerHTML | successors, with N/A on empty sides.
+    /// One 20%/60%/20% three-panel succession row for one stint:
+    /// its predecessors | centerHTML | its successors, N/A on empty sides.
     private nonisolated static func officeSuccessionRowHTML(
         db: Database,
-        personID: Int64,
-        officeID: Int64,
+        holdingID: Int64,
         centerHTML: String
     ) throws -> String {
-        let peers = try fetchOfficeSuccessionPeers(db: db, instanceID: personID, officeID: officeID)
+        let peers = try fetchOfficeSuccessionPeers(db: db, holdingID: holdingID)
         return try officeSuccessionRowHTML(
             db: db,
             predecessors: peers.predecessors,
@@ -1098,16 +1139,23 @@ extension AppDatabase {
     /// The same three-panel row from explicit peer lists — the draft-preview
     /// path supplies the editor's uncommitted predecessors/successors directly.
     /// Instance peers render as id: links, bare names as plain spans (like
-    /// every other relationship answer entry).
+    /// every other relationship answer entry); which STINT of a peer an edge
+    /// binds to never shows in answers (the peer's name is the answer).
     private nonisolated static func officeSuccessionRowHTML(
         db: Database,
-        predecessors: [PersonRef],
-        successors: [PersonRef],
+        predecessors: [PersonSuccessionPeer],
+        successors: [PersonSuccessionPeer],
         centerHTML: String
     ) throws -> String {
-        func panel(_ refs: [PersonRef]) throws -> String {
-            guard !refs.isEmpty else { return personNAHTML }
-            return personAnswerLines(try refs.map { try personEntryHTML(db: db, ref: $0) })
+        func entryHTML(_ peer: PersonSuccessionPeer) throws -> String {
+            if let instanceID = peer.instanceID {
+                return try personEntryHTML(db: db, ref: .instance(instanceID))
+            }
+            return "<span class=\"person-bare-name\">\(peer.bareName ?? "")</span>"
+        }
+        func panel(_ peers: [PersonSuccessionPeer]) throws -> String {
+            guard !peers.isEmpty else { return personNAHTML }
+            return personAnswerLines(try peers.map(entryHTML))
         }
 
         return """
@@ -1123,12 +1171,12 @@ extension AppDatabase {
 
     /// User-authored Person query HTML support: replaces the CONTENTS of the
     /// FIRST element with id "_offices" with one .office-succession row per
-    /// office the person holds, in the person's own office order (any later
-    /// element with the id is left as typed). Unlike the built-in per-office
-    /// answer, the middle panel shows "Office: began–ended" (just the name
-    /// when both dates are blank) instead of the person's name, with the
-    /// holding's note on a line beneath when present; the side panels are the
-    /// office's predecessors/successors as usual. The element's own tag and
+    /// office STINT the person holds, in the person's own office order (any
+    /// later element with the id is left as typed). Unlike the built-in
+    /// per-office answer, the middle panel shows "Office: began–ended" (just
+    /// the name when both dates are blank) instead of the person's name, with
+    /// the stint's note on a line beneath when present; the side panels are
+    /// that stint's own predecessors/successors as usual. The element's own tag and
     /// attributes are kept so it can be styled. Called by
     /// buildRenderedQuestionHTML/buildRenderedAnswerHTML for every Person
     /// query, so it works in Study mode, Query Preview, and MCP render_query.
@@ -1172,7 +1220,7 @@ extension AppDatabase {
             if !note.isEmpty {
                 center += "\n<div class=\"office-succession-note\">\(note)</div>"
             }
-            return try officeSuccessionRowHTML(db: db, personID: personID, officeID: holding.officeID, centerHTML: center)
+            return try officeSuccessionRowHTML(db: db, holdingID: holding.personOfficeID, centerHTML: center)
         }
         .joined(separator: "\n")
     }

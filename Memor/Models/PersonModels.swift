@@ -93,20 +93,56 @@ nonisolated struct PersonPartnerDraft: Hashable {
     var isChildrenQueryEnabled: Bool = false
 }
 
-/// One office holding on a Person, as edited (and as fetched).
-/// `predecessors`/`successors` are instance-or-bare-name entries in
-/// edge-creation order (bare names carry no reciprocity and never AUTO-ADD a
-/// holding). `personOfficeID` is the person_office row id (nil = newly added;
-/// kept rows are UPDATEd in place).
+/// One predecessor/successor entry on an office stint. Instance peers bind to
+/// a SPECIFIC stint (person_office row) of the same office: `holding` carries
+/// the peer's row id plus their instance id (display + validation).
+/// `instance` is a peer with no stint resolved yet — a fresh UI pick where the
+/// peer holds nothing, or the MCP shorthand — and the save resolves it: 0
+/// stints → AUTO-ADD a holding, 1 → that stint, 2+ → error demanding the
+/// stint. Bare names anchor to the edited person's stint alone (no
+/// reciprocity, no AUTO-ADD).
+nonisolated enum PersonSuccessionPeer: Hashable {
+    case holding(holdingID: Int64, instanceID: Int64)
+    case instance(Int64)
+    case bare(String)
+
+    var instanceID: Int64? {
+        switch self {
+        case .holding(_, let instanceID): return instanceID
+        case .instance(let id): return id
+        case .bare: return nil
+        }
+    }
+
+    var bareName: String? {
+        if case .bare(let name) = self { return name }
+        return nil
+    }
+
+    var holdingID: Int64? {
+        if case .holding(let holdingID, _) = self { return holdingID }
+        return nil
+    }
+}
+
+/// One office STINT on a Person, as edited (and as fetched). A person may
+/// hold the same office multiple times — one draft per stint, each with its
+/// own dates, note, and succession entries (in edge-creation order).
+/// `personOfficeID` is the person_office row id (nil = newly added; kept rows
+/// are UPDATEd in place — row ids anchor succession edges) and is the ONLY
+/// stint identity: never match drafts to rows by officeID.
 nonisolated struct PersonOfficeDraft: Hashable {
     var personOfficeID: Int64?
     var officeID: Int64
     var whenBegan: String = ""
     var whenEnded: String = ""
     var note: String = ""
-    var predecessors: [PersonRef] = []
-    var successors: [PersonRef] = []
-    /// Whether this person's per-office built-in query is enabled.
+    var predecessors: [PersonSuccessionPeer] = []
+    var successors: [PersonSuccessionPeer] = []
+    /// Whether the person's per-OFFICE built-in query is enabled. The query
+    /// row is one per (person, office) regardless of stint count: fetches
+    /// stamp the same value on every stint of an office, and the save treats
+    /// the office's query as enabled iff ANY of its stint drafts says so.
     var isQueryEnabled: Bool = false
 }
 
@@ -124,7 +160,8 @@ nonisolated struct PersonRelationsDraft: Hashable {
 /// The built-in, non-deleteable query kinds on a Person instance.
 /// Raw values match the person_query.kind column. `childrenWith` rows
 /// additionally carry a partnership id (one query per partner entry);
-/// `office` rows carry an office id (one query per holding).
+/// `office` rows carry an office id (one query per DISTINCT held office,
+/// however many stints).
 nonisolated enum PersonQueryKind: String, Codable, Hashable, CaseIterable {
     case mother
     case father
@@ -156,7 +193,7 @@ nonisolated enum PersonQueryKind: String, Codable, Hashable, CaseIterable {
 
     /// The discriminator-independent kinds, in display order. `childrenWith`
     /// rows are enumerated separately (one per partner entry), and `office`
-    /// rows likewise (one per office holding).
+    /// rows likewise (one per distinct held office).
     static let standaloneKinds: [PersonQueryKind] = [
         .mother, .father, .parents, .adoptiveMother, .adoptiveFather, .partners, .children, .fullSiblings,
         .allOffices
@@ -194,9 +231,15 @@ nonisolated struct PersonEditorData {
     /// Office names for every office referenced by the relations (chips,
     /// checklist titles).
     let officeNamesByID: [Int64: String]
+    /// Date labels ("1885–1889", or "term N" when undated) for succession-peer
+    /// stints whose owner holds that office more than once — the editor's
+    /// chips append them so two terms of the same peer are tellable apart.
+    /// Keyed by the PEER's person_office row id.
+    let officeStintLabelsByHoldingID: [Int64: String]
     /// Enablement + SRS for the built-in kinds: the standalone kinds plus one
-    /// `.office` row per holding (childrenWith state is carried on each
-    /// PersonPartnerDraft; per-office enablement also rides PersonOfficeDraft).
+    /// `.office` row per DISTINCT held office (childrenWith state is carried
+    /// on each PersonPartnerDraft; per-office enablement also rides
+    /// PersonOfficeDraft).
     let builtinQueries: [PersonBuiltinQueryInfo]
 }
 
