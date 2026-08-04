@@ -27,6 +27,7 @@
       "Bash(echo:*)",
       "Bash(printf:*)",
       "Bash(sqlite3:*)",
+      "Bash(python3:*)",
       "Bash(lsof:*)",
       "Bash(xcodebuild:*)",
       "Bash(swiftc:*)",

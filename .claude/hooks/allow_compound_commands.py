@@ -9,6 +9,12 @@ session-temp tree (/private/tmp/claude-<uid>/…, e.g. a compiled test
 probe in a scratchpad — must be invoked by ABSOLUTE path; a relative
 ./probe still prompts because segments aren't cwd-aware).
 
+A segment that is a BARE assignment to the DB variable (`DB=...` with
+no command word after the value) is also permitted: it only sets a
+shell variable for a later allowed segment (typically sqlite3), and
+the splitter has already ruled out $(...)/backticks in the value.
+`DB=x somecommand` is NOT bare and still needs its own allow rule.
+
 Heredocs with a QUOTED delimiter (<<'EOF' / <<"EOF") are handled:
 the body expands nothing, so it is pure data for the receiving
 command — equivalent to piping a fixed string, which the allow rules
@@ -68,6 +74,34 @@ def matches(command, pattern):
     if "*" in pattern or "?" in pattern or "[" in pattern:
         return fnmatchcase(command, pattern)
     return command == pattern
+
+
+def is_bare_db_assignment(segment):
+    """True when the segment is exactly `DB=value` — no unquoted
+    whitespace after the value, so no command runs with it."""
+    if not segment.startswith("DB="):
+        return False
+    in_single = in_double = False
+    i, n = 3, len(segment)
+    while i < n:
+        c = segment[i]
+        if in_single:
+            if c == "'":
+                in_single = False
+        elif c == "\\":
+            i += 2
+            continue
+        elif in_double:
+            if c == '"':
+                in_double = False
+        elif c == "'":
+            in_single = True
+        elif c == '"':
+            in_double = True
+        elif c in " \t":
+            return False
+        i += 1
+    return True
 
 
 def split_compound(command):
@@ -205,13 +239,14 @@ def main():
     allow, deny = load_rules()
     if any(matches(p, d) for p in parts for d in deny):
         return
-    if all(any(matches(p, a) for a in allow) for p in parts):
+    if all(is_bare_db_assignment(p) or any(matches(p, a) for a in allow)
+           for p in parts):
         print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "allow",
                 "permissionDecisionReason":
-                    "Every command in the compound matches a project allow rule (or a built-in extra: sqlite3 / scratchpad executables)",
+                    "Every command in the compound matches a project allow rule (or a built-in extra: sqlite3 / scratchpad executables / bare DB= assignment)",
             }
         }))
 
