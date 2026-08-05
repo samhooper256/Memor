@@ -6,8 +6,8 @@
 //  rating lands (the same submit() seam as the divider flash bar, so every
 //  entry point — buttons, the 1–4 keys, Space-as-Good — and every query kind
 //  sounds alike). Built-in NSSound names, no bundled assets, rising from a
-//  low thud for Again to a bright chime shared by Good and Easy (both are
-//  "correct", so they celebrate the same way).
+//  low thud for Again to a quick bright tick shared by Good and Easy (both
+//  are "correct", so they celebrate the same way).
 //
 
 import AppKit
@@ -21,7 +21,10 @@ enum RatingSounds {
         switch rating {
         case .again: return "Basso"
         case .hard: return "Pop"
-        case .good, .easy: return "Glass"
+        // Tink: the brightest and shortest of the built-ins (0.56s vs
+        // Glass's 1.65s) — a quick high tick that doesn't outstay a fast
+        // study rhythm.
+        case .good, .easy: return "Tink"
         }
     }
 
