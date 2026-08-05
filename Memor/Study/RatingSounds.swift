@@ -5,9 +5,9 @@
 //  One short system sound per study response rating, played the moment a
 //  rating lands (the same submit() seam as the divider flash bar, so every
 //  entry point — buttons, the 1–4 keys, Space-as-Good — and every query kind
-//  sounds alike). Built-in NSSound names, no bundled assets; the four are
-//  distinct so the ear learns the outcome without looking, rising from a low
-//  thud for Again to a bright chime for Easy.
+//  sounds alike). Built-in NSSound names, no bundled assets, rising from a
+//  low thud for Again to a bright chime shared by Good and Easy (both are
+//  "correct", so they celebrate the same way).
 //
 
 import AppKit
@@ -21,8 +21,7 @@ enum RatingSounds {
         switch rating {
         case .again: return "Basso"
         case .hard: return "Pop"
-        case .good: return "Tink"
-        case .easy: return "Glass"
+        case .good, .easy: return "Glass"
         }
     }
 
