@@ -29,7 +29,8 @@
 //  triangle at the FINAL spacing — five equal 36° gaps per half-ring — so a
 //  placed dot never moves and, once all four are down, dots are equidistant
 //  to each other and to the triangles. 39: the dots become two dashed white
-//  half-rings (their ends tucked under the triangles). >= 40 stays at the
+//  half-rings, each inset from the triangles so the pair reads as two
+//  disconnected arcs rather than one dashed circle. >= 40 stays at the
 //  39 badge (styling for later tiers is deliberately not designed yet).
 //
 
@@ -134,9 +135,8 @@ struct StreakBadgeView: View {
 
     /// Streaks 30–39 (`remainder` = streak − 30, capped at 9): all three
     /// solid rings, the two large yellow diagonal triangles, and between the
-    /// triangles either accumulating white dots (1–8) or the two dashed
-    /// white half-rings (9). Triangles are drawn LAST so the dashed arcs'
-    /// ends tuck underneath them.
+    /// triangles either accumulating white dots (1–8) or two disconnected
+    /// dashed white half-rings (9).
     private static func drawThirtiesTier(context: GraphicsContext, center: CGPoint, remainder: Int) {
         for index in 0..<ringColors.count {
             context.stroke(
@@ -174,15 +174,18 @@ struct StreakBadgeView: View {
                 )
             }
         case 9:
-            // The dots give way to two dashed white half-rings, each spanning
-            // triangle to triangle along the dots' circle.
+            // The dots give way to two dashed white half-rings along the
+            // dots' circle, inset half a dot-gap from each triangle so they
+            // read as two DISCONNECTED arcs with clear air around the
+            // triangles — not one dashed ring passing beneath them.
+            let inset = dotSpacing / 2
             for startAngle in [lowerTriangleAngle, higherTriangleAngle] {
                 var arc = Path()
                 arc.addArc(
                     center: center,
                     radius: dotRingRadius,
-                    startAngle: .radians(startAngle),
-                    endAngle: .radians(startAngle + .pi),
+                    startAngle: .radians(startAngle + inset),
+                    endAngle: .radians(startAngle + .pi - inset),
                     clockwise: false
                 )
                 context.stroke(
