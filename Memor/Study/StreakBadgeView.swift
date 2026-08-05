@@ -177,8 +177,18 @@ struct StreakBadgeView: View {
             // The dots give way to two dashed white half-rings along the
             // dots' circle, inset half a dot-gap from each triangle so they
             // read as two DISCONNECTED arcs with clear air around the
-            // triangles — not one dashed ring passing beneath them.
+            // triangles — not one dashed ring passing beneath them. The
+            // nominal 3/2.5 dash pattern is scaled so a WHOLE number of
+            // dashes (with gaps between) exactly covers the arc: dashing
+            // starts at the path's start, so both ends then finish on a
+            // complete dash instead of the last one getting cut off.
             let inset = dotSpacing / 2
+            let arcLength = (.pi - 2 * inset) * dotRingRadius
+            let nominalDash: CGFloat = 3
+            let nominalGap: CGFloat = 2.5
+            let dashCount = max(2, Int(((arcLength + nominalGap) / (nominalDash + nominalGap)).rounded()))
+            let fit = arcLength / (CGFloat(dashCount) * nominalDash + CGFloat(dashCount - 1) * nominalGap)
+            let style = StrokeStyle(lineWidth: lineWidth, dash: [nominalDash * fit, nominalGap * fit])
             for startAngle in [lowerTriangleAngle, higherTriangleAngle] {
                 var arc = Path()
                 arc.addArc(
@@ -188,11 +198,7 @@ struct StreakBadgeView: View {
                     endAngle: .radians(startAngle + .pi - inset),
                     clockwise: false
                 )
-                context.stroke(
-                    arc,
-                    with: .color(.white),
-                    style: StrokeStyle(lineWidth: lineWidth, dash: [3, 2.5])
-                )
+                context.stroke(arc, with: .color(.white), style: style)
             }
         default:
             break // streak 30: triangles alone
