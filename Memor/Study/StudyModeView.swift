@@ -20,6 +20,7 @@ enum StudyUndoAction {
         previousGreenQueries: [StudyQuery],
         previousOverlayCollectionNames: [String],
         previousAllCollectionNames: [String],
+        previousStreak: Int,
         originalInterval: Int64,
         originalLastAnsweredTimestamp: Int64?,
         originalQueryState: QueryState
@@ -53,6 +54,12 @@ struct StudyModeView: View {
     @State private var showBoundaryFinder = false
     @State private var overlayCollectionNames: [String] = []
     @State private var allCollectionNames: [String] = []
+    /// Consecutive non-Again answers this session (Hard/Good/Easy +1, Again
+    /// resets to 0). Session-only by virtue of being view state — a fresh
+    /// Study mode always starts at 0. Shown at the trailing edge of the
+    /// response bar (hidden at 0); every multiple of 5 swaps the rating's
+    /// sound for the streak jackpot (see RatingSounds).
+    @State private var streak = 0
     @State private var pendingUndo: StudyUndoAction?
     /// The query the user glimpsed before undoing a rating (⌘Z after advancing
     /// too fast). The next advance re-shows it instead of drawing randomly —
@@ -296,6 +303,12 @@ struct StudyModeView: View {
             .frame(maxWidth: .infinity)
             .frame(height: Self.responseBarHeight)
             .background(.bar)
+            // An overlay, not an HStack member: the reveal/rating controls
+            // stay perfectly centered while the streak sits at the bar's
+            // trailing edge.
+            .overlay(alignment: .trailing) {
+                streakLabel
+            }
             .onGeometryChange(for: CGRect.self) { proxy in
                 proxy.frame(in: .named(Self.ratingFlashCoordinateSpace))
             } action: { frame in
@@ -433,6 +446,23 @@ struct StudyModeView: View {
         }
     }
 
+    /// The session streak at the trailing edge of the response bar. Hidden
+    /// entirely at 0 — the flame only appears once a run is going.
+    @ViewBuilder
+    private var streakLabel: some View {
+        if streak > 0 {
+            HStack(spacing: 4) {
+                Image(systemName: "flame.fill")
+                    .foregroundStyle(.orange)
+                Text("\(streak)")
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+            }
+            .padding(.trailing, 16)
+            .accessibilityLabel("Streak: \(streak)")
+        }
+    }
+
     private func revealAnswerIfPossible() {
         guard currentQuery != nil, !isAnswerRevealed, !isCompleted else { return }
         isAnswerRevealed = true
@@ -469,6 +499,7 @@ struct StudyModeView: View {
             let previousGreenQueries,
             let previousOverlayCollectionNames,
             let previousAllCollectionNames,
+            let previousStreak,
             let originalInterval,
             let originalLastAnsweredTimestamp,
             let originalQueryState
@@ -532,6 +563,7 @@ struct StudyModeView: View {
             isCompleted = false
             overlayCollectionNames = previousOverlayCollectionNames
             allCollectionNames = previousAllCollectionNames
+            streak = previousStreak
             errorMessage = nil
         }
     }
@@ -545,6 +577,9 @@ struct StudyModeView: View {
             greenQueries = buckets.greenQueries
             pendingUndo = nil
             peekedNextQueryID = nil
+            // A fresh session starts at 0 (refreshStudySessionLive, a
+            // mid-session data refresh, deliberately leaves it alone).
+            streak = 0
             await loadNextQuery()
         } catch {
             currentQuery = nil
@@ -558,6 +593,7 @@ struct StudyModeView: View {
             isCompleted = false
             pendingUndo = nil
             peekedNextQueryID = nil
+            streak = 0
             errorMessage = "Failed to load study mode."
         }
     }
@@ -661,16 +697,20 @@ struct StudyModeView: View {
     @MainActor
     private func submit(_ rating: StudyResponseRating) async {
         guard let currentQuery else { return }
+        let previousStreak = streak
         // Flash the pressed rating's bar over the divider (replacing any
-        // still-fading bar from the previous response outright) and play the
-        // rating's sound.
+        // still-fading bar from the previous response outright), advance the
+        // streak, and play the rating's sound — the streak jackpot replaces
+        // it on every multiple of 5. All optimistic, like the flash always
+        // was; ⌘Z restores the streak from the undo snapshot.
         if let buttonFrame = ratingButtonFrames[rating] {
             ratingFlash = RatingFlash(
                 color: Self.ratingColor(rating),
                 buttonFrame: buttonFrame
             )
         }
-        RatingSounds.play(rating)
+        streak = rating == .again ? 0 : previousStreak + 1
+        RatingSounds.play(rating, streak: streak)
         let answeredAtTimestamp = Int64(Date().timeIntervalSince1970)
 
         let isPointMap = currentQuery.kind == .pointMap
@@ -688,6 +728,7 @@ struct StudyModeView: View {
             previousGreenQueries: greenQueries,
             previousOverlayCollectionNames: overlayCollectionNames,
             previousAllCollectionNames: allCollectionNames,
+            previousStreak: previousStreak,
             originalInterval: currentQuery.interval,
             originalLastAnsweredTimestamp: currentQuery.lastAnsweredTimestamp,
             originalQueryState: currentQuery.queryState

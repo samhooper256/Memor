@@ -32,11 +32,24 @@ enum RatingSounds {
         }
     }
 
+    /// Plays the sound for a landed rating. `streak` is the session streak
+    /// AFTER the rating applied: every time it reaches a multiple of 5, the
+    /// coin-cluster jackpot (StreakChime — sfx_coin_cluster3 from the same
+    /// CC0 pack, see ATTRIBUTIONS.md) REPLACES the rating's own sound.
+    /// Again resets the streak to 0, which never triggers the jackpot.
+    static func play(_ rating: StudyResponseRating, streak: Int) {
+        if streak > 0, streak.isMultiple(of: 5) {
+            play(named: "StreakChime")
+        } else {
+            play(named: soundName(rating))
+        }
+    }
+
     /// Plays a COPY of the cached sound: NSSound(named:) hands back a shared
     /// instance that refuses to restart while it is still playing, which
     /// would swallow the effect on quick back-to-back ratings.
-    static func play(_ rating: StudyResponseRating) {
-        guard let sound = NSSound(named: soundName(rating))?.copy() as? NSSound else { return }
+    private static func play(named name: NSSound.Name) {
+        guard let sound = NSSound(named: name)?.copy() as? NSSound else { return }
         sound.volume = volume
         sound.play()
     }
