@@ -10,6 +10,10 @@ Third-party assets bundled with Memor.
   (originally `sfx_coin_double1.wav`).
 - `Memor/Resources/StreakChime.wav` — the every-5th-streak jackpot sound
   (originally `sfx_coin_cluster3.wav`).
+- `Memor/Resources/StreakLoss.wav` — the losing-a-streak-of-5-to-9 sound
+  (originally `sfx_sounds_error12.wav`).
+- `Memor/Resources/StreakLossBig.wav` — the losing-a-streak-of-10+ sound
+  (originally `sfx_sounds_negative1.wav`).
 
 Both from **"The Essential Retro Video Game Sound Effects Collection
 [512 sounds]"** by **Juhani Junkala** (SubspaceAudio), renamed but

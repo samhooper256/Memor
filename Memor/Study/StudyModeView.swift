@@ -704,7 +704,7 @@ struct StudyModeView: View {
             )
         }
         streak = rating == .again ? 0 : previousStreak + 1
-        RatingSounds.play(rating, streak: streak)
+        RatingSounds.play(rating, streak: streak, previousStreak: previousStreak)
         let answeredAtTimestamp = Int64(Date().timeIntervalSince1970)
 
         let isPointMap = currentQuery.kind == .pointMap
