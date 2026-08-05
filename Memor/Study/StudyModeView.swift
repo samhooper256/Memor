@@ -662,13 +662,15 @@ struct StudyModeView: View {
     private func submit(_ rating: StudyResponseRating) async {
         guard let currentQuery else { return }
         // Flash the pressed rating's bar over the divider (replacing any
-        // still-fading bar from the previous response outright).
+        // still-fading bar from the previous response outright) and play the
+        // rating's sound.
         if let buttonFrame = ratingButtonFrames[rating] {
             ratingFlash = RatingFlash(
                 color: Self.ratingColor(rating),
                 buttonFrame: buttonFrame
             )
         }
+        RatingSounds.play(rating)
         let answeredAtTimestamp = Int64(Date().timeIntervalSince1970)
 
         let isPointMap = currentQuery.kind == .pointMap
