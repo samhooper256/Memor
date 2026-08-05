@@ -39,10 +39,11 @@ enum RatingSounds {
     /// Every time the streak reaches a multiple of 5, the coin-cluster
     /// jackpot (StreakChime — sfx_coin_cluster3) REPLACES the rating's own
     /// sound. Losing a streak escalates the same way: an Again that ends a
-    /// run of 5–9 plays StreakLoss (sfx_sounds_error12, a high-to-low
-    /// diving sweep) and a run of 10+ plays StreakLossBig
-    /// (sfx_sounds_negative1, a long low descent) instead of Basso — a
-    /// smaller run keeps the plain thud. Again zeroes the streak, so the
+    /// run of 5–9 plays StreakLoss (sfx_sounds_error13, a flat ~740 Hz
+    /// "wrong!" buzzer — mid-register on purpose, its screechier
+    /// predecessor error12 was rejected) and a run of 10+ plays
+    /// StreakLossBig (sfx_sounds_negative1, a long low descent) instead of
+    /// Basso — a smaller run keeps the plain thud. Again zeroes the streak, so the
     /// jackpot branch and the loss branches can never collide. All from the
     /// same CC0 pack — see ATTRIBUTIONS.md.
     static func play(_ rating: StudyResponseRating, streak: Int, previousStreak: Int) {

@@ -11,7 +11,7 @@ Third-party assets bundled with Memor.
 - `Memor/Resources/StreakChime.wav` — the every-5th-streak jackpot sound
   (originally `sfx_coin_cluster3.wav`).
 - `Memor/Resources/StreakLoss.wav` — the losing-a-streak-of-5-to-9 sound
-  (originally `sfx_sounds_error12.wav`).
+  (originally `sfx_sounds_error13.wav`).
 - `Memor/Resources/StreakLossBig.wav` — the losing-a-streak-of-10+ sound
   (originally `sfx_sounds_negative1.wav`).
 
