@@ -447,19 +447,13 @@ struct StudyModeView: View {
     }
 
     /// The session streak at the trailing edge of the response bar. Hidden
-    /// entirely at 0 — the flame only appears once a run is going.
+    /// entirely at 0 — the badge only appears once a run is going.
     @ViewBuilder
     private var streakLabel: some View {
         if streak > 0 {
-            HStack(spacing: 4) {
-                Image(systemName: "flame.fill")
-                    .foregroundStyle(.orange)
-                Text("\(streak)")
-                    .fontWeight(.semibold)
-                    .monospacedDigit()
-            }
-            .padding(.trailing, 16)
-            .accessibilityLabel("Streak: \(streak)")
+            StreakBadgeView(streak: streak)
+                .padding(.trailing, 12)
+                .accessibilityLabel("Streak: \(streak)")
         }
     }
 
