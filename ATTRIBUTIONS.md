@@ -4,8 +4,10 @@ Third-party assets bundled with Memor.
 
 ## Sounds
 
-- `Memor/Resources/GoodChime.wav` — the Good/Easy study-rating chime
-  (originally `sfx_coin_double4.wav`).
+- `Memor/Resources/GoodChime.wav` — the Good/Easy study-rating chime for
+  streaks up to 10 (originally `sfx_coin_double4.wav`).
+- `Memor/Resources/GoodChime2.wav` — the Good/Easy chime from streak 11 up
+  (originally `sfx_coin_double1.wav`).
 - `Memor/Resources/StreakChime.wav` — the every-5th-streak jackpot sound
   (originally `sfx_coin_cluster3.wav`).
 

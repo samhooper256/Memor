@@ -18,17 +18,19 @@ enum RatingSounds {
     /// times, so they play a notch quieter than a raw system alert.
     private static let volume: Float = 0.6
 
-    private static func soundName(_ rating: StudyResponseRating) -> NSSound.Name {
+    private static func soundName(_ rating: StudyResponseRating, streak: Int) -> NSSound.Name {
         switch rating {
         case .again: return "Basso"
         case .hard: return "Pop"
         // GoodChime (Resources/GoodChime.wav): an 8-bit two-note rising coin
         // "b-ding" (~1.0 kHz → ~2.0 kHz, 0.26s) — brighter and half the
-        // length of any built-in. NSSound(named:) finds bundle sound files
-        // before the system ones. CC0, by Juhani Junkala (SubspaceAudio),
-        // sfx_coin_double4 from "The Essential Retro Video Game Sound
+        // length of any built-in. From streak 11 up (the badge's blue tier
+        // onward) correct answers switch to GoodChime2, a mellower coin
+        // double (sfx_coin_double1, 0.21s). NSSound(named:) finds bundle
+        // sound files before the system ones. Both CC0, by Juhani Junkala
+        // (SubspaceAudio), from "The Essential Retro Video Game Sound
         // Effects Collection" — see ATTRIBUTIONS.md.
-        case .good, .easy: return "GoodChime"
+        case .good, .easy: return streak >= 11 ? "GoodChime2" : "GoodChime"
         }
     }
 
@@ -41,7 +43,7 @@ enum RatingSounds {
         if streak > 0, streak.isMultiple(of: 5) {
             play(named: "StreakChime")
         } else {
-            play(named: soundName(rating))
+            play(named: soundName(rating, streak: streak))
         }
     }
 
