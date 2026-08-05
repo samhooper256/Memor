@@ -5,9 +5,10 @@
 //  One short system sound per study response rating, played the moment a
 //  rating lands (the same submit() seam as the divider flash bar, so every
 //  entry point — buttons, the 1–4 keys, Space-as-Good — and every query kind
-//  sounds alike). Built-in NSSound names, no bundled assets, rising from a
-//  low thud for Again to a quick bright tick shared by Good and Easy (both
-//  are "correct", so they celebrate the same way).
+//  sounds alike). Rising from a low thud for Again to a bright retro coin
+//  chime shared by Good and Easy (both are "correct", so they celebrate the
+//  same way). Again/Hard are built-in NSSound names; the Good/Easy chime is
+//  a bundled CC0 asset (see ATTRIBUTIONS.md).
 //
 
 import AppKit
@@ -21,10 +22,13 @@ enum RatingSounds {
         switch rating {
         case .again: return "Basso"
         case .hard: return "Pop"
-        // Tink: the brightest and shortest of the built-ins (0.56s vs
-        // Glass's 1.65s) — a quick high tick that doesn't outstay a fast
-        // study rhythm.
-        case .good, .easy: return "Tink"
+        // GoodChime (Resources/GoodChime.wav): an 8-bit two-note rising coin
+        // "b-ding" (~1.0 kHz → ~2.0 kHz, 0.26s) — brighter and half the
+        // length of any built-in. NSSound(named:) finds bundle sound files
+        // before the system ones. CC0, by Juhani Junkala (SubspaceAudio),
+        // sfx_coin_double4 from "The Essential Retro Video Game Sound
+        // Effects Collection" — see ATTRIBUTIONS.md.
+        case .good, .easy: return "GoodChime"
         }
     }
 
