@@ -3814,16 +3814,22 @@ struct AppDatabase {
     /// Converts every instance in `instanceIDs` (all currently of `sourceTypeID`) to
     /// `destTypeID`, preserving each instance's ID. Field values are migrated according to
     /// `fieldMapping` (destFieldID -> sourceFieldID?, nil = leave blank). The converted
-    /// instances get exactly `enabledDestQueryTypeIDs` enabled (SRS state reset). When
-    /// `removeFromCollections` is true the instances are removed from all collections.
+    /// instances get exactly `enabledDestQueryTypeIDs` enabled (SRS state reset), except
+    /// that a destination query type appearing in `queryDataSources`
+    /// (destQueryTypeID -> sourceQueryTypeID) copies the instance's SRS data
+    /// (`query_state`, `last_answered_timestamp`, `interval`, `max_interval`) from its
+    /// query for the named source query type — instances without that source query
+    /// enabled still get a clean new query. When `removeFromCollections` is true the
+    /// instances are removed from all collections.
     ///
-    /// Supports Object->Object conversions only.
+    /// Supports Object->Object and Object->Person conversions only.
     func changeInstanceType(
         instanceIDs: [Int64],
         sourceTypeID: Int64,
         destTypeID: Int64,
         fieldMapping: [Int64: Int64?],
         enabledDestQueryTypeIDs: Set<Int64>,
+        queryDataSources: [Int64: Int64],
         removeFromCollections: Bool
     ) throws {
         guard sourceTypeID != destTypeID else {
@@ -3889,6 +3895,21 @@ struct AppDatabase {
             for queryTypeID in enabledDestQueryTypeIDs where !validDestQueryTypeIDs.contains(queryTypeID) {
                 throw DatabaseError(message: "Query type does not belong to the destination type.")
             }
+            // Validate the copy-data mapping: dest keys and source values must each
+            // belong to their respective types.
+            let sourceQueryTypeIDs = try Set(Int64.fetchAll(
+                db,
+                sql: "SELECT id FROM query_type WHERE type_id = ?",
+                arguments: [sourceTypeID]
+            ))
+            for (destQueryTypeID, sourceQueryTypeID) in queryDataSources {
+                guard validDestQueryTypeIDs.contains(destQueryTypeID) else {
+                    throw DatabaseError(message: "Copy-data destination query type does not belong to the destination type.")
+                }
+                guard sourceQueryTypeIDs.contains(sourceQueryTypeID) else {
+                    throw DatabaseError(message: "Copy-data source query type does not belong to the source type.")
+                }
+            }
 
             let destColumnNames = ["id"] + destFields.map { "field\($0.fieldIndex)" }
             let destPlaceholders = Array(repeating: "?", count: destColumnNames.count).joined(separator: ", ")
@@ -3952,16 +3973,51 @@ struct AppDatabase {
                     arguments: [instanceID]
                 )
 
-                // 6. Reset queries to exactly the selected destination query types.
+                // 6. Reset queries to exactly the selected destination query types,
+                //    copying SRS data where a "Copy Data From" source query exists on
+                //    this instance (read before the delete wipes it).
+                var copiedSRSByDestQueryTypeID: [Int64: Row] = [:]
+                for queryTypeID in enabledDestQueryTypeIDs {
+                    guard let sourceQueryTypeID = queryDataSources[queryTypeID] else { continue }
+                    if let srsRow = try Row.fetchOne(
+                        db,
+                        sql: """
+                            SELECT query_state, last_answered_timestamp, interval, max_interval
+                            FROM query
+                            WHERE instance_id = ? AND query_type_id = ?
+                            """,
+                        arguments: [instanceID, sourceQueryTypeID]
+                    ) {
+                        copiedSRSByDestQueryTypeID[queryTypeID] = srsRow
+                    }
+                }
                 try db.execute(
                     sql: "DELETE FROM query WHERE instance_id = ?",
                     arguments: [instanceID]
                 )
                 for queryTypeID in enabledDestQueryTypeIDs.sorted() {
-                    try db.execute(
-                        sql: "INSERT INTO query (instance_id, query_type_id) VALUES (?, ?)",
-                        arguments: [instanceID, queryTypeID]
-                    )
+                    if let srsRow = copiedSRSByDestQueryTypeID[queryTypeID] {
+                        try db.execute(
+                            sql: """
+                                INSERT INTO query
+                                    (instance_id, query_type_id, query_state, last_answered_timestamp, interval, max_interval)
+                                VALUES (?, ?, ?, ?, ?, ?)
+                                """,
+                            arguments: [
+                                instanceID,
+                                queryTypeID,
+                                srsRow["query_state"] as Int64,
+                                srsRow["last_answered_timestamp"] as Int64?,
+                                srsRow["interval"] as Int64,
+                                srsRow["max_interval"] as Int64?,
+                            ]
+                        )
+                    } else {
+                        try db.execute(
+                            sql: "INSERT INTO query (instance_id, query_type_id) VALUES (?, ?)",
+                            arguments: [instanceID, queryTypeID]
+                        )
+                    }
                 }
 
                 // 7. Optionally drop collection memberships.

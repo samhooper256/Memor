@@ -3,9 +3,10 @@
 //  Memor
 //
 //  "Change Type" window: converts one or more same-typed instances to a destination
-//  type with a user-defined field mapping, query-type selection, and collection
-//  handling — preserving each instance's ID. Supports Object->Object and
-//  Object->Person conversions (never away from Person or the map types).
+//  type with a user-defined field mapping, query-type selection (each checked query
+//  type optionally copying SRS data from a source query type via "Copy Data From"),
+//  and collection handling — preserving each instance's ID. Supports Object->Object
+//  and Object->Person conversions (never away from Person or the map types).
 //
 
 import AppKit
@@ -88,6 +89,7 @@ struct ChangeTypeWindowView: View {
     // User choices.
     @State private var fieldMapping: [Int64: Int64?] = [:]   // destFieldID -> sourceFieldID?
     @State private var enabledDestQueryTypeIDs: Set<Int64> = []
+    @State private var queryDataMapping: [Int64: Int64?] = [:]   // destQueryTypeID -> sourceQueryTypeID? ("(None)" = nil)
     @State private var collectionHandling: CollectionHandling = .keep
 
     @State private var hoveredDestRow: DestRow?
@@ -270,18 +272,41 @@ struct ChangeTypeWindowView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Query Types")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                     if destQueryTypes.isEmpty {
+                        Text("Query Types")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         Text("(no query types)")
                             .foregroundStyle(.tertiary)
                     } else {
+                        HStack(spacing: 8) {
+                            Text("Query Types")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer(minLength: 8)
+                            Text("Copy Data From")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 180, alignment: .leading)
+                        }
+                        .padding(.horizontal, 6)
                         ForEach(destQueryTypes) { queryType in
-                            Toggle(queryType.name, isOn: destQueryTypeBinding(for: queryType.id))
-                                .toggleStyle(.checkbox)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .modifier(DestRowHoverHighlight(row: .queryType(queryType.id), hovered: $hoveredDestRow))
+                            HStack(spacing: 8) {
+                                Toggle(queryType.name, isOn: destQueryTypeBinding(for: queryType.id))
+                                    .toggleStyle(.checkbox)
+                                Spacer(minLength: 8)
+                                Picker("", selection: queryDataBinding(for: queryType.id)) {
+                                    Text("(None)").tag(Int64?.none)
+                                    ForEach(sourceQueryTypes) { sourceQueryType in
+                                        Text(sourceQueryType.name).tag(Optional(sourceQueryType.id))
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(width: 180)
+                                .disabled(!enabledDestQueryTypeIDs.contains(queryType.id))
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .modifier(DestRowHoverHighlight(row: .queryType(queryType.id), hovered: $hoveredDestRow))
                         }
                     }
                 }
@@ -293,6 +318,13 @@ struct ChangeTypeWindowView: View {
         Binding(
             get: { fieldMapping[destFieldID] ?? nil },
             set: { fieldMapping[destFieldID] = $0 }
+        )
+    }
+
+    private func queryDataBinding(for destQueryTypeID: Int64) -> Binding<Int64?> {
+        Binding(
+            get: { queryDataMapping[destQueryTypeID] ?? nil },
+            set: { queryDataMapping[destQueryTypeID] = $0 }
         )
     }
 
@@ -355,6 +387,7 @@ struct ChangeTypeWindowView: View {
             destQueryTypes = []
             fieldMapping = [:]
             enabledDestQueryTypeIDs = []
+            queryDataMapping = [:]
             collectionHandling = .keep
         } catch {
             errorMessage = error.localizedDescription
@@ -368,6 +401,7 @@ struct ChangeTypeWindowView: View {
             destQueryTypes = []
             fieldMapping = [:]
             enabledDestQueryTypeIDs = []
+            queryDataMapping = [:]
             return
         }
         do {
@@ -375,6 +409,7 @@ struct ChangeTypeWindowView: View {
             destFields = try appDatabase.fetchFieldsForDisplay(forTypeID: destTypeID)
             destQueryTypes = try appDatabase.fetchQueryTypes(forTypeID: destTypeID)
             enabledDestQueryTypeIDs = []
+            queryDataMapping = [:]
             fieldMapping = autoPopulatedMapping()
         } catch {
             errorMessage = error.localizedDescription
@@ -421,6 +456,11 @@ struct ChangeTypeWindowView: View {
         let sourceName = source.name
         let destName = destination.name
 
+        // Only checked query types with a non-"(None)" selector copy SRS data.
+        let queryDataSources = queryDataMapping
+            .compactMapValues { $0 }
+            .filter { enabledDestQueryTypeIDs.contains($0.key) }
+
         do {
             try appDatabase.changeInstanceType(
                 instanceIDs: windowState.instanceIDs,
@@ -428,6 +468,7 @@ struct ChangeTypeWindowView: View {
                 destTypeID: destTypeID,
                 fieldMapping: fieldMapping,
                 enabledDestQueryTypeIDs: enabledDestQueryTypeIDs,
+                queryDataSources: queryDataSources,
                 removeFromCollections: collectionHandling == .remove
             )
         } catch {
