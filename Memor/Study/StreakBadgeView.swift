@@ -44,12 +44,13 @@
 //  upper-of-left. 49: the dots invert — red fill, white border.
 //
 //  50 starts over: every 1–49 element vanishes. Behind the number sits a
-//  magenta grid (verticals and horizontals at one even interval) fading
-//  out in a circular vignette — at distance d from center the opacity is
-//  exactly max(0, 1 − d/r), r = half the badge's square bounding box —
-//  with a small rectangle cut out of the middle so the number sits on
-//  clear background. >= 50 stays at the 50 badge (the rest of the tier is
-//  deliberately not designed yet).
+//  grid (verticals and horizontals at one even interval) fading out in a
+//  circular vignette — at distance d from center the opacity is exactly
+//  max(0, 1 − d/r), r = half the badge's square bounding box, while the
+//  color eases from a slightly darker purple at d = 0 to the standard
+//  magenta at d >= r — with a small rectangle cut out of the middle so the
+//  number sits on clear background. >= 50 stays at the 50 badge (the rest
+//  of the tier is deliberately not designed yet).
 //
 
 import AppKit
@@ -116,6 +117,10 @@ struct StreakBadgeView: View {
     /// The rectangle cut out of the grid's middle so the number sits on
     /// clear background — snug around the digits.
     private static let gridCutoutSize = CGSize(width: 22, height: 13)
+    /// The d=0 end of the grid's radial gradient: a slightly darker purple
+    /// that eases into the standard magenta by the vignette's edge (d >= r),
+    /// so the grid subtly deepens toward the center.
+    private static let gridCenterColor = Color(red: 0.75, green: 0, blue: 0.85)
 
     /// Max extent: the large triangles' apexes at largeTriangleBaseRadius +
     /// height (~32.5), plus slop.
@@ -306,12 +311,13 @@ struct StreakBadgeView: View {
     }
 
     /// Streak 50 (and beyond, for now): every earlier element vanishes —
-    /// just the number over a magenta grid fading out in a circular
-    /// vignette. The opacity law max(0, 1 − d/r) with r = half the square
-    /// bounding box's side IS a linear radial gradient from opaque at the
-    /// center to clear at r (clamped beyond), so the grid is stroked once
-    /// with that shading. The middle rectangle is inverse-clipped away so
-    /// the number sits on clear background.
+    /// just the number over a grid fading out in a circular vignette. The
+    /// opacity law max(0, 1 − d/r) with r = half the square bounding box's
+    /// side IS a linear radial gradient from opaque at the center to clear
+    /// at r (clamped beyond), so the grid is stroked once with that shading;
+    /// the same gradient carries the color from the darker center purple at
+    /// d = 0 to the standard magenta at d >= r. The middle rectangle is
+    /// inverse-clipped away so the number sits on clear background.
     private static func drawFiftiesTier(context: GraphicsContext, center: CGPoint) {
         let halfSide = sideLength / 2
         var grid = Path()
@@ -339,7 +345,7 @@ struct StreakBadgeView: View {
         context.stroke(
             grid,
             with: .radialGradient(
-                Gradient(colors: [magenta, magenta.opacity(0)]),
+                Gradient(colors: [gridCenterColor, magenta.opacity(0)]),
                 center: center,
                 startRadius: 0,
                 endRadius: halfSide
