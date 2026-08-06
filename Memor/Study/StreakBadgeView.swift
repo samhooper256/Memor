@@ -118,9 +118,29 @@ struct StreakBadgeView: View {
     /// clear background — snug around the digits.
     private static let gridCutoutSize = CGSize(width: 22, height: 13)
     /// The d=0 end of the grid's radial gradient: a slightly darker purple
-    /// that eases into the standard magenta by the vignette's edge (d >= r),
-    /// so the grid subtly deepens toward the center.
-    private static let gridCenterColor = Color(red: 0.75, green: 0, blue: 0.85)
+    /// that eases LINEARLY into the standard magenta (1, 0, 1) by the
+    /// vignette's edge (d >= r), so the grid subtly deepens toward the
+    /// center. The opacity rides a DIFFERENT curve — max(0, 1 − (d/r)²) —
+    /// which a two-stop gradient can't express independently of the color
+    /// ramp, so gridGradient() samples both densely: the color lerps
+    /// reproduce the linear ramp exactly, only the alpha curve bends.
+    private static let gridCenterComponents = (red: 0.75, green: 0.0, blue: 0.85)
+
+    private static func gridGradient() -> Gradient {
+        let sampleCount = 16
+        return Gradient(stops: (0...sampleCount).map { step in
+            let t = Double(step) / Double(sampleCount)
+            return Gradient.Stop(
+                color: Color(
+                    red: gridCenterComponents.red + (1 - gridCenterComponents.red) * t,
+                    green: gridCenterComponents.green,
+                    blue: gridCenterComponents.blue + (1 - gridCenterComponents.blue) * t,
+                    opacity: 1 - t * t
+                ),
+                location: t
+            )
+        })
+    }
 
     /// Max extent: the large triangles' apexes at largeTriangleBaseRadius +
     /// height (~32.5), plus slop.
@@ -341,11 +361,10 @@ struct StreakBadgeView: View {
             )),
             options: .inverse
         )
-        let magenta = ringColors[2]
         context.stroke(
             grid,
             with: .radialGradient(
-                Gradient(colors: [gridCenterColor, magenta.opacity(0)]),
+                gridGradient(),
                 center: center,
                 startRadius: 0,
                 endRadius: halfSide
