@@ -16,6 +16,10 @@ enum MemorMCPTools {
                 return try await dispatch(name: params.name, arguments: params.arguments ?? [:], appDatabase: appDatabase)
             } catch let error as MemorMCPToolError {
                 return CallTool.Result(content: [.text(text: error.message, annotations: nil, _meta: nil)], isError: true)
+            } catch let error as DatabaseError where error.message != nil {
+                // AppDatabase's own validation throws (user-facing sentences) —
+                // surface them as-is instead of the "SQLite error 1:" wrapper.
+                return CallTool.Result(content: [.text(text: error.message ?? "", annotations: nil, _meta: nil)], isError: true)
             } catch {
                 return CallTool.Result(content: [.text(text: "Unexpected error: \(error.localizedDescription)", annotations: nil, _meta: nil)], isError: true)
             }
@@ -85,6 +89,8 @@ enum MemorMCPTools {
                 includeFieldValues: try arguments.optionalBool("include_field_values") ?? false,
                 appDatabase: appDatabase
             ))
+        case "change_instance_type":
+            return try changeInstanceTypeTool(arguments: arguments, appDatabase: appDatabase)
 
         // Person
         case "update_person_relations":
@@ -491,6 +497,88 @@ enum MemorMCPTools {
         try appDatabase.deleteInstance(instanceID: instanceID)
         postDatabaseChange()
         return OkDTO()
+    }
+
+    private static func changeInstanceTypeTool(arguments: [String: Value], appDatabase: AppDatabase) throws -> CallTool.Result {
+        let instanceIDs = try arguments.requireInt64Array("instance_ids")
+        if instanceIDs.isEmpty {
+            throw MemorMCPToolError(message: "`instance_ids` must contain at least one instance.")
+        }
+        if let duplicate = firstDuplicate(in: instanceIDs) {
+            throw MemorMCPToolError(message: "`instance_ids` contains instance \(duplicate) more than once.")
+        }
+        let destTypeID = try arguments.requireInt64("dest_type_id")
+
+        // Infer the source type from the first instance; changeInstanceType verifies
+        // every other instance matches it.
+        guard let sourceTypeID = try appDatabase.fetchTypeID(instanceID: instanceIDs[0]) else {
+            throw MemorMCPToolError(message: "Instance not found: \(instanceIDs[0]).")
+        }
+        if let expected = try arguments.optionalInt64("source_type_id"), expected != sourceTypeID {
+            throw MemorMCPToolError(message: "Instance \(instanceIDs[0]) is of type \(sourceTypeID), not the given source_type_id \(expected).")
+        }
+        guard let sourceType = try appDatabase.fetchType(typeID: sourceTypeID) else {
+            throw MemorMCPToolError(message: "Type not found: \(sourceTypeID).")
+        }
+        guard let destType = try appDatabase.fetchType(typeID: destTypeID) else {
+            throw MemorMCPToolError(message: "Type not found: \(destTypeID).")
+        }
+        if sourceType.isBuiltin {
+            throw MemorMCPToolError(message: sourceType.isPerson
+                ? "Person instances cannot be converted to another type."
+                : "\(sourceType.name) instances cannot be converted to another type.")
+        }
+        if destType.isBuiltin && !destType.isPerson {
+            throw MemorMCPToolError(message: "Instances cannot be converted to \(destType.name). Valid destinations are Object types and Person.")
+        }
+
+        let sourceFields = try appDatabase.fetchFields(forTypeID: sourceTypeID)
+        let destFields = try appDatabase.fetchFields(forTypeID: destTypeID)
+        let fieldMapping = try resolveIDMapping(
+            byID: try arguments.optionalInt64KeyedInt64Map("field_mapping_by_field_id"),
+            byName: try arguments.optionalStringKeyedStringMap("field_mapping_by_field_name"),
+            destOptions: destFields.map { (id: $0.id, name: $0.name) },
+            sourceOptions: sourceFields.map { (id: $0.id, name: $0.name) },
+            byIDArgName: "field_mapping_by_field_id",
+            byNameArgName: "field_mapping_by_field_name",
+            noun: "field"
+        )
+
+        let enabledQueryTypeIDs = Set(try arguments.optionalInt64Array("query_type_ids") ?? [])
+        let destQueryTypes = try appDatabase.fetchQueryTypes(forTypeID: destTypeID)
+        for queryTypeID in enabledQueryTypeIDs.sorted() where !destQueryTypes.contains(where: { $0.id == queryTypeID }) {
+            throw MemorMCPToolError(message: "Unknown destination query type id \(queryTypeID) in `query_type_ids`.")
+        }
+        let sourceQueryTypes = try appDatabase.fetchQueryTypes(forTypeID: sourceTypeID)
+        let copyDataSources = try resolveIDMapping(
+            byID: try arguments.optionalInt64KeyedInt64Map("copy_data_from_by_query_type_id"),
+            byName: try arguments.optionalStringKeyedStringMap("copy_data_from_by_query_type_name"),
+            destOptions: destQueryTypes.map { (id: $0.id, name: $0.name) },
+            sourceOptions: sourceQueryTypes.map { (id: $0.id, name: $0.name) },
+            byIDArgName: "copy_data_from_by_query_type_id",
+            byNameArgName: "copy_data_from_by_query_type_name",
+            noun: "query type"
+        )
+        for destQueryTypeID in copyDataSources.keys.sorted() where !enabledQueryTypeIDs.contains(destQueryTypeID) {
+            let name = destQueryTypes.first { $0.id == destQueryTypeID }?.name ?? String(destQueryTypeID)
+            throw MemorMCPToolError(message: "copy_data_from names destination query type `\(name)`, which is not enabled — include it in `query_type_ids` or drop the entry.")
+        }
+
+        try appDatabase.changeInstanceType(
+            instanceIDs: instanceIDs,
+            sourceTypeID: sourceTypeID,
+            destTypeID: destTypeID,
+            fieldMapping: fieldMapping.mapValues { Optional($0) },
+            enabledDestQueryTypeIDs: enabledQueryTypeIDs,
+            queryDataSources: copyDataSources,
+            removeFromCollections: try arguments.optionalBool("remove_from_collections") ?? false
+        )
+        postDatabaseChange()
+        return try jsonResult(ChangeTypeResultDTO(
+            convertedCount: instanceIDs.count,
+            sourceTypeID: sourceTypeID,
+            destTypeID: destTypeID
+        ))
     }
 
     private static func getInstanceResult(instanceID: Int64, appDatabase: AppDatabase) throws -> CallTool.Result {
@@ -1907,6 +1995,75 @@ enum MemorMCPTools {
         return resolved
     }
 
+    /// Resolves a destination->source mapping given in id and/or name form (id form
+    /// wins on overlap) to destID -> sourceID, validating every endpoint against the
+    /// available options. Name matching mirrors `resolveFieldValues`: exact first,
+    /// then unique case-insensitive.
+    private static func resolveIDMapping(
+        byID: [Int64: Int64]?,
+        byName: [String: String]?,
+        destOptions: [(id: Int64, name: String)],
+        sourceOptions: [(id: Int64, name: String)],
+        byIDArgName: String,
+        byNameArgName: String,
+        noun: String
+    ) throws -> [Int64: Int64] {
+        var resolved: [Int64: Int64] = [:]
+        if let byName {
+            for (destName, sourceName) in byName {
+                let destID = try resolveOptionName(destName, options: destOptions, argName: byNameArgName, side: "destination", noun: noun, idArgName: byIDArgName)
+                let sourceID = try resolveOptionName(sourceName, options: sourceOptions, argName: byNameArgName, side: "source", noun: noun, idArgName: byIDArgName)
+                resolved[destID] = sourceID
+            }
+        }
+        if let byID {
+            for (destID, sourceID) in byID {
+                guard destOptions.contains(where: { $0.id == destID }) else {
+                    throw MemorMCPToolError(message: "Unknown destination \(noun) id \(destID) in `\(byIDArgName)`.")
+                }
+                guard sourceOptions.contains(where: { $0.id == sourceID }) else {
+                    throw MemorMCPToolError(message: "Unknown source \(noun) id \(sourceID) in `\(byIDArgName)`.")
+                }
+                resolved[destID] = sourceID
+            }
+        }
+        return resolved
+    }
+
+    private static func resolveOptionName(
+        _ name: String,
+        options: [(id: Int64, name: String)],
+        argName: String,
+        side: String,
+        noun: String,
+        idArgName: String
+    ) throws -> Int64 {
+        let exact = options.filter { $0.name == name }
+        if exact.count == 1 {
+            return exact[0].id
+        }
+        if exact.count > 1 {
+            throw MemorMCPToolError(message: "\(side.capitalized) \(noun) name `\(name)` in `\(argName)` matches multiple \(noun)s; use `\(idArgName)` instead.")
+        }
+        let caseInsensitive = options.filter { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+        if caseInsensitive.count == 1 {
+            return caseInsensitive[0].id
+        }
+        if caseInsensitive.count > 1 {
+            throw MemorMCPToolError(message: "\(side.capitalized) \(noun) name `\(name)` in `\(argName)` matches multiple \(noun)s case-insensitively; use `\(idArgName)` instead.")
+        }
+        let available = options.map(\.name).joined(separator: ", ")
+        throw MemorMCPToolError(message: "Unknown \(side) \(noun) name `\(name)` in `\(argName)`. Available \(noun)s: \(available).")
+    }
+
+    private static func firstDuplicate(in ids: [Int64]) -> Int64? {
+        var seen: Set<Int64> = []
+        for id in ids where !seen.insert(id).inserted {
+            return id
+        }
+        return nil
+    }
+
     private static func toolErrorMessage(from error: Error) -> String {
         if let toolError = error as? MemorMCPToolError {
             return toolError.message
@@ -2042,6 +2199,48 @@ enum MemorMCPTools {
                         "include_field_values": boolValue
                     ]),
                     "required": .array([.string("query")])
+                ])
+            ),
+            Tool(
+                name: "change_instance_type",
+                description: "Convert one or more same-typed instances of a regular (user-created) Object type to another Object type or to Person, preserving each instance's ID — the app's \"Change Type\" window as a tool. The source type is inferred from the instances (pass source_type_id to double-check it). Field values migrate per the field mapping (destination field -> source field, by ID and/or by name; ID form wins on overlap); unmapped destination fields are left blank, and Person's Sex field can't be mapped (converted people start as Male). The converted instances get exactly `query_type_ids` enabled with fresh SRS state, except that a destination query type named in copy_data_from (destination query type -> source query type, by ID and/or by name; every named destination query type must also be in `query_type_ids`) copies each instance's SRS data (query_state, last_answered_timestamp, interval, max_interval) from that instance's query for the source query type — instances that don't have the source query type enabled still get a clean new query. Converting to Person creates people with no relationships; built-in relationship queries start disabled. Set remove_from_collections to drop collection memberships (kept by default).",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "instance_ids": int64Array,
+                        "dest_type_id": int64Number,
+                        "source_type_id": .object([
+                            "type": .string("integer"),
+                            "description": .string("Optional check: errors if the instances are not of this type.")
+                        ]),
+                        "field_mapping_by_field_id": .object([
+                            "type": .string("object"),
+                            "description": .string("Object whose keys are destination field IDs as strings and whose values are source field IDs."),
+                            "additionalProperties": .object(["type": .string("integer")])
+                        ]),
+                        "field_mapping_by_field_name": .object([
+                            "type": .string("object"),
+                            "description": .string("Object whose keys are destination field names and whose values are source field names."),
+                            "additionalProperties": .object(["type": .string("string")])
+                        ]),
+                        "query_type_ids": .object([
+                            "type": .string("array"),
+                            "description": .string("Destination query type IDs to enable on the converted instances (omit for none)."),
+                            "items": .object(["type": .string("integer")])
+                        ]),
+                        "copy_data_from_by_query_type_id": .object([
+                            "type": .string("object"),
+                            "description": .string("Object whose keys are destination query type IDs as strings and whose values are source query type IDs to copy SRS data from."),
+                            "additionalProperties": .object(["type": .string("integer")])
+                        ]),
+                        "copy_data_from_by_query_type_name": .object([
+                            "type": .string("object"),
+                            "description": .string("Object whose keys are destination query type names and whose values are source query type names to copy SRS data from."),
+                            "additionalProperties": .object(["type": .string("string")])
+                        ]),
+                        "remove_from_collections": boolValue
+                    ]),
+                    "required": .array([.string("instance_ids"), .string("dest_type_id")])
                 ])
             ),
 
@@ -2582,6 +2781,13 @@ enum MemorMCPTools {
 
 private struct OkDTO: Encodable {
     let ok = true
+}
+
+private struct ChangeTypeResultDTO: Encodable {
+    let ok = true
+    let convertedCount: Int
+    let sourceTypeID: Int64
+    let destTypeID: Int64
 }
 
 private struct TypeSummaryDTO: Encodable {
@@ -3238,6 +3444,28 @@ private extension [String: Value] {
         guard let v = self[key] else { return nil }
         if v.isNull { return nil }
         return try requireInt64KeyedStringMap(key)
+    }
+
+    func optionalInt64KeyedInt64Map(_ key: String) throws -> [Int64: Int64]? {
+        guard let v = self[key] else { return nil }
+        if v.isNull { return nil }
+        guard let obj = v.objectValue else {
+            throw MemorMCPToolError(message: "Argument `\(key)` must be an object mapping numeric IDs to numeric IDs.")
+        }
+        var out: [Int64: Int64] = [:]
+        for (k, val) in obj {
+            guard let id = Int64(k) else {
+                throw MemorMCPToolError(message: "Key `\(k)` in `\(key)` is not a valid integer.")
+            }
+            if let i = val.intValue {
+                out[id] = Int64(i)
+            } else if let s = val.stringValue, let i = Int64(s) {
+                out[id] = i
+            } else {
+                throw MemorMCPToolError(message: "Value for key `\(k)` in `\(key)` must be an integer.")
+            }
+        }
+        return out
     }
 
     func optionalStringKeyedStringMap(_ key: String) throws -> [String: String]? {

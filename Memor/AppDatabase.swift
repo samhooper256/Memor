@@ -3923,12 +3923,14 @@ struct AppDatabase {
             }.joined(separator: ", ")
 
             for instanceID in instanceIDs {
-                // Confirm the instance is currently of the source type.
-                let currentTypeID = try Int64.fetchOne(
+                // Confirm the instance exists and is currently of the source type.
+                guard let currentTypeID = try Int64.fetchOne(
                     db,
                     sql: "SELECT type_id FROM instance_id_type_id WHERE instance_id = ?",
                     arguments: [instanceID]
-                )
+                ) else {
+                    throw DatabaseError(message: "Instance \(instanceID) not found.")
+                }
                 guard currentTypeID == sourceTypeID else {
                     throw DatabaseError(message: "Instance \(instanceID) is not of the expected source type.")
                 }
