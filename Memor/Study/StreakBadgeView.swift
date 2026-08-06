@@ -111,11 +111,11 @@ struct StreakBadgeView: View {
     // MARK: 50s-tier geometry
 
     /// One interval for both the vertical and horizontal grid lines.
-    private static let gridSpacing: CGFloat = 6
+    private static let gridSpacing: CGFloat = 9
     private static let gridLineWidth: CGFloat = 1
     /// The rectangle cut out of the grid's middle so the number sits on
-    /// clear background.
-    private static let gridCutoutSize = CGSize(width: 26, height: 16)
+    /// clear background — snug around the digits.
+    private static let gridCutoutSize = CGSize(width: 22, height: 13)
 
     /// Max extent: the large triangles' apexes at largeTriangleBaseRadius +
     /// height (~32.5), plus slop.
