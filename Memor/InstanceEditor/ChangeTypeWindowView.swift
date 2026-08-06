@@ -284,12 +284,15 @@ struct ChangeTypeWindowView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             Spacer(minLength: 8)
+                            // Trailing-only padding: the 180pt frame lines up over the
+                            // picker column (inset 6 by DestRowHoverHighlight) while the
+                            // caption stays at x=0 with its sibling captions.
                             Text("Copy Data From")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .frame(width: 180, alignment: .leading)
+                                .padding(.trailing, 6)
                         }
-                        .padding(.horizontal, 6)
                         ForEach(destQueryTypes) { queryType in
                             HStack(spacing: 8) {
                                 Toggle(queryType.name, isOn: destQueryTypeBinding(for: queryType.id))
