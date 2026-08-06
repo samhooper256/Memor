@@ -41,9 +41,15 @@
 //  4 triangles — form one evenly spaced ring around the magenta circle.
 //  Placement order: right-of-top, left-of-bottom, upper-of-right,
 //  lower-of-left, left-of-top, right-of-bottom, lower-of-right,
-//  upper-of-left. 49: the dots invert — red fill, white border. >= 50
-//  stays at the 49 badge (styling for later tiers is deliberately not
-//  designed yet).
+//  upper-of-left. 49: the dots invert — red fill, white border.
+//
+//  50 starts over: every 1–49 element vanishes. Behind the number sits a
+//  magenta grid (verticals and horizontals at one even interval) fading
+//  out in a circular vignette — at distance d from center the opacity is
+//  exactly max(0, 1 − d/r), r = half the badge's square bounding box —
+//  with a small rectangle cut out of the middle so the number sits on
+//  clear background. >= 50 stays at the 50 badge (the rest of the tier is
+//  deliberately not designed yet).
 //
 
 import AppKit
@@ -102,6 +108,15 @@ struct StreakBadgeView: View {
     private static let borderedDotRadius: CGFloat = 2
     private static let borderedDotLineWidth: CGFloat = 1
 
+    // MARK: 50s-tier geometry
+
+    /// One interval for both the vertical and horizontal grid lines.
+    private static let gridSpacing: CGFloat = 6
+    private static let gridLineWidth: CGFloat = 1
+    /// The rectangle cut out of the grid's middle so the number sits on
+    /// clear background.
+    private static let gridCutoutSize = CGSize(width: 26, height: 16)
+
     /// Max extent: the large triangles' apexes at largeTriangleBaseRadius +
     /// height (~32.5), plus slop.
     static let sideLength: CGFloat = 68
@@ -110,7 +125,11 @@ struct StreakBadgeView: View {
         ZStack {
             Canvas { context, size in
                 let center = CGPoint(x: size.width / 2, y: size.height / 2)
-                let capped = min(max(streak, 1), 49)
+                let capped = min(max(streak, 1), 50)
+                if capped >= 50 {
+                    Self.drawFiftiesTier(context: context, center: center)
+                    return
+                }
                 if capped >= 40 {
                     Self.drawFortiesTier(context: context, center: center, remainder: capped - 40)
                     return
@@ -286,6 +305,49 @@ struct StreakBadgeView: View {
         }
     }
 
+    /// Streak 50 (and beyond, for now): every earlier element vanishes —
+    /// just the number over a magenta grid fading out in a circular
+    /// vignette. The opacity law max(0, 1 − d/r) with r = half the square
+    /// bounding box's side IS a linear radial gradient from opaque at the
+    /// center to clear at r (clamped beyond), so the grid is stroked once
+    /// with that shading. The middle rectangle is inverse-clipped away so
+    /// the number sits on clear background.
+    private static func drawFiftiesTier(context: GraphicsContext, center: CGPoint) {
+        let halfSide = sideLength / 2
+        var grid = Path()
+        let lineCount = Int(halfSide / gridSpacing)
+        for k in -lineCount...lineCount {
+            let offset = CGFloat(k) * gridSpacing
+            grid.move(to: CGPoint(x: center.x + offset, y: center.y - halfSide))
+            grid.addLine(to: CGPoint(x: center.x + offset, y: center.y + halfSide))
+            grid.move(to: CGPoint(x: center.x - halfSide, y: center.y + offset))
+            grid.addLine(to: CGPoint(x: center.x + halfSide, y: center.y + offset))
+        }
+
+        // GraphicsContext is a value type — the clip dies with this copy.
+        var context = context
+        context.clip(
+            to: Path(CGRect(
+                x: center.x - gridCutoutSize.width / 2,
+                y: center.y - gridCutoutSize.height / 2,
+                width: gridCutoutSize.width,
+                height: gridCutoutSize.height
+            )),
+            options: .inverse
+        )
+        let magenta = ringColors[2]
+        context.stroke(
+            grid,
+            with: .radialGradient(
+                Gradient(colors: [magenta, magenta.opacity(0)]),
+                center: center,
+                startRadius: 0,
+                endRadius: halfSide
+            ),
+            lineWidth: gridLineWidth
+        )
+    }
+
     /// An equilateral triangle pointing outward along `angle`, its base
     /// (perpendicular to the radial direction) at largeTriangleBaseRadius.
     private static func largeTrianglePath(center: CGPoint, angle: CGFloat) -> Path {
@@ -325,7 +387,7 @@ struct StreakBadgeView: View {
 
     fileprivate static let previewStreaks = [
         1, 2, 5, 8, 9, 10, 11, 18, 19, 20, 21, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
-        40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 137,
+        40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 137,
     ]
 
     /// An isosceles triangle whose base chord sits half a stroke inside the
