@@ -30,8 +30,20 @@
 //  placed dot never moves and, once all four are down, dots are equidistant
 //  to each other and to the triangles. 39: the dots become two dashed white
 //  half-rings, each inset from the triangles so the pair reads as two
-//  disconnected arcs rather than one dashed circle. >= 40 stays at the
-//  39 badge (styling for later tiers is deliberately not designed yet).
+//  disconnected arcs rather than one dashed circle.
+//
+//  The 40s: the dashed half-rings vanish and two ORANGE equilateral
+//  triangles mirror the yellow pair on the other diagonal (pointing at the
+//  top-left and bottom-right corners) — four triangles at 45° intervals.
+//  41-48: one white dot with a red border per streak, on the triangles'
+//  ring, two per side between adjacent triangles at the FINAL spacing
+//  (three equal 30° gaps per side), so by 48 the twelve objects — 8 dots +
+//  4 triangles — form one evenly spaced ring around the magenta circle.
+//  Placement order: right-of-top, left-of-bottom, upper-of-right,
+//  lower-of-left, left-of-top, right-of-bottom, lower-of-right,
+//  upper-of-left. 49: the dots invert — red fill, white border. >= 50
+//  stays at the 49 badge (styling for later tiers is deliberately not
+//  designed yet).
 //
 
 import AppKit
@@ -73,6 +85,23 @@ struct StreakBadgeView: View {
     /// Five equal gaps per half-ring: triangle, four dots, triangle.
     private static let dotSpacing: CGFloat = .pi / 5
 
+    // MARK: 40s-tier geometry
+
+    /// The orange pair mirrors the yellow pair on the other diagonal.
+    private static let topLeftTriangleAngle: CGFloat = -3 * .pi / 4
+    private static let bottomRightTriangleAngle: CGFloat = .pi / 4
+    /// The 41–48 dot positions in PLACEMENT order (screen degrees):
+    /// right-of-top, left-of-bottom, upper-of-right, lower-of-left,
+    /// left-of-top, right-of-bottom, lower-of-right, upper-of-left. Each
+    /// side's pair splits the 90° between adjacent triangles into three
+    /// equal 30° gaps, so the finished ring of 8 dots + 4 triangles is
+    /// uniformly spaced.
+    private static let fortiesDotAngles: [CGFloat] = ([-75, 105, -15, 165, -105, 75, 15, 195] as [CGFloat])
+        .map { $0 * .pi / 180 }
+    /// Slightly larger than the 30s dots so the contrasting border reads.
+    private static let borderedDotRadius: CGFloat = 2
+    private static let borderedDotLineWidth: CGFloat = 1
+
     /// Max extent: the large triangles' apexes at largeTriangleBaseRadius +
     /// height (~32.5), plus slop.
     static let sideLength: CGFloat = 68
@@ -81,7 +110,11 @@ struct StreakBadgeView: View {
         ZStack {
             Canvas { context, size in
                 let center = CGPoint(x: size.width / 2, y: size.height / 2)
-                let capped = min(max(streak, 1), 39)
+                let capped = min(max(streak, 1), 49)
+                if capped >= 40 {
+                    Self.drawFortiesTier(context: context, center: center, remainder: capped - 40)
+                    return
+                }
                 if capped >= 30 {
                     Self.drawThirtiesTier(context: context, center: center, remainder: capped - 30)
                     return
@@ -212,6 +245,47 @@ struct StreakBadgeView: View {
         }
     }
 
+    /// Streaks 40–49 (`remainder` = streak − 40, capped at 9): all three
+    /// solid rings, the yellow diagonal triangles now mirrored by an orange
+    /// pair (top-left and bottom-right corners), and one red-bordered white
+    /// dot per streak from 41 — placed on the triangles' ring at the final
+    /// uniform spacing (see fortiesDotAngles) so 48 completes an evenly
+    /// spaced ring of twelve objects. At 49 the dots invert to red with a
+    /// white border.
+    private static func drawFortiesTier(context: GraphicsContext, center: CGPoint, remainder: Int) {
+        for index in 0..<ringColors.count {
+            context.stroke(
+                ringPath(center: center, radius: innerRadius + CGFloat(index) * ringGap),
+                with: .color(ringColors[index]),
+                lineWidth: lineWidth
+            )
+        }
+
+        let inverted = remainder >= 9
+        for dot in 0..<min(remainder, fortiesDotAngles.count) {
+            let angle = fortiesDotAngles[dot]
+            let dotCenter = CGPoint(
+                x: center.x + dotRingRadius * cos(angle),
+                y: center.y + dotRingRadius * sin(angle)
+            )
+            let circle = Path(ellipseIn: CGRect(
+                x: dotCenter.x - borderedDotRadius,
+                y: dotCenter.y - borderedDotRadius,
+                width: borderedDotRadius * 2,
+                height: borderedDotRadius * 2
+            ))
+            context.fill(circle, with: .color(inverted ? .red : .white))
+            context.stroke(circle, with: .color(inverted ? .white : .red), lineWidth: borderedDotLineWidth)
+        }
+
+        for angle in [higherTriangleAngle, lowerTriangleAngle] {
+            context.fill(largeTrianglePath(center: center, angle: angle), with: .color(.yellow))
+        }
+        for angle in [topLeftTriangleAngle, bottomRightTriangleAngle] {
+            context.fill(largeTrianglePath(center: center, angle: angle), with: .color(.orange))
+        }
+    }
+
     /// An equilateral triangle pointing outward along `angle`, its base
     /// (perpendicular to the radial direction) at largeTriangleBaseRadius.
     private static func largeTrianglePath(center: CGPoint, angle: CGFloat) -> Path {
@@ -250,7 +324,8 @@ struct StreakBadgeView: View {
     }
 
     fileprivate static let previewStreaks = [
-        1, 2, 5, 8, 9, 10, 11, 18, 19, 20, 21, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 137,
+        1, 2, 5, 8, 9, 10, 11, 18, 19, 20, 21, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
+        40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 137,
     ]
 
     /// An isosceles triangle whose base chord sits half a stroke inside the
