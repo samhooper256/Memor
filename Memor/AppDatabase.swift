@@ -408,9 +408,17 @@ struct AppDatabase {
                             """,
                         arguments: [update.path, update.bookmarkData, update.id]
                     )
-                } catch {
+                } catch let error as DatabaseError where error.resultCode == .SQLITE_CONSTRAINT {
                     // A rename on disk can make a stale bookmark resolve to a path
                     // another row already holds, violating path's UNIQUE constraint.
+                    // The surviving row already covers the file, so this bookmark
+                    // is redundant — drop it.
+                    try db.execute(
+                        sql: "DELETE FROM image_file WHERE id = ?",
+                        arguments: [update.id]
+                    )
+                    print("Deleted stale image file bookmark for \(update.path); another bookmark already covers that path")
+                } catch {
                     // Keep the old row rather than failing app launch; the stale
                     // bookmark still resolves.
                     print("Failed to refresh stale image file bookmark for \(update.path): \(error)")
