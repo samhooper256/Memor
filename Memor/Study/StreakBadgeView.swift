@@ -54,7 +54,7 @@
 //  51–100 build ten-pointed stars over the grid at ten fixed sites: two
 //  concentric pentagons around the badge center — five sites at a FAR
 //  distance (a = 26) at angles A + 72°k, five at a CLOSE distance (b = 20)
-//  offset 36° (pentagram vertices), with A = 90 by design. Every decade
+//  offset 36° (pentagram vertices), with A = 270 by design. Every decade
 //  sweeps the sites in ONE fixed placement order that alternates
 //  far/close and never steps to an angular neighbor — each new site is
 //  across the badge from the previous one. 51–60 light one site per
@@ -180,26 +180,26 @@ struct StreakBadgeView: View {
     /// are two concentric pentagons sharing the badge's center: a FAR ring
     /// (distance a = 26) at angles A + 72°k and a CLOSE ring (b = 20)
     /// offset 36° from it — pentagram vertices, screen angles (y down), with
-    /// A = 90 by design (a far star due south, the rest mirror-symmetric
+    /// A = 270 by design (a far star due north, the rest mirror-symmetric
     /// about the vertical). Every star clears the number cutout — the
-    /// tightest, the close ring at 198°/342°, clears it by 1.5pt even at
+    /// tightest, the close ring at 18°/162°, clears it by 1.5pt even at
     /// full disc reach — and the canvas edge (tightest 1.5pt, the far star
-    /// at 90°). The placement order ALTERNATES far/close and never steps to
-    /// an angular neighbor: consecutive picks (cyclically, so each decade's
-    /// wrap-around included) are 37–46pt apart, while neighboring sites on
-    /// the rings sit 15.3pt+ apart (stars span 13pt, so none touch).
-    /// Rotations and axis shuffles stay per-site random.
+    /// at 270°). The placement order ALTERNATES far/close and never steps
+    /// to an angular neighbor: consecutive picks (cyclically, so each
+    /// decade's wrap-around included) are 37–46pt apart, while neighboring
+    /// sites on the rings sit 15.3pt+ apart (stars span 13pt, so none
+    /// touch). Rotations and axis shuffles stay per-site random.
     private static let starPoints: [StarPoint] = [
-        StarPoint(x: 15.3, y: -21.0, rotationDegrees: 0.8, axisByDecade: [1, 4, 0, 2, 3]),   // far, 306°
-        StarPoint(x: 11.8, y: 16.2, rotationDegrees: 17.8, axisByDecade: [4, 3, 0, 2, 1]),   // close, 54°
-        StarPoint(x: -24.7, y: 8.0, rotationDegrees: 14.3, axisByDecade: [2, 1, 4, 0, 3]),   // far, 162°
-        StarPoint(x: 19.0, y: -6.2, rotationDegrees: 14.5, axisByDecade: [0, 4, 3, 1, 2]),   // close, 342°
-        StarPoint(x: -15.3, y: -21.0, rotationDegrees: 25.4, axisByDecade: [1, 4, 0, 3, 2]), // far, 234°
-        StarPoint(x: -11.8, y: 16.2, rotationDegrees: 3.0, axisByDecade: [3, 0, 2, 4, 1]),   // close, 126°
-        StarPoint(x: 24.7, y: 8.0, rotationDegrees: 0.4, axisByDecade: [0, 2, 3, 1, 4]),     // far, 18°
-        StarPoint(x: 0.0, y: -20.0, rotationDegrees: 0.1, axisByDecade: [0, 1, 4, 2, 3]),    // close, 270°
-        StarPoint(x: 0.0, y: 26.0, rotationDegrees: 34.3, axisByDecade: [3, 2, 1, 0, 4]),    // far, 90°
-        StarPoint(x: -19.0, y: -6.2, rotationDegrees: 14.3, axisByDecade: [4, 2, 1, 0, 3]),  // close, 198°
+        StarPoint(x: -15.3, y: 21.0, rotationDegrees: 0.8, axisByDecade: [1, 4, 0, 2, 3]),   // far, 126°
+        StarPoint(x: -11.8, y: -16.2, rotationDegrees: 17.8, axisByDecade: [4, 3, 0, 2, 1]), // close, 234°
+        StarPoint(x: 24.7, y: -8.0, rotationDegrees: 14.3, axisByDecade: [2, 1, 4, 0, 3]),   // far, 342°
+        StarPoint(x: -19.0, y: 6.2, rotationDegrees: 14.5, axisByDecade: [0, 4, 3, 1, 2]),   // close, 162°
+        StarPoint(x: 15.3, y: 21.0, rotationDegrees: 25.4, axisByDecade: [1, 4, 0, 3, 2]),   // far, 54°
+        StarPoint(x: 11.8, y: -16.2, rotationDegrees: 3.0, axisByDecade: [3, 0, 2, 4, 1]),   // close, 306°
+        StarPoint(x: -24.7, y: -8.0, rotationDegrees: 0.4, axisByDecade: [0, 2, 3, 1, 4]),   // far, 198°
+        StarPoint(x: 0.0, y: 20.0, rotationDegrees: 0.1, axisByDecade: [0, 1, 4, 2, 3]),     // close, 90°
+        StarPoint(x: 0.0, y: -26.0, rotationDegrees: 34.3, axisByDecade: [3, 2, 1, 0, 4]),   // far, 270°
+        StarPoint(x: 19.0, y: 6.2, rotationDegrees: 14.3, axisByDecade: [4, 2, 1, 0, 3]),    // close, 18°
     ]
 
     /// Spike apex distance from a star's center.
