@@ -88,7 +88,9 @@ final class PreviewWebContainerView: NSView {
 
     func loadHTML(_ html: String) {
         frameLoadDelegate.containerView = self
-        webView.loadHTMLString(rewriteLocalFileResourceURLs(in: html), baseURL: nil)
+        // Stable baseURL (never nil) so this webview's WebContent process is
+        // cacheable/reusable — see the queryHTMLBaseURL comment in QueryHTMLView.swift.
+        webView.loadHTMLString(rewriteLocalFileResourceURLs(in: html), baseURL: queryHTMLBaseURL)
     }
 
     func showWebView() {

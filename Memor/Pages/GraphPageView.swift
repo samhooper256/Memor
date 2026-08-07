@@ -84,7 +84,9 @@ private struct GraphWebView: NSViewRepresentable {
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
         webView.navigationDelegate = context.coordinator
-        webView.loadHTMLString(Self.graphHTML, baseURL: nil)
+        // Stable baseURL (never nil) so this webview's WebContent process is
+        // cacheable/reusable — see the queryHTMLBaseURL comment in QueryHTMLView.swift.
+        webView.loadHTMLString(Self.graphHTML, baseURL: queryHTMLBaseURL)
         return webView
     }
 
