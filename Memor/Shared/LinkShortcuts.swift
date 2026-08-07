@@ -4,7 +4,10 @@
 //
 //  Keyboard shortcuts for `id:` instance links carried in text-field HTML via a
 //  `data-shortcut` attribute. Pressing the shortcut is equivalent to clicking the link.
-//  Works in Study mode (after reveal) and in Query Preview windows. See CLAUDE.md.
+//  Works in Study mode (after reveal) and in Query Preview windows. When no
+//  data-shortcut link claims a pressed arrow key, eligible Person queries fall
+//  back to office succession navigation (resolveOfficeSuccessionShortcut).
+//  See CLAUDE.md.
 //
 
 import AppKit
@@ -119,6 +122,36 @@ func resolveLinkShortcut(_ key: LinkShortcutKey, fieldValues: [String: String]) 
     case 1:  return .navigate(targets[0])
     default: return .collision
     }
+}
+
+/// Fallback when no `data-shortcut` link claims a pressed arrow key: office
+/// succession navigation on Person queries. Eligible queries are the Person
+/// type's user-defined queries and the built-in office queries — per-office
+/// (scoped to exactly that query's office) and All Offices / user-defined
+/// (the person's first listed office). Relationship built-ins are excluded.
+/// ← = predecessor, → = successor. Returns the instance to open in the Query
+/// Preview window, or nil when the key isn't mapped.
+func resolveOfficeSuccessionShortcut(
+    _ key: LinkShortcutKey,
+    query: StudyQuery,
+    appDatabase: AppDatabase
+) -> Int64? {
+    guard query.typeName == PERSON_TYPE_NAME, query.instanceID != 0 else { return nil }
+    let officeID: Int64?
+    switch query.personQueryKind {
+    case nil, .allOffices:
+        officeID = nil
+    case .office:
+        guard let queryOfficeID = query.personOfficeID else { return nil }
+        officeID = queryOfficeID
+    default:
+        return nil
+    }
+    guard let neighbors = try? appDatabase.fetchOfficeSuccessionNeighborIDs(
+        instanceID: query.instanceID,
+        officeID: officeID
+    ) else { return nil }
+    return key == .left ? neighbors.predecessorID : neighbors.successorID
 }
 
 @MainActor

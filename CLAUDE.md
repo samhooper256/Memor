@@ -208,6 +208,17 @@ navigates to the linked instance).
   (`parseLinkShortcuts` / `resolveLinkShortcut` / `presentLinkShortcutCollisionAlert`,
   reusing `parseLinkedInstanceID` / `parseLinkedQueryID` from `Shared/QueryHTMLView.swift`).
   Wired into the key monitors in `Study/StudyModeView.swift` and `QueryPreviewWindowView.swift`.
+- **Office succession fallback** (`resolveOfficeSuccessionShortcut` +
+  `AppDatabase.fetchOfficeSuccessionNeighborIDs`): when NO `data-shortcut` link claims the
+  pressed key (authored bindings — including their collision alert — always win), a Person
+  query that is user-defined or a built-in office query (per-office / All Offices; the
+  relationship built-ins are excluded) maps ← / → to the person's predecessor / successor
+  and opens them in the Query Preview window (same navigation as clicking an `id:` link).
+  Per-office queries use exactly that query's office (no falling back to another office);
+  All Offices and user-defined queries use the person's FIRST listed office. The stint is
+  that office's first stint; each side resolves to the stint's first INSTANCE peer in
+  edge-creation order (bare-name peers are skipped — nothing to open). Same two surfaces
+  and gates as `data-shortcut` (Study post-reveal, Query Preview windows).
 
 ### Built-in defaults
 

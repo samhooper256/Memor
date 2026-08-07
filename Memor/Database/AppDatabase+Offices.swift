@@ -308,4 +308,27 @@ extension AppDatabase {
         ).map { peer(holdingID: $0["holding_id"], instanceID: $0["peer_id"], bare: $0["bare"]) }
         return (predecessors, successors)
     }
+
+    /// Arrow-key succession navigation (Study mode / Query Preview): the
+    /// instances to open when ← (predecessor) / → (successor) is pressed on
+    /// an eligible Person query. `officeID` scopes to that office's first
+    /// stint (per-office queries — no falling back to other offices); nil
+    /// uses the person's FIRST listed stint overall. Each side resolves to
+    /// the stint's first INSTANCE peer in edge-creation order (bare names
+    /// can't be opened, so they're skipped). nil side = nothing to open.
+    func fetchOfficeSuccessionNeighborIDs(
+        instanceID: Int64,
+        officeID: Int64?
+    ) throws -> (predecessorID: Int64?, successorID: Int64?) {
+        try dbQueue.read { db in
+            let holdings = try Self.fetchPersonOfficeHoldings(db: db, instanceID: instanceID)
+            let holding = officeID.map { id in holdings.first { $0.officeID == id } } ?? holdings.first
+            guard let holding else { return (nil, nil) }
+            let peers = try Self.fetchOfficeSuccessionPeers(db: db, holdingID: holding.personOfficeID)
+            return (
+                peers.predecessors.compactMap(\.instanceID).first,
+                peers.successors.compactMap(\.instanceID).first
+            )
+        }
+    }
 }

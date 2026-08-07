@@ -253,7 +253,14 @@ struct StudyModeView: View {
                         guard isAnswerRevealed, let currentQuery else { return false }
                         switch resolveLinkShortcut(key, fieldValues: currentQuery.fieldValuesByName) {
                         case .none:
-                            return false
+                            // No authored data-shortcut for this key: fall back to
+                            // office succession navigation (← predecessor, → successor).
+                            guard let neighborID = resolveOfficeSuccessionShortcut(
+                                key, query: currentQuery, appDatabase: appDatabase
+                            ) else { return false }
+                            queryPreviewWindowState.requestOpenFirstQuery(instanceID: neighborID)
+                            openWindow(id: "query-preview")
+                            return true
                         case .collision:
                             presentLinkShortcutCollisionAlert(key)
                             return true
