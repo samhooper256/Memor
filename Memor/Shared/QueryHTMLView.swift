@@ -155,29 +155,29 @@ private func substitutingPersonOffices(
 let localImageResourceScheme = "flashcards-local-image"
 let instanceLinkScheme = "id"
 
-/// Stable base URL for every card `loadHTMLString`. With `baseURL: nil` each
-/// card is an about:blank document with an EMPTY registrable domain, and
-/// WebKit's WebProcessCache refuses to cache such processes — so every card
+/// Stable base URL for every query `loadHTMLString`. With `baseURL: nil` each
+/// query is an about:blank document with an EMPTY registrable domain, and
+/// WebKit's WebProcessCache refuses to cache such processes — so every query
 /// load spawned a fresh WebContent helper and tore down the old one (64
 /// helpers in one 67-minute study session; one spawn hit a RunningBoard
-/// registration flake and left a permanently blank card, 2026-07-18). A
+/// registration flake and left a permanently blank query, 2026-07-18). A
 /// stable non-empty host makes consecutive loads same-site so one WebContent
 /// process is reused.
 ///
 /// - This scheme must NEVER be registered via setURLSchemeHandler: WebKit
 ///   forces a process swap when navigating to a registered scheme.
-/// - Same-origin side effect: all cards/previews share one (in-memory,
+/// - Same-origin side effect: all queries/previews share one (in-memory,
 ///   ephemeral) storage bucket. No app-generated HTML uses storage.
 /// - If custom schemes turn out not to be process-cached (undocumented),
-///   flip this single line to `URL(string: "https://memor-card.invalid/")!`
+///   flip this single line to `URL(string: "https://memor-query.invalid/")!`
 ///   — decidePolicyFor matches this constant's scheme+host, nothing else
 ///   changes. Verify local images still render before adopting the fallback.
-let queryHTMLBaseURL = URL(string: "memor-card://card/")!
+let queryHTMLBaseURL = URL(string: "memor-query://query/")!
 
 /// The single ephemeral data store shared by every WKWebView in the app (still
 /// non-persistent — nothing touches disk). Each `WKWebsiteDataStore.nonPersistent()`
 /// call mints a distinct store with its own networking session and defeats WebKit's
-/// web-content-process reuse, so per-view stores made every card/preview spawn fresh
+/// web-content-process reuse, so per-view stores made every query/preview spawn fresh
 /// helper processes — each spawn logging a burst of sandbox XPC-denial noise.
 let sharedEphemeralWebsiteDataStore = WKWebsiteDataStore.nonPersistent()
 
@@ -372,7 +372,7 @@ final class QueryWebContainerView: NSView {
             let nsError = error as NSError
             // Superseded loads (NSURLErrorCancelled) and policy-cancelled
             // navigations (WebKit 102, "frame load interrupted") are not
-            // failures; retrying on them would reload the card under the user.
+            // failures; retrying on them would reload the query under the user.
             if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled { return }
             if nsError.domain == "WebKitErrorDomain", nsError.code == 102 { return }
             self.scheduleRetry()
@@ -537,7 +537,7 @@ private final class QueryWebNavigationDelegate: NSObject, WKNavigationDelegate {
         // User-authored RELATIVE hrefs resolve against queryHTMLBaseURL. Under
         // the old nil baseURL they resolved against about:blank and went
         // nowhere; keep that no-op behavior — allowing them would top-level
-        // navigate to a base-scheme URL with no handler and blank the card.
+        // navigate to a base-scheme URL with no handler and blank the query.
         // Same-document fragment links stay allowed (in-page scroll). This
         // branch must run BEFORE the external http/https branch so that with
         // an https fallback base, base-relative links are cancelled here
