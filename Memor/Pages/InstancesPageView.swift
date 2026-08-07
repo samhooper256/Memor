@@ -18,6 +18,7 @@ struct InstancesPageView: View {
     @ObservedObject var pageState: InstancesPageState
 
     @StateObject private var typePickerController = TypePickerController()
+    @StateObject private var officeQueryPickerController = PickerPanelController()
     @State private var selectedTypeID: Int64?
     @State private var types: [FlashcardType] = []
     @State private var pageData: TypeInstancesPageData?
@@ -100,6 +101,7 @@ struct InstancesPageView: View {
                             TypeInstancesTableView(
                                 pageData: pageData,
                                 canDuplicate: !(selectedType?.isBuiltin ?? true),
+                                isPersonType: selectedType?.isPerson ?? false,
                                 selectedInstanceIDs: $selectedInstanceIDs,
                                 onToggleQuery: { instanceID, queryTypeID, isEnabled in
                                     await setQueryEnabled(isEnabled, instanceID: instanceID, queryTypeID: queryTypeID)
@@ -113,6 +115,9 @@ struct InstancesPageView: View {
                                         queryTypeID: queryTypeID,
                                         instanceIDs: instanceIDs
                                     )
+                                },
+                                onRequestOfficeQueryChange: { isEnabled, instanceIDs in
+                                    presentOfficeQueryPicker(isEnabled: isEnabled, instanceIDs: instanceIDs)
                                 },
                                 onRequestSetMaxInterval: { instanceIDs in
                                     pendingMaxIntervalInstanceIDs = instanceIDs
@@ -174,6 +179,9 @@ struct InstancesPageView: View {
         }
         .onDisappear {
             debounceTask?.cancel()
+            // The floating picker panel outlives the view subtree unless
+            // closed explicitly.
+            officeQueryPickerController.close()
         }
         .onChange(of: editInstanceWindowState.latestSaveNonce) { _, _ in
             Task {
@@ -356,6 +364,61 @@ struct InstancesPageView: View {
             var revertedPageData = pageData
             revertedPageData.rows = previousRows
             self.pageData = revertedPageData
+            errorMessage = "Failed to update query."
+        }
+    }
+
+    /// Opens the office picker for the context menus' "Office…" items. Every
+    /// office is listed; picking one enables/disables its per-office built-in
+    /// query on the selected instances that hold it (non-holders are skipped).
+    @MainActor
+    private func presentOfficeQueryPicker(isEnabled: Bool, instanceIDs: Set<Int64>) {
+        guard !instanceIDs.isEmpty else { return }
+        let offices = (try? appDatabase.fetchOffices()) ?? []
+        let count = instanceIDs.count
+        let noun = count == 1 ? "Instance" : "Instances"
+        officeQueryPickerController.present(
+            from: NSApp.keyWindow,
+            title: "\(isEnabled ? "Enable" : "Disable") office query for \(count) \(noun)…",
+            placeholder: "Search offices…",
+            emptyText: "No matching offices.",
+            items: offices.map { PickerPanelItem(id: $0.id, title: $0.name) }
+        ) { office in
+            Task {
+                await applyOfficeQueryChange(
+                    isEnabled: isEnabled,
+                    officeID: office.id,
+                    officeName: office.title,
+                    instanceIDs: instanceIDs
+                )
+            }
+        }
+    }
+
+    @MainActor
+    private func applyOfficeQueryChange(
+        isEnabled: Bool,
+        officeID: Int64,
+        officeName: String,
+        instanceIDs: Set<Int64>
+    ) async {
+        do {
+            let result = try appDatabase.setPersonOfficeQueryEnabled(
+                officeID: officeID,
+                instanceIDs: instanceIDs,
+                enabled: isEnabled
+            )
+            errorMessage = nil
+            if result.changed > 0 {
+                NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
+            }
+            if result.holders == 0 {
+                showToast("No selected instances hold \(officeName)")
+            } else {
+                let noun = result.changed == 1 ? "query" : "queries"
+                showToast("\(result.changed) \(noun) \(isEnabled ? "enabled" : "disabled")")
+            }
+        } catch {
             errorMessage = "Failed to update query."
         }
     }
@@ -578,10 +641,12 @@ private struct InstancesSidebarRowView: View {
 private struct TypeInstancesTableView: View {
     let pageData: TypeInstancesPageData
     let canDuplicate: Bool
+    let isPersonType: Bool
     @Binding var selectedInstanceIDs: Set<Int64>
     let onToggleQuery: (Int64, Int64, Bool) async -> Void
     let onOpenInstance: (Int64) -> Void
     let onApplyQueryChange: (_ isEnabled: Bool, _ queryTypeID: Int64, _ instanceIDs: Set<Int64>) async -> Void
+    let onRequestOfficeQueryChange: (_ isEnabled: Bool, _ instanceIDs: Set<Int64>) -> Void
     let onRequestSetMaxInterval: (Set<Int64>) -> Void
     let onDuplicateInstance: (Int64) -> Void
     let onRequestDelete: (Set<Int64>) -> Void
@@ -627,24 +692,12 @@ private struct TypeInstancesTableView: View {
                     pasteboard.setString("\(instanceID)", forType: .string)
                 }
             }
-            if !pageData.queryTypes.isEmpty {
+            if !pageData.queryTypes.isEmpty || isPersonType {
                 Menu("Enable Queries") {
-                    ForEach(pageData.queryTypes) { queryType in
-                        Button(queryType.name) {
-                            Task {
-                                await onApplyQueryChange(true, queryType.id, items)
-                            }
-                        }
-                    }
+                    queryChangeMenuItems(isEnabled: true, items: items)
                 }
                 Menu("Disable Queries") {
-                    ForEach(pageData.queryTypes) { queryType in
-                        Button(queryType.name) {
-                            Task {
-                                await onApplyQueryChange(false, queryType.id, items)
-                            }
-                        }
-                    }
+                    queryChangeMenuItems(isEnabled: false, items: items)
                 }
             }
             Button("Set Max Interval") {
@@ -659,6 +712,29 @@ private struct TypeInstancesTableView: View {
         } primaryAction: { selectedInstanceIDs in
             guard let instanceID = selectedInstanceIDs.first else { return }
             onOpenInstance(instanceID)
+        }
+    }
+
+    /// Shared content of the Enable/Disable Queries submenus: one item per
+    /// user query type, plus — for Person — "Office…", which opens the office
+    /// picker and applies the change to the selected instances that hold the
+    /// picked office.
+    @ViewBuilder
+    private func queryChangeMenuItems(isEnabled: Bool, items: Set<Int64>) -> some View {
+        ForEach(pageData.queryTypes) { queryType in
+            Button(queryType.name) {
+                Task {
+                    await onApplyQueryChange(isEnabled, queryType.id, items)
+                }
+            }
+        }
+        if isPersonType {
+            if !pageData.queryTypes.isEmpty {
+                Divider()
+            }
+            Button("Office…") {
+                onRequestOfficeQueryChange(isEnabled, items)
+            }
         }
     }
 }

@@ -114,6 +114,54 @@ extension AppDatabase {
         }
     }
 
+    /// Batch enable/disable of ONE office's per-office queries across many
+    /// people — the Instances tab's context-menu "Office…" action. Of
+    /// `instanceIDs`, only current holders of the office are touched (the
+    /// per-office query row may only exist while a holding does; enabling on
+    /// a non-holder would orphan a row no other surface knows about). Returns
+    /// how many of the instances hold the office and how many query rows
+    /// actually changed (already-enabled/-disabled holders are no-ops).
+    func setPersonOfficeQueryEnabled(
+        officeID: Int64,
+        instanceIDs: Set<Int64>,
+        enabled: Bool
+    ) throws -> (holders: Int, changed: Int) {
+        guard !instanceIDs.isEmpty else { return (holders: 0, changed: 0) }
+        return try dbQueue.write { db in
+            let idList = instanceIDs.map(String.init).joined(separator: ",")
+            let holderIDs = try Int64.fetchAll(
+                db,
+                sql: """
+                    SELECT DISTINCT instance_id FROM person_office
+                    WHERE office_id = ? AND instance_id IN (\(idList))
+                    """,
+                arguments: [officeID]
+            )
+            var changed = 0
+            for instanceID in holderIDs {
+                if enabled {
+                    try db.execute(
+                        sql: """
+                            INSERT OR IGNORE INTO person_query (instance_id, kind, partnership_id, office_id)
+                            VALUES (?, ?, NULL, ?)
+                            """,
+                        arguments: [instanceID, PersonQueryKind.office.rawValue, officeID]
+                    )
+                } else {
+                    try db.execute(
+                        sql: """
+                            DELETE FROM person_query
+                            WHERE instance_id = ? AND kind = ? AND partnership_id IS NULL AND office_id = ?
+                            """,
+                        arguments: [instanceID, PersonQueryKind.office.rawValue, officeID]
+                    )
+                }
+                changed += db.changesCount
+            }
+            return (holders: holderIDs.count, changed: changed)
+        }
+    }
+
     /// Full built-in query list for one instance: the standalone kinds
     /// (including All Offices), one "Children with {partner}" per partnership
     /// (in this person's partner order), and one "Office: {name}" per
