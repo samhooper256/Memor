@@ -71,16 +71,22 @@ struct TypeDetailPageView: View {
     @State private var isPersonResetInfoPopoverPresented = false
     @State private var isPersonOfficesElementInfoPopoverPresented = false
     @State private var isInstanceIDInfoPopoverPresented = false
+    @State private var isOfficeQueryDetailsInfoPopoverPresented = false
+    @State private var isOfficeQueryFooterInfoPopoverPresented = false
     /// Live copy of the customizable built-in-query "details" HTML (Person only).
     @State private var personBuiltinQueryHTML = ""
     /// Live copy of the per-office question template HTML (Person only).
     @State private var personOfficeQueryHTML = ""
+    /// Live copy of the office query footer HTML (Person only).
+    @State private var personOfficeQueryFooterHTML = ""
 
     /// Sentinel `selectedQueryTypeID`s for the synthetic, non-deleteable
-    /// "Built-in Relationship Queries" / "Built-in Office Queries" entries
-    /// (Person only). Real query-type ids are positive.
+    /// "Built-in Relationship Queries" / "Built-in Office Query Details" /
+    /// "Built-in Office Query Footer" entries (Person only). Real query-type
+    /// ids are positive.
     private static let builtinQueriesSelectionID: Int64 = -1
     private static let builtinOfficeQueriesSelectionID: Int64 = -2
+    private static let builtinOfficeQueryFooterSelectionID: Int64 = -3
 
     private var selectedQueryType: QueryType? {
         guard let selectedQueryTypeID else { return nil }
@@ -92,14 +98,19 @@ struct TypeDetailPageView: View {
         type.isPerson && selectedQueryTypeID == Self.builtinQueriesSelectionID
     }
 
-    /// Whether the synthetic "Built-in Office Queries" entry is selected.
+    /// Whether the synthetic "Built-in Office Query Details" entry is selected.
     private var isBuiltinOfficeQueriesSelected: Bool {
         type.isPerson && selectedQueryTypeID == Self.builtinOfficeQueriesSelectionID
     }
 
-    /// Either synthetic built-in entry (both are Question-only, non-renameable).
+    /// Whether the synthetic "Built-in Office Query Footer" entry is selected.
+    private var isBuiltinOfficeQueryFooterSelected: Bool {
+        type.isPerson && selectedQueryTypeID == Self.builtinOfficeQueryFooterSelectionID
+    }
+
+    /// Any synthetic built-in entry (all are Question-only, non-renameable).
     private var isAnyBuiltinSelected: Bool {
-        isBuiltinQueriesSelected || isBuiltinOfficeQueriesSelected
+        isBuiltinQueriesSelected || isBuiltinOfficeQueriesSelected || isBuiltinOfficeQueryFooterSelected
     }
 
     /// The query-types toolbar + editor show whenever there's something to edit:
@@ -559,7 +570,7 @@ struct TypeDetailPageView: View {
                     .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
             }
 
-            Text("Offices are managed via Edit Offices and assigned per person in the instance editor. The question HTML (under Query Types) supports the {{@Office}}, {{@WhenBegan}}, {{@WhenEnded}}, and {{@Note}} tokens; answers are computed from the person's holdings and succession links.")
+            Text("Offices are managed via Edit Offices and assigned per person in the instance editor. The question HTML (Built-in Office Query Details, under Query Types) supports the {{@Office}}, {{@WhenBegan}}, {{@WhenEnded}}, and {{@Note}} tokens; the Built-in Office Query Footer is injected below each query's office list; answers are computed from the person's holdings and succession links.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -585,8 +596,10 @@ struct TypeDetailPageView: View {
                                 if type.isPerson {
                                     Text("Built-in Relationship Queries")
                                         .tag(Optional(Self.builtinQueriesSelectionID))
-                                    Text("Built-in Office Queries")
+                                    Text("Built-in Office Query Details")
                                         .tag(Optional(Self.builtinOfficeQueriesSelectionID))
+                                    Text("Built-in Office Query Footer")
+                                        .tag(Optional(Self.builtinOfficeQueryFooterSelectionID))
                                 }
                                 ForEach(displayedQueryTypes) { queryType in
                                     Text(queryType.name)
@@ -813,6 +826,48 @@ struct TypeDetailPageView: View {
                                 }
                                 .help("Person query HTML features")
                             }
+
+                            if isBuiltinOfficeQueriesSelected {
+                                Button {
+                                    isOfficeQueryDetailsInfoPopoverPresented = true
+                                } label: {
+                                    Image(systemName: "questionmark.circle")
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.borderless)
+                                .popover(isPresented: $isOfficeQueryDetailsInfoPopoverPresented, arrowEdge: .bottom) {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text("Built-in Office Query Details")
+                                            .font(.headline)
+                                        Text("This HTML is the question side of every built-in office query. A per-office question renders it once per term the person held the office; the All Offices answer renders it once per term of every office, in the person's office order. The {{@Office}}, {{@WhenBegan}}, {{@WhenEnded}}, and {{@Note}} tokens substitute that term's values before the normal {{FieldName}} placeholders resolve. The answer side of a per-office query—the predecessors/person/successors rows—is fixed and not editable. The preview on this page renders no specific person, so the {{@…}} tokens are left as typed here.")
+                                            .font(.callout)
+                                    }
+                                    .frame(width: 360, alignment: .leading)
+                                    .padding(12)
+                                }
+                                .help("What is this HTML?")
+                            }
+
+                            if isBuiltinOfficeQueryFooterSelected {
+                                Button {
+                                    isOfficeQueryFooterInfoPopoverPresented = true
+                                } label: {
+                                    Image(systemName: "questionmark.circle")
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.borderless)
+                                .popover(isPresented: $isOfficeQueryFooterInfoPopoverPresented, arrowEdge: .bottom) {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text("Built-in Office Query Footer")
+                                            .font(.headline)
+                                        Text("This HTML is injected below the list of offices on every built-in office query—below the rendered terms on a per-office question, and below the office list in the All Offices answer. It renders once, not per term, so the {{@…}} tokens do not substitute; normal {{FieldName}} placeholders resolve as usual. On a per-office question, a {{FieldName}} placeholder names the person the answer reveals—use with care. Leave the HTML empty for no footer.")
+                                            .font(.callout)
+                                    }
+                                    .frame(width: 360, alignment: .leading)
+                                    .padding(12)
+                                }
+                                .help("What is this HTML?")
+                            }
                         }
 
                         queryTypeEditorsCard
@@ -846,6 +901,7 @@ struct TypeDetailPageView: View {
                 personResetOnConnectionChange = (try? appDatabase.fetchPersonResetQueriesOnConnectionChange()) ?? false
                 personBuiltinQueryHTML = (try? appDatabase.fetchPersonBuiltinQueryHTML()) ?? PERSON_BUILTIN_QUERY_HTML_DEFAULT
                 personOfficeQueryHTML = (try? appDatabase.fetchPersonOfficeQueryHTML()) ?? PERSON_OFFICE_QUERY_HTML_DEFAULT
+                personOfficeQueryFooterHTML = (try? appDatabase.fetchPersonOfficeQueryFooterHTML()) ?? PERSON_OFFICE_QUERY_FOOTER_HTML_DEFAULT
             }
             // Person always has the built-in entries to fall back on, even
             // when the user has deleted every ordinary query type.
@@ -877,6 +933,15 @@ struct TypeDetailPageView: View {
             // answer layout is fixed and never editable.
             selectedHTMLContentMode = .query
             selectedQueryHTML = personOfficeQueryHTML
+            activeEditor = .html
+            return
+        }
+
+        if type.isPerson && selectedQueryTypeID == Self.builtinOfficeQueryFooterSelectionID {
+            // The footer injected below the office list on every built-in
+            // office query (empty = no footer).
+            selectedHTMLContentMode = .query
+            selectedQueryHTML = personOfficeQueryFooterHTML
             activeEditor = .html
             return
         }
@@ -942,6 +1007,17 @@ struct TypeDetailPageView: View {
                 errorMessage = nil
             } catch {
                 errorMessage = "Failed to save office query HTML."
+            }
+            return
+        }
+
+        if queryTypeID == Self.builtinOfficeQueryFooterSelectionID {
+            do {
+                try appDatabase.setPersonOfficeQueryFooterHTML(html)
+                personOfficeQueryFooterHTML = html
+                errorMessage = nil
+            } catch {
+                errorMessage = "Failed to save office query footer HTML."
             }
             return
         }

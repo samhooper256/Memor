@@ -24,7 +24,7 @@ nonisolated let PERSON_BUILTIN_QUERY_HTML_DEFAULT = "<div class=\"Name\">{{Name}
 
 /// The globals-table key for the per-office question template (Question HTML
 /// only — the answer side is fixed). Edited via the Type Detail page's
-/// "Built-in Office Queries" entry; absent = PERSON_OFFICE_QUERY_HTML_DEFAULT.
+/// "Built-in Office Query Details" entry; absent = PERSON_OFFICE_QUERY_HTML_DEFAULT.
 /// The {{@Office}}/{{@WhenBegan}}/{{@WhenEnded}}/{{@Note}} tokens are
 /// per-holding values substituted BEFORE the normal {{FieldName}} pipeline
 /// (@ = a "field" that may repeat, once per office, unlike instance fields).
@@ -33,6 +33,18 @@ nonisolated let PERSON_OFFICE_QUERY_HTML_GLOBAL_KEY = "person_office_query_html"
 /// The out-of-the-box office question HTML: "Office: began–ended" (en dash).
 nonisolated let PERSON_OFFICE_QUERY_HTML_DEFAULT =
     "<div class=\"Office\">{{@Office}}: {{@WhenBegan}}\u{2013}{{@WhenEnded}}</div>"
+
+/// The globals-table key for the office query FOOTER: HTML injected below the
+/// rendered office list on every built-in office query — below the per-stint
+/// template list on a per-office question, and below the All Offices answer
+/// list. Edited via the Type Detail page's "Built-in Office Query Footer"
+/// entry. Not per-stint, so the {{@…}} tokens do NOT substitute; normal
+/// {{FieldName}} placeholders resolve through the template pipeline. Absent =
+/// PERSON_OFFICE_QUERY_FOOTER_HTML_DEFAULT (empty ⇒ nothing injected).
+nonisolated let PERSON_OFFICE_QUERY_FOOTER_HTML_GLOBAL_KEY = "person_office_query_footer_html"
+
+/// The out-of-the-box office query footer: empty — no footer.
+nonisolated let PERSON_OFFICE_QUERY_FOOTER_HTML_DEFAULT = ""
 
 /// An entry in a Person relationship slot: another Person instance, or a bare
 /// name (free text for someone the user didn't make an instance for). Bare

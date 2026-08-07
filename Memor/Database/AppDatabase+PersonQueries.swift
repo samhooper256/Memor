@@ -65,6 +65,41 @@ extension AppDatabase {
         ) ?? PERSON_OFFICE_QUERY_HTML_DEFAULT
     }
 
+    /// The stored office query footer HTML, or the (empty) default. Injected
+    /// below the rendered office list on every built-in office query; empty ⇒
+    /// nothing injected.
+    func fetchPersonOfficeQueryFooterHTML() throws -> String {
+        try dbQueue.read { db in try Self.personOfficeQueryFooterHTML(db: db) }
+    }
+
+    func setPersonOfficeQueryFooterHTML(_ html: String) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "INSERT OR REPLACE INTO globals (name, value) VALUES (?, ?)",
+                arguments: [PERSON_OFFICE_QUERY_FOOTER_HTML_GLOBAL_KEY, html]
+            )
+        }
+    }
+
+    nonisolated static func personOfficeQueryFooterHTML(db: Database) throws -> String {
+        try String.fetchOne(
+            db,
+            sql: "SELECT value FROM globals WHERE name = ?",
+            arguments: [PERSON_OFFICE_QUERY_FOOTER_HTML_GLOBAL_KEY]
+        ) ?? PERSON_OFFICE_QUERY_FOOTER_HTML_DEFAULT
+    }
+
+    /// Appends the footer below an already-rendered office list; passes the
+    /// list through untouched when no footer is set.
+    private nonisolated static func appendingOfficeQueryFooter(
+        db: Database,
+        to officeListHTML: String
+    ) throws -> String {
+        let footerHTML = try personOfficeQueryFooterHTML(db: db)
+        guard !footerHTML.isEmpty else { return officeListHTML }
+        return officeListHTML + "\n" + footerHTML
+    }
+
     /// Substitutes the per-holding {{@…}} tokens into the office question
     /// template. Runs BEFORE the normal {{FieldName}} pipeline (so e.g.
     /// {{Name}} in the template still resolves later); values are raw HTML by
@@ -831,9 +866,12 @@ extension AppDatabase {
             // the office template rendered once per drafted stint.
             let questionHTML: String
             if kind == .office {
-                questionHTML = officeStintIndices
-                    .map { Self.renderedOfficeTemplate(template, holding: holdings[$0]) }
-                    .joined(separator: "\n")
+                questionHTML = try Self.appendingOfficeQueryFooter(
+                    db: db,
+                    to: officeStintIndices
+                        .map { Self.renderedOfficeTemplate(template, holding: holdings[$0]) }
+                        .joined(separator: "\n")
+                )
             } else {
                 var lines = ["<div class=\"person-question-title\">\(Self.personQuestionTitle(kind))</div>"]
                 let detailsHTML = try Self.personBuiltinQueryHTML(db: db)
@@ -922,7 +960,10 @@ extension AppDatabase {
             case .allOffices:
                 body = holdings.isEmpty
                     ? Self.personNAHTML
-                    : Self.personAnswerLines(holdings.map { Self.renderedOfficeTemplate(template, holding: $0) })
+                    : try Self.appendingOfficeQueryFooter(
+                        db: db,
+                        to: Self.personAnswerLines(holdings.map { Self.renderedOfficeTemplate(template, holding: $0) })
+                    )
             }
 
             let queryTypeName: String
@@ -1019,7 +1060,10 @@ extension AppDatabase {
                 throw DatabaseError(message: "Office holding not found.")
             }
             let template = try personOfficeQueryHTML(db: db)
-            return stints.map { renderedOfficeTemplate(template, holding: $0) }.joined(separator: "\n")
+            return try appendingOfficeQueryFooter(
+                db: db,
+                to: stints.map { renderedOfficeTemplate(template, holding: $0) }.joined(separator: "\n")
+            )
         }
 
         var lines = ["<div class=\"person-question-title\">\(personQuestionTitle(kind))</div>"]
@@ -1279,7 +1323,10 @@ extension AppDatabase {
         let holdings = try fetchPersonOfficeHoldings(db: db, instanceID: personID)
         guard !holdings.isEmpty else { return personNAHTML }
         let template = try personOfficeQueryHTML(db: db)
-        return personAnswerLines(holdings.map { renderedOfficeTemplate(template, holding: $0) })
+        return try appendingOfficeQueryFooter(
+            db: db,
+            to: personAnswerLines(holdings.map { renderedOfficeTemplate(template, holding: $0) })
+        )
     }
 
     private nonisolated static func fetchPersonGroupedChildRefs(db: Database, partnershipID: Int64) throws -> [PersonRef] {
