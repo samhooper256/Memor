@@ -49,8 +49,24 @@
 //  max(0, 1 − d/r), r = half the badge's square bounding box, while the
 //  color eases from a slightly darker purple at d = 0 to the standard
 //  magenta at d >= r — with a small rectangle cut out of the middle so the
-//  number sits on clear background. >= 50 stays at the 50 badge (the rest
-//  of the tier is deliberately not designed yet).
+//  number sits on clear background.
+//
+//  51–100 build ten-pointed stars over the grid at ten fixed sites — a
+//  layout "random" by design but hardcoded once (clear of the number's
+//  cutout, no two adjacent, spread across the whole badge). Every decade
+//  sweeps the sites in ONE fixed placement order in which each new site is
+//  far from the previous one. 51–60 light one site per streak: a yellow
+//  circle plus two yellow isosceles spikes (taller than their base is
+//  wide) pointing out from the center along one of the site's five axes.
+//  61–70 revisit the sites in the same order, adding orange spikes on a
+//  second axis LAYERED BEHIND the yellow ones and a smaller orange circle
+//  inside the yellow one (the yellow rim stays visible). 71–80: blue
+//  spikes behind the orange on a third axis, and the inner circle turns
+//  blue. 81–90: green behind the blue on a fourth axis, inner circle
+//  green. 91–100: white spikes behind everything on the last free axis,
+//  and the inner circle turns RED. Which axis each color takes varies per
+//  site (a fixed per-site shuffle). At 100 all ten stars are complete —
+//  five axes, ten spikes each — and >= 100 stays at the 100 badge.
 //
 
 import AppKit
@@ -142,6 +158,54 @@ struct StreakBadgeView: View {
         })
     }
 
+    // MARK: 51–100 star geometry
+
+    /// One of the ten star sites: a "random" layout designed once and
+    /// hardcoded so every render agrees. `x`/`y` are offsets from the badge
+    /// center; `axisByDecade` maps each decade (0 yellow, 1 orange, 2 blue,
+    /// 3 green, 4 white) to one of the site's five axes (36° apart, the
+    /// whole star rotated by `rotationDegrees`), each axis used exactly once.
+    private struct StarPoint {
+        let x: CGFloat
+        let y: CGFloat
+        let rotationDegrees: CGFloat
+        let axisByDecade: [Int]
+    }
+
+    /// The ten sites in PLACEMENT order — streak 51 lights the first, 52 the
+    /// second, …, 61 returns to the first for orange, and so on. Generated
+    /// by seeded rejection sampling under these constraints, then frozen:
+    /// star extent clear of the number cutout and the canvas edge, centers
+    /// >= 15pt apart pairwise (a star spans 13pt, so none touch), cyclically
+    /// consecutive picks >= 26pt apart (each new star lights up away from
+    /// the previous one), and at least two sites per quadrant.
+    private static let starPoints: [StarPoint] = [
+        StarPoint(x: -20.5, y: 1.2, rotationDegrees: 30.6, axisByDecade: [0, 4, 1, 2, 3]),
+        StarPoint(x: 23.7, y: 23.3, rotationDegrees: 6.5, axisByDecade: [4, 2, 0, 1, 3]),
+        StarPoint(x: -10.5, y: -13.3, rotationDegrees: 28.9, axisByDecade: [4, 2, 1, 0, 3]),
+        StarPoint(x: 24.0, y: -17.6, rotationDegrees: 8.2, axisByDecade: [4, 2, 1, 0, 3]),
+        StarPoint(x: -6.2, y: 20.4, rotationDegrees: 25.4, axisByDecade: [2, 0, 3, 4, 1]),
+        StarPoint(x: 4.2, y: -17.8, rotationDegrees: 27.7, axisByDecade: [0, 2, 4, 1, 3]),
+        StarPoint(x: 23.4, y: 2.3, rotationDegrees: 18.7, axisByDecade: [3, 0, 2, 4, 1]),
+        StarPoint(x: -23.1, y: -21.6, rotationDegrees: 8.7, axisByDecade: [0, 1, 3, 2, 4]),
+        StarPoint(x: -21.7, y: 23.6, rotationDegrees: 17.9, axisByDecade: [1, 0, 2, 4, 3]),
+        StarPoint(x: 8.3, y: 14.4, rotationDegrees: 8.8, axisByDecade: [2, 4, 3, 0, 1]),
+    ]
+
+    /// Spike apex distance from a star's center.
+    private static let starRadius: CGFloat = 6.5
+    /// Half the spike's base — the base (3.2) is well under the height
+    /// (6.5), per the isosceles taller-than-wide rule.
+    private static let starSpikeHalfBase: CGFloat = 1.6
+    private static let starCircleRadius: CGFloat = 2.6
+    /// Inner circle: enough smaller that the yellow rim always shows.
+    private static let starInnerCircleRadius: CGFloat = 1.6
+    /// Spike colors by decade 0–4.
+    private static let starDecadeColors: [Color] = [.yellow, .orange, .blue, .green, .white]
+    /// Inner-circle colors by latest decade 1–4: the white decade turns the
+    /// center RED, not white.
+    private static let starInnerColors: [Color] = [.orange, .blue, .green, .red]
+
     /// Max extent: the large triangles' apexes at largeTriangleBaseRadius +
     /// height (~32.5), plus slop.
     static let sideLength: CGFloat = 68
@@ -150,9 +214,9 @@ struct StreakBadgeView: View {
         ZStack {
             Canvas { context, size in
                 let center = CGPoint(x: size.width / 2, y: size.height / 2)
-                let capped = min(max(streak, 1), 50)
+                let capped = min(max(streak, 1), 100)
                 if capped >= 50 {
-                    Self.drawFiftiesTier(context: context, center: center)
+                    Self.drawFiftiesTier(context: context, center: center, remainder: capped - 50)
                     return
                 }
                 if capped >= 40 {
@@ -330,15 +394,25 @@ struct StreakBadgeView: View {
         }
     }
 
-    /// Streak 50 (and beyond, for now): every earlier element vanishes —
-    /// just the number over a grid fading out in a circular vignette. The
-    /// opacity law max(0, 1 − d/r) with r = half the square bounding box's
-    /// side IS a linear radial gradient from opaque at the center to clear
-    /// at r (clamped beyond), so the grid is stroked once with that shading;
-    /// the same gradient carries the color from the darker center purple at
-    /// d = 0 to the standard magenta at d >= r. The middle rectangle is
-    /// inverse-clipped away so the number sits on clear background.
-    private static func drawFiftiesTier(context: GraphicsContext, center: CGPoint) {
+    /// Streaks 50–100 (`remainder` = streak − 50, capped at 50): the number
+    /// over a grid fading out in a circular vignette, then one star element
+    /// per streak past 50. The opacity law max(0, 1 − d/r) with r = half the
+    /// square bounding box's side IS a linear radial gradient from opaque at
+    /// the center to clear at r (clamped beyond), so the grid is stroked
+    /// once with that shading; the same gradient carries the color from the
+    /// darker center purple at d = 0 to the standard magenta at d >= r. The
+    /// middle rectangle is inverse-clipped away so the number sits on clear
+    /// background.
+    ///
+    /// Stars: remainder 1–50 decomposes into decade = (remainder−1)/10 (the
+    /// color wave: yellow, orange, blue, green, white) and step =
+    /// (remainder−1)%10 (how far the wave has swept the placement order).
+    /// A site's LATEST decade is `decade` if already reached this wave,
+    /// else `decade − 1`; sites the yellow wave hasn't reached yet draw
+    /// nothing. Spikes draw latest-decade-first so every later color layers
+    /// BEHIND all earlier ones, then the yellow circle and (from orange on)
+    /// the inner circle cap the center.
+    private static func drawFiftiesTier(context: GraphicsContext, center: CGPoint, remainder: Int) {
         let halfSide = sideLength / 2
         var grid = Path()
         let lineCount = Int(halfSide / gridSpacing)
@@ -350,9 +424,10 @@ struct StreakBadgeView: View {
             grid.addLine(to: CGPoint(x: center.x + halfSide, y: center.y + offset))
         }
 
-        // GraphicsContext is a value type — the clip dies with this copy.
-        var context = context
-        context.clip(
+        // GraphicsContext is a value type — the cutout clip dies with this
+        // copy, so the stars below draw unclipped.
+        var gridContext = context
+        gridContext.clip(
             to: Path(CGRect(
                 x: center.x - gridCutoutSize.width / 2,
                 y: center.y - gridCutoutSize.height / 2,
@@ -361,7 +436,7 @@ struct StreakBadgeView: View {
             )),
             options: .inverse
         )
-        context.stroke(
+        gridContext.stroke(
             grid,
             with: .radialGradient(
                 gridGradient(),
@@ -371,6 +446,61 @@ struct StreakBadgeView: View {
             ),
             lineWidth: gridLineWidth
         )
+
+        guard remainder > 0 else { return } // streak 50: the grid alone
+        let decade = (remainder - 1) / 10
+        let step = (remainder - 1) % 10
+        for (index, star) in starPoints.enumerated() {
+            let latestDecade = index <= step ? decade : decade - 1
+            guard latestDecade >= 0 else { continue }
+            let starCenter = CGPoint(x: center.x + star.x, y: center.y + star.y)
+            // Latest decade first: every later color layers behind all
+            // earlier ones, yellow on top.
+            for d in stride(from: latestDecade, through: 0, by: -1) {
+                let axisAngle = (star.rotationDegrees + CGFloat(star.axisByDecade[d]) * 36) * .pi / 180
+                for direction in [axisAngle, axisAngle + .pi] {
+                    context.fill(
+                        starSpikePath(center: starCenter, angle: direction),
+                        with: .color(starDecadeColors[d])
+                    )
+                }
+            }
+            context.fill(
+                ringPath(center: starCenter, radius: starCircleRadius),
+                with: .color(.yellow)
+            )
+            if latestDecade >= 1 {
+                context.fill(
+                    ringPath(center: starCenter, radius: starInnerCircleRadius),
+                    with: .color(starInnerColors[latestDecade - 1])
+                )
+            }
+        }
+    }
+
+    /// One star spike: an isosceles triangle whose base (perpendicular to
+    /// the axis) is centered ON the star's center with the apex pointing
+    /// outward — taller (starRadius) than its base (2 × starSpikeHalfBase)
+    /// is wide. An axis's opposite pair shares its base line; the yellow
+    /// circle covers the shared middle.
+    private static func starSpikePath(center: CGPoint, angle: CGFloat) -> Path {
+        let direction = CGPoint(x: cos(angle), y: sin(angle))
+        let perpendicular = CGPoint(x: -sin(angle), y: cos(angle))
+        var path = Path()
+        path.move(to: CGPoint(
+            x: center.x + starRadius * direction.x,
+            y: center.y + starRadius * direction.y
+        ))
+        path.addLine(to: CGPoint(
+            x: center.x + starSpikeHalfBase * perpendicular.x,
+            y: center.y + starSpikeHalfBase * perpendicular.y
+        ))
+        path.addLine(to: CGPoint(
+            x: center.x - starSpikeHalfBase * perpendicular.x,
+            y: center.y - starSpikeHalfBase * perpendicular.y
+        ))
+        path.closeSubpath()
+        return path
     }
 
     /// An equilateral triangle pointing outward along `angle`, its base
@@ -412,8 +542,8 @@ struct StreakBadgeView: View {
 
     fileprivate static let previewStreaks = [
         1, 2, 5, 8, 9, 10, 11, 18, 19, 20, 21, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
-        40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 137,
-    ]
+        40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50,
+    ] + Array(51...100) + [137]
 
     /// An isosceles triangle whose base chord sits half a stroke inside the
     /// ring line (so it fuses with the ring) and whose apex points outward.
