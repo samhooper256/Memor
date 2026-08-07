@@ -82,8 +82,8 @@ struct TypeDetailPageView: View {
 
     /// Sentinel `selectedQueryTypeID`s for the synthetic, non-deleteable
     /// "Built-in Relationship Queries" / "Built-in Office Query Details" /
-    /// "Built-in Office Query Footer" entries (Person only). Real query-type
-    /// ids are positive.
+    /// "Built-in Office Query Answer Footer" entries (Person only). Real
+    /// query-type ids are positive.
     private static let builtinQueriesSelectionID: Int64 = -1
     private static let builtinOfficeQueriesSelectionID: Int64 = -2
     private static let builtinOfficeQueryFooterSelectionID: Int64 = -3
@@ -103,7 +103,7 @@ struct TypeDetailPageView: View {
         type.isPerson && selectedQueryTypeID == Self.builtinOfficeQueriesSelectionID
     }
 
-    /// Whether the synthetic "Built-in Office Query Footer" entry is selected.
+    /// Whether the synthetic "Built-in Office Query Answer Footer" entry is selected.
     private var isBuiltinOfficeQueryFooterSelected: Bool {
         type.isPerson && selectedQueryTypeID == Self.builtinOfficeQueryFooterSelectionID
     }
@@ -570,7 +570,7 @@ struct TypeDetailPageView: View {
                     .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
             }
 
-            Text("Offices are managed via Edit Offices and assigned per person in the instance editor. The question HTML (Built-in Office Query Details, under Query Types) supports the {{@Office}}, {{@WhenBegan}}, {{@WhenEnded}}, and {{@Note}} tokens; the Built-in Office Query Footer is injected below each query's office list; answers are computed from the person's holdings and succession links.")
+            Text("Offices are managed via Edit Offices and assigned per person in the instance editor. The question HTML (Built-in Office Query Details, under Query Types) supports the {{@Office}}, {{@WhenBegan}}, {{@WhenEnded}}, and {{@Note}} tokens; the Built-in Office Query Answer Footer is injected below each answer's office list; answers are computed from the person's holdings and succession links.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -598,7 +598,7 @@ struct TypeDetailPageView: View {
                                         .tag(Optional(Self.builtinQueriesSelectionID))
                                     Text("Built-in Office Query Details")
                                         .tag(Optional(Self.builtinOfficeQueriesSelectionID))
-                                    Text("Built-in Office Query Footer")
+                                    Text("Built-in Office Query Answer Footer")
                                         .tag(Optional(Self.builtinOfficeQueryFooterSelectionID))
                                 }
                                 ForEach(displayedQueryTypes) { queryType in
@@ -858,9 +858,9 @@ struct TypeDetailPageView: View {
                                 .buttonStyle(.borderless)
                                 .popover(isPresented: $isOfficeQueryFooterInfoPopoverPresented, arrowEdge: .bottom) {
                                     VStack(alignment: .leading, spacing: 8) {
-                                        Text("Built-in Office Query Footer")
+                                        Text("Built-in Office Query Answer Footer")
                                             .font(.headline)
-                                        Text("This HTML is injected below the list of offices on every built-in office query—below the rendered terms on a per-office question, and below the office list in the All Offices answer. It renders once, not per term, so the {{@…}} tokens do not substitute; normal {{FieldName}} placeholders resolve as usual. On a per-office question, a {{FieldName}} placeholder names the person the answer reveals—use with care. Leave the HTML empty for no footer.")
+                                        Text("This HTML is injected below the list of offices in the answer of every built-in office query—below the predecessors/person/successors rows on a per-office answer, and below the office list in the All Offices answer. Questions are unaffected. It renders once, not per term, so the {{@…}} tokens do not substitute; normal {{FieldName}} placeholders resolve as usual. Leave the HTML empty for no footer.")
                                             .font(.callout)
                                     }
                                     .frame(width: 360, alignment: .leading)
@@ -938,8 +938,8 @@ struct TypeDetailPageView: View {
         }
 
         if type.isPerson && selectedQueryTypeID == Self.builtinOfficeQueryFooterSelectionID {
-            // The footer injected below the office list on every built-in
-            // office query (empty = no footer).
+            // The footer injected below the office list in the ANSWER of
+            // every built-in office query (empty = no footer).
             selectedHTMLContentMode = .query
             selectedQueryHTML = personOfficeQueryFooterHTML
             activeEditor = .html

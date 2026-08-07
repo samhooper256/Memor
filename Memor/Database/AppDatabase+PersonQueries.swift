@@ -65,9 +65,9 @@ extension AppDatabase {
         ) ?? PERSON_OFFICE_QUERY_HTML_DEFAULT
     }
 
-    /// The stored office query footer HTML, or the (empty) default. Injected
-    /// below the rendered office list on every built-in office query; empty ⇒
-    /// nothing injected.
+    /// The stored office query answer footer HTML, or the (empty) default.
+    /// Injected below the rendered office list in the ANSWER of every
+    /// built-in office query; empty ⇒ nothing injected.
     func fetchPersonOfficeQueryFooterHTML() throws -> String {
         try dbQueue.read { db in try Self.personOfficeQueryFooterHTML(db: db) }
     }
@@ -866,12 +866,9 @@ extension AppDatabase {
             // the office template rendered once per drafted stint.
             let questionHTML: String
             if kind == .office {
-                questionHTML = try Self.appendingOfficeQueryFooter(
-                    db: db,
-                    to: officeStintIndices
-                        .map { Self.renderedOfficeTemplate(template, holding: holdings[$0]) }
-                        .joined(separator: "\n")
-                )
+                questionHTML = officeStintIndices
+                    .map { Self.renderedOfficeTemplate(template, holding: holdings[$0]) }
+                    .joined(separator: "\n")
             } else {
                 var lines = ["<div class=\"person-question-title\">\(Self.personQuestionTitle(kind))</div>"]
                 let detailsHTML = try Self.personBuiltinQueryHTML(db: db)
@@ -943,20 +940,23 @@ extension AppDatabase {
                 // One row per drafted stint of the office, mirroring
                 // personOfficeSuccessionBody (dates under the name only when
                 // the office has several stints).
-                body = try officeStintIndices.enumerated().map { stintIndex, draftIndex -> String in
-                    let stint = relations.offices[draftIndex]
-                    var center = selfHTML
-                    if officeStintIndices.count > 1 {
-                        center += "\n<div class=\"office-succession-dates\">\(Self.officeStintLabel(holdings[draftIndex], index: stintIndex))</div>"
+                body = try Self.appendingOfficeQueryFooter(
+                    db: db,
+                    to: try officeStintIndices.enumerated().map { stintIndex, draftIndex -> String in
+                        let stint = relations.offices[draftIndex]
+                        var center = selfHTML
+                        if officeStintIndices.count > 1 {
+                            center += "\n<div class=\"office-succession-dates\">\(Self.officeStintLabel(holdings[draftIndex], index: stintIndex))</div>"
+                        }
+                        return try Self.officeSuccessionRowHTML(
+                            db: db,
+                            predecessors: stint.predecessors,
+                            successors: stint.successors,
+                            centerHTML: center
+                        )
                     }
-                    return try Self.officeSuccessionRowHTML(
-                        db: db,
-                        predecessors: stint.predecessors,
-                        successors: stint.successors,
-                        centerHTML: center
-                    )
-                }
-                .joined(separator: "\n")
+                    .joined(separator: "\n")
+                )
             case .allOffices:
                 body = holdings.isEmpty
                     ? Self.personNAHTML
@@ -1060,10 +1060,7 @@ extension AppDatabase {
                 throw DatabaseError(message: "Office holding not found.")
             }
             let template = try personOfficeQueryHTML(db: db)
-            return try appendingOfficeQueryFooter(
-                db: db,
-                to: stints.map { renderedOfficeTemplate(template, holding: $0) }.joined(separator: "\n")
-            )
+            return stints.map { renderedOfficeTemplate(template, holding: $0) }.joined(separator: "\n")
         }
 
         var lines = ["<div class=\"person-question-title\">\(personQuestionTitle(kind))</div>"]
@@ -1209,7 +1206,7 @@ extension AppDatabase {
             }
             return try officeSuccessionRowHTML(db: db, holdingID: stint.personOfficeID, centerHTML: center)
         }
-        return rows.joined(separator: "\n")
+        return try appendingOfficeQueryFooter(db: db, to: rows.joined(separator: "\n"))
     }
 
     /// One 20%/60%/20% three-panel succession row for one stint:

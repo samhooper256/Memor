@@ -34,12 +34,13 @@ nonisolated let PERSON_OFFICE_QUERY_HTML_GLOBAL_KEY = "person_office_query_html"
 nonisolated let PERSON_OFFICE_QUERY_HTML_DEFAULT =
     "<div class=\"Office\">{{@Office}}: {{@WhenBegan}}\u{2013}{{@WhenEnded}}</div>"
 
-/// The globals-table key for the office query FOOTER: HTML injected below the
-/// rendered office list on every built-in office query — below the per-stint
-/// template list on a per-office question, and below the All Offices answer
-/// list. Edited via the Type Detail page's "Built-in Office Query Footer"
-/// entry. Not per-stint, so the {{@…}} tokens do NOT substitute; normal
-/// {{FieldName}} placeholders resolve through the template pipeline. Absent =
+/// The globals-table key for the office query ANSWER footer: HTML injected
+/// below the rendered office list in the ANSWER of every built-in office
+/// query — below the per-stint succession rows on a per-office answer, and
+/// below the All Offices answer list (questions are untouched). Edited via
+/// the Type Detail page's "Built-in Office Query Answer Footer" entry. Not
+/// per-stint, so the {{@…}} tokens do NOT substitute; normal {{FieldName}}
+/// placeholders resolve through the template pipeline. Absent =
 /// PERSON_OFFICE_QUERY_FOOTER_HTML_DEFAULT (empty ⇒ nothing injected).
 nonisolated let PERSON_OFFICE_QUERY_FOOTER_HTML_GLOBAL_KEY = "person_office_query_footer_html"
 
