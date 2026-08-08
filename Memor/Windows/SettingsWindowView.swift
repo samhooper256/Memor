@@ -11,6 +11,7 @@ import SwiftUI
 struct SettingsWindowView: View {
     @ObservedObject var shortcuts: ShortcutSettings
     @ObservedObject var editorSettings: EditorSettings = EditorSettings.shared
+    @ObservedObject var soundSettings: SoundSettings = SoundSettings.shared
     @ObservedObject var timeZoneSettings: TimeZoneSettings = TimeZoneSettings.shared
     @ObservedObject var developerState: DeveloperState = DeveloperState.shared
     let appDatabase: AppDatabase
@@ -139,6 +140,16 @@ struct SettingsWindowView: View {
                 dataStorageSection
             }
 
+            Section(header: Text("Image Folder Access").font(.headline)) {
+                imageFolderAccessSection
+            }
+
+            Section(header: Text("Audio & Sounds").font(.headline)) {
+                Toggle(isOn: $soundSettings.soundEffectsEnabled) {
+                    Text("Sound Effects")
+                }
+            }
+
             Section(header: Text("Editor Behavior").font(.headline)) {
                 Toggle(isOn: $editorSettings.autoReplaceHTMLEntities) {
                     Text("Auto-replace `<<` with `&lt;` and `>>` with `&gt;`")
@@ -147,10 +158,6 @@ struct SettingsWindowView: View {
 
             Section(header: Text("Time Zone").font(.headline)) {
                 timeZoneSection
-            }
-
-            Section(header: Text("Image Folder Access").font(.headline)) {
-                imageFolderAccessSection
             }
 
             Section(header: Text("Developer").font(.headline)) {

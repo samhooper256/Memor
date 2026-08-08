@@ -47,6 +47,7 @@ enum RatingSounds {
     /// jackpot branch and the loss branches can never collide. All from the
     /// same CC0 pack — see ATTRIBUTIONS.md.
     static func play(_ rating: StudyResponseRating, streak: Int, previousStreak: Int) {
+        guard SoundSettings.shared.soundEffectsEnabled else { return }
         if streak > 0, streak.isMultiple(of: 5) {
             play(named: "StreakChime")
         } else if rating == .again, previousStreak >= 10 {
