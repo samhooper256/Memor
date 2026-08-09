@@ -95,6 +95,19 @@ private struct GraphWebView: NSViewRepresentable {
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
+        // Required with the custom-scheme baseURL: the initial loadHTMLString
+        // navigation IS policy-checked, and WebKit's DEFAULT handling of an
+        // unimplemented decidePolicyFor hands a scheme it can't display to
+        // Launch Services (error dialog + blank view). The graph HTML is
+        // self-contained, so nothing but the initial load is ever allowed.
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction,
+            decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void
+        ) {
+            decisionHandler(navigationAction.navigationType == .linkActivated ? .cancel : .allow)
+        }
+
         private var isLoaded = false
         private var lastSent: GraphData?
         private var pending: GraphData?

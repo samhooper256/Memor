@@ -151,6 +151,31 @@ final class PreviewWebContainerView: NSView {
 private final class PreviewWebFrameLoadDelegate: NSObject, WKNavigationDelegate {
     weak var containerView: PreviewWebContainerView?
 
+    // Required with the custom-scheme baseURL: the initial loadHTMLString
+    // navigation IS policy-checked (URL = queryHTMLBaseURL, type .other), and
+    // WebKit's DEFAULT handling of an unimplemented decidePolicyFor hands a
+    // scheme it can't display to Launch Services — a "no application set to
+    // open memor-query://query/" dialog and a blank preview. An explicit
+    // .allow lets the data load render. Link clicks: previews are templates
+    // with dead placeholder links, so only web links do anything (open in the
+    // browser, like the card container); everything else is cancelled.
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void
+    ) {
+        guard navigationAction.navigationType == .linkActivated,
+              let url = navigationAction.request.url else {
+            decisionHandler(.allow)
+            return
+        }
+
+        if let scheme = url.scheme?.lowercased(), ["http", "https", "mailto"].contains(scheme) {
+            NSWorkspace.shared.open(url)
+        }
+        decisionHandler(.cancel)
+    }
+
     func webView(
         _ webView: WKWebView,
         didFail navigation: WKNavigation!,
