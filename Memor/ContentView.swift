@@ -146,6 +146,14 @@ struct ContentView: View {
             quickStudyState.pendingSearch = nil
             startQuickStudySession(searchText: searchText)
         }
+        .task {
+            // Deferred so the launch paint and Stacks refresh land first; the
+            // warm-up's in-process WebKit init still briefly occupies the main
+            // thread, and here it's paid during launch idle time instead of on
+            // the first query render.
+            try? await Task.sleep(for: .milliseconds(300))
+            WebViewPrewarmer.prewarm()
+        }
     }
 
     private var tabBar: some View {
