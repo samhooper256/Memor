@@ -5559,12 +5559,8 @@ struct AppDatabase {
         return queryRow
     }
 
-    private func makeStudyQuery(
-        db: Database,
-        typeInfo: InstanceSearchTypeInfo,
-        queryRow: StudyQueryRow
-    ) throws -> StudyQuery {
-        let fields = try TypeField.fetchAll(
+    private func fetchTypeFields(db: Database, typeID: Int64) throws -> [TypeField] {
+        try TypeField.fetchAll(
             db,
             sql: """
                 SELECT
@@ -5578,8 +5574,16 @@ struct AppDatabase {
                 WHERE type_id = ?
                 ORDER BY field_index, id
                 """,
-            arguments: [typeInfo.typeID]
+            arguments: [typeID]
         )
+    }
+
+    private func makeStudyQuery(
+        db: Database,
+        typeInfo: InstanceSearchTypeInfo,
+        queryRow: StudyQueryRow
+    ) throws -> StudyQuery {
+        let fields = try fetchTypeFields(db: db, typeID: typeInfo.typeID)
 
         let tableName = "\"type\(typeInfo.typeID)\""
         guard let row = try Row.fetchOne(
@@ -5594,8 +5598,17 @@ struct AppDatabase {
             throw DatabaseError(message: "Study instance not found.")
         }
 
+        return makeStudyQuery(typeInfo: typeInfo, queryRow: queryRow, fields: fields, instanceRow: row)
+    }
+
+    private func makeStudyQuery(
+        typeInfo: InstanceSearchTypeInfo,
+        queryRow: StudyQueryRow,
+        fields: [TypeField],
+        instanceRow: Row
+    ) -> StudyQuery {
         let fieldValuesByName = Dictionary(uniqueKeysWithValues: fields.map { field in
-            (field.name, row["field\(field.fieldIndex)"] as String? ?? "")
+            (field.name, instanceRow["field\(field.fieldIndex)"] as String? ?? "")
         })
         let booleanFieldNames = Set(fields.filter { $0.fieldType == .boolean }.map(\.name))
 
@@ -5663,8 +5676,41 @@ struct AppDatabase {
             arguments: arguments
         )
 
-        return try rows.map { row in
-            try makeStudyQuery(db: db, typeInfo: typeInfo, queryRow: row)
+        guard !rows.isEmpty else { return [] }
+
+        // One field fetch per type plus one batched instance fetch per 500 ids
+        // instead of two statements per query row — a session-start bucket load
+        // over a large stack was paying 2N statements here, on the main thread.
+        let fields = try fetchTypeFields(db: db, typeID: typeInfo.typeID)
+        let uniqueInstanceIDs = Array(Set(rows.map(\.instanceID)))
+        var instanceRowsByID: [Int64: Row] = [:]
+        instanceRowsByID.reserveCapacity(uniqueInstanceIDs.count)
+        var start = 0
+        while start < uniqueInstanceIDs.count {
+            let chunk = Array(uniqueInstanceIDs[start..<min(start + 500, uniqueInstanceIDs.count)])
+            start += 500
+            let placeholders = repeatElement("?", count: chunk.count).joined(separator: ", ")
+            let chunkRows = try Row.fetchAll(
+                db,
+                sql: "SELECT * FROM \(tableName) WHERE id IN (\(placeholders))",
+                arguments: StatementArguments(chunk)
+            )
+            for row in chunkRows {
+                guard let id = row["id"] as Int64? else { continue }
+                instanceRowsByID[id] = row
+            }
+        }
+
+        return try rows.map { queryRow in
+            guard let instanceRow = instanceRowsByID[queryRow.instanceID] else {
+                throw DatabaseError(message: "Study instance not found.")
+            }
+            return makeStudyQuery(
+                typeInfo: typeInfo,
+                queryRow: queryRow,
+                fields: fields,
+                instanceRow: instanceRow
+            )
         }
     }
 
