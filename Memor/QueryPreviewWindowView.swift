@@ -25,6 +25,11 @@ struct QueryPreviewWindowView: View {
     @State private var errorMessage: String?
     @State private var historyStack: [(query: StudyQuery, html: String)] = []
     @State private var isInternalNavigation = false
+    /// True once the webview has committed a non-empty page this session.
+    /// Gates the loading spinner: the webview is transparent until its first
+    /// commit, so gating on renderedAnswerHTML alone would drop the spinner
+    /// while the window is still visibly blank.
+    @State private var hasCommittedContent = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -42,28 +47,36 @@ struct QueryPreviewWindowView: View {
                 } else if let query, query.kind == .boundaryMap, let payload = query.boundaryMapPayload {
                     BoundaryMapQueryView(payload: payload, revealName: true)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if !renderedAnswerHTML.isEmpty {
-                    if developerState.isDeveloperModeEnabled {
-                        ScrollView([.vertical, .horizontal]) {
-                            Text(renderedAnswerHTML)
-                                .font(.system(.body, design: .monospaced))
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(12)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        QueryHTMLView(
-                            html: renderedAnswerHTML,
-                            disableUserInteraction: true,
-                            onInstanceLinkActivated: navigateToInstance,
-                            onQueryLinkActivated: navigateToQuery
-                        )
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if developerState.isDeveloperModeEnabled, !renderedAnswerHTML.isEmpty {
+                    ScrollView([.vertical, .horizontal]) {
+                        Text(renderedAnswerHTML)
+                            .font(.system(.body, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12)
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                    // Mounted while renderedAnswerHTML is still empty (the old
+                    // gate was `!renderedAnswerHTML.isEmpty`), so WKWebView
+                    // creation + WebContent-process attach overlap the DB fetch
+                    // and HTML build instead of only starting after them. The
+                    // superseded empty-page load is harmless: its cancellation
+                    // is NSURLErrorCancelled, which the recovery machinery
+                    // explicitly ignores.
+                    QueryHTMLView(
+                        html: renderedAnswerHTML,
+                        disableUserInteraction: true,
+                        onInstanceLinkActivated: navigateToInstance,
+                        onQueryLinkActivated: navigateToQuery,
+                        onContentCommitted: { hasCommittedContent = !$0.isEmpty }
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .overlay {
+                        if !hasCommittedContent {
+                            ProgressView()
+                        }
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -106,6 +119,7 @@ struct QueryPreviewWindowView: View {
                 query = nil
                 renderedAnswerHTML = ""
                 errorMessage = nil
+                hasCommittedContent = false
                 Task { loadPreview() }
             }
         }
@@ -121,6 +135,7 @@ struct QueryPreviewWindowView: View {
             errorMessage = nil
             historyStack = []
             isInternalNavigation = false
+            hasCommittedContent = false
         }
     }
 
