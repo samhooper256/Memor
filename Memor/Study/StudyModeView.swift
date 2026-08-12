@@ -61,6 +61,11 @@ struct StudyModeView: View {
     /// sound for the streak jackpot (see RatingSounds).
     @State private var streak = 0
     @State private var pendingUndo: StudyUndoAction?
+    /// Coalesces bursts of database-change triggers (e.g. a run of MCP
+    /// writes) into one live refresh: refreshStudySessionLive rebuilds every
+    /// bucket synchronously on the main actor, so N back-to-back triggers
+    /// would stall the session N times.
+    @State private var liveRefreshTask: Task<Void, Never>?
     /// The query the user glimpsed before undoing a rating (⌘Z after advancing
     /// too fast). The next advance re-shows it instead of drawing randomly —
     /// the user's mind has already started on it — as long as it is still in
@@ -343,13 +348,13 @@ struct StudyModeView: View {
             allCollectionNames = (try? appDatabase.fetchAllCollectionNames(instanceID: instanceID)) ?? []
         }
         .onChange(of: editInstanceWindowState.latestSaveNonce) { _, _ in
-            Task { await refreshStudySessionLive() }
+            scheduleLiveRefresh()
         }
         .onChange(of: addInstanceWindowState.latestAddNonce) { _, _ in
-            Task { await refreshStudySessionLive() }
+            scheduleLiveRefresh()
         }
         .onReceive(NotificationCenter.default.publisher(for: .memorDidChangeDatabase)) { _ in
-            Task { await refreshStudySessionLive() }
+            scheduleLiveRefresh()
         }
         .onChange(of: studyModeState.editTypeRequestNonce) { _, _ in
             performEditType()
@@ -597,6 +602,15 @@ struct StudyModeView: View {
             peekedNextQueryID = nil
             streak = 0
             errorMessage = "Failed to load study mode."
+        }
+    }
+
+    private func scheduleLiveRefresh() {
+        liveRefreshTask?.cancel()
+        liveRefreshTask = Task {
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            await refreshStudySessionLive()
         }
     }
 
