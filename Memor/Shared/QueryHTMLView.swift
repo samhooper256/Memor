@@ -290,17 +290,20 @@ struct QueryHTMLView: NSViewRepresentable {
     var disableUserInteraction: Bool = false
     var onInstanceLinkActivated: ((Int64) -> Void)? = nil
     var onQueryLinkActivated: ((Int64, Int64) -> Void)? = nil
+    var onContentCommitted: ((String) -> Void)? = nil
 
     func makeNSView(context: Context) -> QueryWebContainerView {
         let view = QueryWebContainerView(disableUserInteraction: disableUserInteraction)
         view.onInstanceLinkActivated = onInstanceLinkActivated
         view.onQueryLinkActivated = onQueryLinkActivated
+        view.onContentCommitted = onContentCommitted
         return view
     }
 
     func updateNSView(_ containerView: QueryWebContainerView, context: Context) {
         containerView.onInstanceLinkActivated = onInstanceLinkActivated
         containerView.onQueryLinkActivated = onQueryLinkActivated
+        containerView.onContentCommitted = onContentCommitted
         containerView.loadHTML(html)
     }
 }
@@ -342,6 +345,11 @@ final class QueryWebContainerView: NSView {
             navigationDelegate.onQueryLinkActivated = onQueryLinkActivated
         }
     }
+    /// Fired on didCommit of each page load with the HTML that committed
+    /// (empty string for blank loads). Hosts use it to keep a progress
+    /// indicator up until real content is actually painting, and the launch
+    /// pre-warm uses it to release its webview once the process is warm.
+    var onContentCommitted: ((String) -> Void)?
 
     init(disableUserInteraction: Bool = false) {
         let configuration = makeLocalContentWebViewConfiguration()
@@ -366,6 +374,7 @@ final class QueryWebContainerView: NSView {
             // shared) WebContent process act as a self-recovering recycle.
             self.retryCount = 0
             self.commitWatchdog?.cancel()
+            self.onContentCommitted?(self.lastLoadedHTML ?? "")
         }
         navigationDelegate.onNavigationFailed = { [weak self] navigation, error in
             guard let self, navigation === self.currentNavigation else { return }
