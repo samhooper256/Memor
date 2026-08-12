@@ -18,6 +18,26 @@ enum RatingSounds {
     /// times, so they play a notch quieter than a raw system alert.
     private static let volume: Float = 0.6
 
+    /// Every NSSound is created AND played on this queue, never the main
+    /// thread: NSSound.play() synchronously primes its playback channel
+    /// before returning (~10–30ms per press measured warm, ~0.5s on the
+    /// process's first play), which audibly delayed the chime and pushed the
+    /// SRS write + next-query render behind it on every rating. Serial so
+    /// rapid back-to-back ratings keep their order.
+    private static let playbackQueue = DispatchQueue(label: "com.sam.Memor.rating-sounds")
+
+    /// Absorbs the audio stack's per-process cold start (~0.5s measured on
+    /// the first NSSound.play()) off the first rating press by playing one
+    /// muted sound when Study mode loads. Zero volume is inaudible, so this
+    /// runs regardless of the Sound Effects setting.
+    static func prewarm() {
+        playbackQueue.async {
+            guard let sound = NSSound(named: "GoodChime")?.copy() as? NSSound else { return }
+            sound.volume = 0
+            sound.play()
+        }
+    }
+
     private static func soundName(_ rating: StudyResponseRating, streak: Int) -> NSSound.Name {
         switch rating {
         case .again: return "Basso"
@@ -61,10 +81,14 @@ enum RatingSounds {
 
     /// Plays a COPY of the cached sound: NSSound(named:) hands back a shared
     /// instance that refuses to restart while it is still playing, which
-    /// would swallow the effect on quick back-to-back ratings.
+    /// would swallow the effect on quick back-to-back ratings. The copy is
+    /// created inside the queue closure so no NSSound ever crosses threads.
     private static func play(named name: NSSound.Name) {
-        guard let sound = NSSound(named: name)?.copy() as? NSSound else { return }
-        sound.volume = volume
-        sound.play()
+        let volume = Self.volume
+        playbackQueue.async {
+            guard let sound = NSSound(named: name)?.copy() as? NSSound else { return }
+            sound.volume = volume
+            sound.play()
+        }
     }
 }

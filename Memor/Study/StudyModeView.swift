@@ -571,6 +571,7 @@ struct StudyModeView: View {
 
     @MainActor
     private func loadStudySession() async {
+        RatingSounds.prewarm()
         do {
             let buckets = try appDatabase.fetchStudyQueryBuckets(forStackSearch: stack.search)
             blueQueries = buckets.blueQueries
