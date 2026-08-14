@@ -705,9 +705,15 @@ private struct PointMapMKMapView: NSViewRepresentable {
             hoveredViews.remove(view)
         }
 
-        @objc func mouseEntered(with event: NSEvent) {}
+        // The selectors are pinned explicitly: AppKit messages a tracking-area
+        // OWNER as `mouseEntered:`/`mouseMoved:`/`mouseExited:` (unconditionally
+        // — no respondsToSelector guard), while plain `@objc` on a non-NSResponder
+        // would export `mouseEnteredWith:` etc. and the events would never land.
+        // The empty mouseEntered must stay: the area registers enter/exit, so
+        // AppKit WILL send it.
+        @objc(mouseEntered:) func mouseEntered(with event: NSEvent) {}
 
-        @objc func mouseMoved(with event: NSEvent) {
+        @objc(mouseMoved:) func mouseMoved(with event: NSEvent) {
             guard let mapView, hoveredViews.count > 0 else { return }
             let location = mapView.convert(event.locationInWindow, from: nil)
             for view in hoveredViews.allObjects
@@ -716,7 +722,7 @@ private struct PointMapMKMapView: NSViewRepresentable {
             }
         }
 
-        @objc func mouseExited(with event: NSEvent) {
+        @objc(mouseExited:) func mouseExited(with event: NSEvent) {
             // The cursor left the map itself — nothing can still be hovered.
             for view in hoveredViews.allObjects {
                 view.endHover()
@@ -758,21 +764,30 @@ private struct PointMapMKMapView: NSViewRepresentable {
 
         func reportHover(annotation: PointMapAnnotation, isHovering: Bool) {
             guard let mapView = mapView else { return }
+            let info: PointMapQueryView.HoverInfo?
             if isHovering {
                 let mapPoint = mapView.convert(annotation.coordinate, toPointTo: mapView)
                 let positionY = mapView.isFlipped ? mapPoint.y : (mapView.bounds.height - mapPoint.y)
                 let size: CGFloat = annotation.isHighlighted ? highlightedDiameter : normalDiameter
                 hoverTooltipPointID = annotation.pointID
-                onHoverChange?(PointMapQueryView.HoverInfo(
+                info = PointMapQueryView.HoverInfo(
                     pointID: annotation.pointID,
                     name: annotation.name,
                     position: CGPoint(x: mapPoint.x, y: positionY),
                     markerSize: size
-                ))
+                )
             } else {
                 guard hoverTooltipPointID == annotation.pointID else { return }
                 hoverTooltipPointID = nil
-                onHoverChange?(nil)
+                info = nil
+            }
+            // Deferred delivery for the same reason as reportAnswerPosition:
+            // endHover can run inside updateNSView (applyAnnotations'
+            // removeAnnotations synchronously fires viewWillMove(toWindow: nil)
+            // on a hovered marker), and the callback writes SwiftUI @State.
+            // Main-queue FIFO preserves the enter/exit ordering decided above.
+            DispatchQueue.main.async { [weak self] in
+                self?.onHoverChange?(info)
             }
         }
 
@@ -851,13 +866,10 @@ private final class PointMapAnnotationView: MKAnnotationView {
         let highlightedDiameter = coordinator?.highlightedDiameter ?? PointMapPointSize.medium.highlightedDiameter
         let normalDiameter = coordinator?.normalDiameter ?? PointMapPointSize.medium.normalDiameter
         let size: CGFloat = showRed ? highlightedDiameter : normalDiameter
-        // Resize around the current center: MapKit anchors the view on its
-        // center, and keeping it fixed means the marker (and the cursor's place
-        // inside its tracking rect) stays put when hover toggles the diameter —
-        // an origin reset displaces the rect mid-gesture, which is how fast
-        // passes lost their mouseExited and left markers stuck hovered.
-        let center = CGPoint(x: frame.midX, y: frame.midY)
-        frame = NSRect(x: center.x - size / 2, y: center.y - size / 2, width: size, height: size)
+        // The (0, 0) origin is LOAD-BEARING: macOS MapKit positions the view
+        // around a frame of exactly (0, 0, size, size). "Fixing" the origin to
+        // preserve the center sends every marker to the map's corner.
+        frame = NSRect(x: 0, y: 0, width: size, height: size)
         layer?.frame = NSRect(x: 0, y: 0, width: size, height: size)
         circleLayer.frame = NSRect(x: 0, y: 0, width: size, height: size)
         circleLayer.cornerRadius = size / 2
