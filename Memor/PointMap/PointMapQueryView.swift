@@ -540,6 +540,16 @@ private struct PointMapMKMapView: NSViewRepresentable {
         context.coordinator.normalDiameter = payload.pointSize.normalDiameter
         context.coordinator.highlightedDiameter = payload.pointSize.highlightedDiameter
 
+        // Safety net for dropped marker mouseExited events (fast passes can skip
+        // them): routes map-wide mouseMoved/mouseExited to the coordinator, which
+        // force-ends any registered hover whose marker no longer contains the cursor.
+        mapView.addTrackingArea(NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
+            owner: context.coordinator,
+            userInfo: nil
+        ))
+
         applyAnnotations(to: mapView, coordinator: context.coordinator)
         applyOverlays(to: mapView, coordinator: context.coordinator)
         context.coordinator.reportAnswerPosition()
@@ -671,6 +681,48 @@ private struct PointMapMKMapView: NSViewRepresentable {
         var normalDiameter: CGFloat = PointMapPointSize.medium.normalDiameter
         var highlightedDiameter: CGFloat = PointMapPointSize.medium.highlightedDiameter
 
+        // Hover bookkeeping. AppKit can drop a marker's mouseExited when the
+        // cursor crosses it quickly (the view resizes on hover, so its tracking
+        // rect churns mid-gesture), leaving the marker stuck red/enlarged. Every
+        // hovered view registers here, and the map-wide tracking area added in
+        // makeNSView delivers mouseMoved/mouseExited to this coordinator so
+        // stale hovers are force-ended on the next cursor movement.
+        private let hoveredViews = NSHashTable<PointMapAnnotationView>.weakObjects()
+        // Which point currently owns the SwiftUI hover tooltip, so ending a
+        // stale hover doesn't clear the tooltip of the point actually hovered.
+        private var hoverTooltipPointID: Int64?
+
+        func registerHover(_ view: PointMapAnnotationView) {
+            // Only one marker can genuinely be hovered; any other registered
+            // view is a stale hover whose mouseExited was dropped.
+            for other in hoveredViews.allObjects where other !== view {
+                other.endHover()
+            }
+            hoveredViews.add(view)
+        }
+
+        func unregisterHover(_ view: PointMapAnnotationView) {
+            hoveredViews.remove(view)
+        }
+
+        @objc func mouseEntered(with event: NSEvent) {}
+
+        @objc func mouseMoved(with event: NSEvent) {
+            guard let mapView, hoveredViews.count > 0 else { return }
+            let location = mapView.convert(event.locationInWindow, from: nil)
+            for view in hoveredViews.allObjects
+            where !view.convert(view.bounds, to: mapView).contains(location) {
+                view.endHover()
+            }
+        }
+
+        @objc func mouseExited(with event: NSEvent) {
+            // The cursor left the map itself — nothing can still be hovered.
+            for view in hoveredViews.allObjects {
+                view.endHover()
+            }
+        }
+
         // Reports the answer point's current screen position so the SwiftUI overlay
         // can pin a persistent tooltip above it (forward queries, after reveal).
         // Reuses the same coordinate→view conversion as `reportHover`. The result
@@ -710,6 +762,7 @@ private struct PointMapMKMapView: NSViewRepresentable {
                 let mapPoint = mapView.convert(annotation.coordinate, toPointTo: mapView)
                 let positionY = mapView.isFlipped ? mapPoint.y : (mapView.bounds.height - mapPoint.y)
                 let size: CGFloat = annotation.isHighlighted ? highlightedDiameter : normalDiameter
+                hoverTooltipPointID = annotation.pointID
                 onHoverChange?(PointMapQueryView.HoverInfo(
                     pointID: annotation.pointID,
                     name: annotation.name,
@@ -717,6 +770,8 @@ private struct PointMapMKMapView: NSViewRepresentable {
                     markerSize: size
                 ))
             } else {
+                guard hoverTooltipPointID == annotation.pointID else { return }
+                hoverTooltipPointID = nil
                 onHoverChange?(nil)
             }
         }
@@ -774,6 +829,8 @@ private final class PointMapAnnotationView: MKAnnotationView {
     private let circleLayer = CALayer()
     private var trackingArea: NSTrackingArea?
     private var isHovered = false
+    // Keeps NSCursor push/pop balanced even when enter/exit events misbehave.
+    private var cursorPushed = false
 
     override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
@@ -794,7 +851,13 @@ private final class PointMapAnnotationView: MKAnnotationView {
         let highlightedDiameter = coordinator?.highlightedDiameter ?? PointMapPointSize.medium.highlightedDiameter
         let normalDiameter = coordinator?.normalDiameter ?? PointMapPointSize.medium.normalDiameter
         let size: CGFloat = showRed ? highlightedDiameter : normalDiameter
-        frame = NSRect(x: 0, y: 0, width: size, height: size)
+        // Resize around the current center: MapKit anchors the view on its
+        // center, and keeping it fixed means the marker (and the cursor's place
+        // inside its tracking rect) stays put when hover toggles the diameter —
+        // an origin reset displaces the rect mid-gesture, which is how fast
+        // passes lost their mouseExited and left markers stuck hovered.
+        let center = CGPoint(x: frame.midX, y: frame.midY)
+        frame = NSRect(x: center.x - size / 2, y: center.y - size / 2, width: size, height: size)
         layer?.frame = NSRect(x: 0, y: 0, width: size, height: size)
         circleLayer.frame = NSRect(x: 0, y: 0, width: size, height: size)
         circleLayer.cornerRadius = size / 2
@@ -837,23 +900,52 @@ private final class PointMapAnnotationView: MKAnnotationView {
 
     override func mouseEntered(with event: NSEvent) {
         guard let pma = annotation as? PointMapAnnotation else { return }
+        coordinator?.registerHover(self)
         isHovered = true
         if pma.reverseInteractive {
             configure(with: pma)
-            NSCursor.pointingHand.push()
+            if !cursorPushed {
+                NSCursor.pointingHand.push()
+                cursorPushed = true
+            }
         }
         coordinator?.reportHover(annotation: pma, isHovering: true)
     }
 
     override func mouseExited(with event: NSEvent) {
-        guard let pma = annotation as? PointMapAnnotation else { return }
-        if isHovered && pma.reverseInteractive {
+        endHover()
+    }
+
+    // Central hover teardown — called on mouseExited, but also by the
+    // coordinator's validation sweep when this view's exit event was dropped,
+    // and on reuse/removal. Safe to call redundantly.
+    func endHover() {
+        coordinator?.unregisterHover(self)
+        if cursorPushed {
             NSCursor.pop()
+            cursorPushed = false
         }
+        guard isHovered else { return }
         isHovered = false
+        guard let pma = annotation as? PointMapAnnotation else { return }
         if pma.reverseInteractive {
             configure(with: pma)
         }
         coordinator?.reportHover(annotation: pma, isHovering: false)
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        endHover()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        // Removed from the window mid-hover (annotation churn, query advance):
+        // end the hover so the pushed cursor and the coordinator's registration
+        // don't outlive the view's on-screen life.
+        if newWindow == nil {
+            endHover()
+        }
+        super.viewWillMove(toWindow: newWindow)
     }
 }
