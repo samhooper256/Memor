@@ -347,7 +347,7 @@ struct SearchWindowView: View {
             }
         }
         .frame(minWidth: 560, minHeight: 520)
-        .background(SearchWindowBacktabHandler { cycleMode() })
+        .background(SearchWindowKeyHandler(onBacktab: { cycleMode() }, onEscape: { dismiss() }))
         .background {
             FindShortcutKeyHandler(shortcutSettings: shortcutSettings) {
                 searchFocusRequest = UUID()
@@ -1116,23 +1116,31 @@ private struct MapElementSearchRowView: View {
     }
 }
 
-/// Captures Shift+Tab at the window level (for when focus is in the result list,
-/// not the search field) so the user can still cycle search modes.
-private struct SearchWindowBacktabHandler: NSViewRepresentable {
+/// Captures Shift+Tab (cycle search modes) and Escape (close the window) at the
+/// window level, so both work regardless of whether focus is in the search
+/// field or the results list. Escape can't rely on .onExitCommand alone here:
+/// the search field's NSTextView consumes Escape (as complete:) before the
+/// cancel action reaches SwiftUI. Popovers, alert sheets, and the collection
+/// picker panel are separate key windows, so their Escape handling is untouched.
+private struct SearchWindowKeyHandler: NSViewRepresentable {
     let onBacktab: () -> Void
+    let onEscape: () -> Void
 
     func makeNSView(context: Context) -> NSView {
         let view = MonitorView()
         view.onBacktab = onBacktab
+        view.onEscape = onEscape
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
         (nsView as? MonitorView)?.onBacktab = onBacktab
+        (nsView as? MonitorView)?.onEscape = onEscape
     }
 
     final class MonitorView: NSView {
         var onBacktab: (() -> Void)?
+        var onEscape: (() -> Void)?
         private var monitor: Any?
 
         override func viewDidMoveToWindow() {
@@ -1143,6 +1151,10 @@ private struct SearchWindowBacktabHandler: NSViewRepresentable {
                     // Tab keyCode 48 with Shift = Shift+Tab.
                     if event.keyCode == 48, event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .shift {
                         self.onBacktab?()
+                        return nil
+                    }
+                    if event.keyCode == 53 || event.charactersIgnoringModifiers == "\u{1b}" {
+                        self.onEscape?()
                         return nil
                     }
                     return event
