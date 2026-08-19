@@ -685,9 +685,10 @@ struct SearchWindowView: View {
                 }
             }
         } primaryAction: { clickedIDs in
+            // Resolve through querySections (not by parsing the string row id)
+            // so Person built-in rows ("p:…" ids) open their instance too.
             guard let queryID = clickedIDs.first,
-                  let instanceIDPart = queryID.split(separator: ":").first,
-                  let instanceID = Int64(instanceIDPart) else { return }
+                  let instanceID = queryInstanceIDs(forSelectedQueryIDs: [queryID]).first else { return }
             editInstanceWindowState.requestOpen(instanceID: instanceID)
             openWindow(id: "edit-instance")
         }
