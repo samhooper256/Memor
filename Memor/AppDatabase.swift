@@ -6651,7 +6651,7 @@ struct AppDatabase {
         )
 
         let pageRows = rows.map { row in
-            let label = "\(row.title) (\(row.boundaryCount) \(row.boundaryCount == 1 ? "query" : "queries"))"
+            let label = "\(row.title) (\(row.boundaryCount) \(row.boundaryCount == 1 ? "boundary" : "boundaries"))"
             return TypeInstancesPageRow(
                 id: row.instanceID,
                 displayValue: label,
