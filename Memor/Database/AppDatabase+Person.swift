@@ -769,7 +769,11 @@ extension AppDatabase {
             }
 
             // 4d. Sex change: flipping A's role on existing children.
-            let sexFlipped = oldSex != newSex
+            // Add mode is never a flip: oldSex is a seed default there, and by
+            // 6g every person_parent row under this personID was materialized
+            // THIS save under newSex — "flipping" those corrupts them (or trips
+            // UNIQUE(child_id, role) when the child's other slot is occupied).
+            let sexFlipped = instanceID != nil && oldSex != newSex
             var flipRows: [(rowID: Int64, childID: Int64, role: PersonParentRole)] = []
             if sexFlipped {
                 let rows = try Row.fetchAll(
