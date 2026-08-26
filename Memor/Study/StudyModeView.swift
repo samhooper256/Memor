@@ -713,6 +713,14 @@ struct StudyModeView: View {
     @MainActor
     private func submit(_ rating: StudyResponseRating) async {
         guard let currentQuery else { return }
+        // The reveal gate at the call sites is checked at key-event time, but
+        // the rating runs in a detached Task: a burst of presses can queue
+        // several submits behind one passed gate check, and the later ones
+        // would rate the NEXT, never-revealed query sight-unseen (submit ends
+        // by advancing and clearing isAnswerRevealed). Re-check here — every
+        // caller requires a revealed answer (the rating buttons only exist
+        // post-reveal).
+        guard isAnswerRevealed else { return }
         let previousStreak = streak
         // Flash the pressed rating's bar over the divider (replacing any
         // still-fading bar from the previous response outright), advance the
@@ -1021,6 +1029,31 @@ private struct StudyModeKeyCommandHandler: NSViewRepresentable {
             if keyDownMonitor == nil {
                 keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                     guard let self, event.window === self.window else {
+                        return event
+                    }
+
+                    // A held key auto-repeats its keyDown, and acting on the
+                    // repeats machine-guns the action — a held Space alternates
+                    // reveal/Good, re-rating the same query many times a second.
+                    // Swallow repeats of every key this monitor owns (same match
+                    // checks as below, actions disabled) and pass the rest on.
+                    if event.isARepeat {
+                        if event.keyCode == 53 { return nil }
+                        if let settings = self.shortcutSettings {
+                            let ownedActions: [ShortcutAction] = [
+                                .studyRevealOrGood, .studyRatingAgain, .studyRatingHard,
+                                .studyRatingGood, .studyRatingEasy, .studyUndo,
+                                .studyEditInstance, .studyEditType, .studyDuplicateInstance,
+                            ]
+                            if ownedActions.contains(where: { settings.binding(for: $0).matches(event) }) {
+                                return nil
+                            }
+                        }
+                        let repeatArrowFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                            .subtracting([.numericPad, .function])
+                        if repeatArrowFlags.isEmpty, LinkShortcutKey.fromKeyCode(event.keyCode) != nil {
+                            return nil
+                        }
                         return event
                     }
 
