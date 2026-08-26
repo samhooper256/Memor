@@ -319,7 +319,9 @@ private struct BoundaryMapMKMapView: NSViewRepresentable {
 // MKMapView subclass that, only during a reverse question, reports which
 // boundary the mouse is over (for hover tinting + pointer cursor) and treats a
 // click on a boundary as the answer selection. Clicks on empty map still pan.
-private final class BoundaryMapInteractiveMapView: MKMapView {
+// Inherits DeferredRegionMKMapView's zero-size-mount camera repair (the region
+// is set in makeNSView before the first layout pass, like the PointMap maps).
+private final class BoundaryMapInteractiveMapView: DeferredRegionMKMapView {
     weak var coordinator: BoundaryMapMKMapView.Coordinator?
     private var trackingArea: NSTrackingArea?
 
