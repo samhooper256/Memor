@@ -338,10 +338,19 @@ struct StudyModeView: View {
         .onChange(of: currentQuery) { _, newQuery in
             overlayCollectionNames = []
             allCollectionNames = []
+            // studyModeState is an EnvironmentObject and onChange runs inside
+            // the view-update transaction: writing its @Published here is the
+            // "Publishing changes from within view updates is not allowed"
+            // fault (one per query advance). Defer the publish; the @State
+            // writes in this closure are fine where they are.
+            let newTypeID: Int64?
             if let newQuery, newQuery.kind == .standard {
-                studyModeState.currentTypeID = try? appDatabase.fetchTypeID(instanceID: newQuery.instanceID)
+                newTypeID = try? appDatabase.fetchTypeID(instanceID: newQuery.instanceID)
             } else {
-                studyModeState.currentTypeID = nil
+                newTypeID = nil
+            }
+            Task { @MainActor in
+                studyModeState.currentTypeID = newTypeID
             }
             guard let instanceID = newQuery?.instanceID else { return }
             overlayCollectionNames = (try? appDatabase.fetchVisibleBeforeAnswerCollectionNames(instanceID: instanceID)) ?? []
