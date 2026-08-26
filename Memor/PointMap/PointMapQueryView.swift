@@ -767,12 +767,22 @@ private struct PointMapMKMapView: NSViewRepresentable {
                 .first(where: { $0.pointID == answerPointID }) {
                 let mapPoint = mapView.convert(annotation.coordinate, toPointTo: mapView)
                 let positionY = mapView.isFlipped ? mapPoint.y : (mapView.bounds.height - mapPoint.y)
-                info = PointMapQueryView.HoverInfo(
-                    pointID: annotation.pointID,
-                    name: answerName,
-                    position: CGPoint(x: mapPoint.x, y: positionY),
-                    markerSize: highlightedDiameter
-                )
+                // A zero-sized or camera-wedged map makes convert() return
+                // non-finite points. HoverInfo's synthesized == compares
+                // CGFloats, and NaN != NaN, so a NaN position defeats the
+                // caller's answerInfo dedupe and turns the report → setState →
+                // update cycle into an unbounded loop (plus NaN .position
+                // writes). Report "no position" instead — nil == nil holds.
+                if mapPoint.x.isFinite, positionY.isFinite {
+                    info = PointMapQueryView.HoverInfo(
+                        pointID: annotation.pointID,
+                        name: answerName,
+                        position: CGPoint(x: mapPoint.x, y: positionY),
+                        markerSize: highlightedDiameter
+                    )
+                } else {
+                    info = nil
+                }
             } else {
                 info = nil
             }
@@ -788,17 +798,26 @@ private struct PointMapMKMapView: NSViewRepresentable {
         func reportHover(annotation: PointMapAnnotation, isHovering: Bool) {
             guard let mapView = mapView else { return }
             let info: PointMapQueryView.HoverInfo?
-            if isHovering {
-                let mapPoint = mapView.convert(annotation.coordinate, toPointTo: mapView)
-                let positionY = mapView.isFlipped ? mapPoint.y : (mapView.bounds.height - mapPoint.y)
+            let hoverPoint = isHovering
+                ? mapView.convert(annotation.coordinate, toPointTo: mapView)
+                : .zero
+            // Same non-finite guard as reportAnswerPosition: never hand the
+            // SwiftUI overlay a NaN position.
+            if isHovering, hoverPoint.x.isFinite, hoverPoint.y.isFinite {
+                let positionY = mapView.isFlipped ? hoverPoint.y : (mapView.bounds.height - hoverPoint.y)
                 let size: CGFloat = annotation.isHighlighted ? highlightedDiameter : normalDiameter
                 hoverTooltipPointID = annotation.pointID
                 info = PointMapQueryView.HoverInfo(
                     pointID: annotation.pointID,
                     name: annotation.name,
-                    position: CGPoint(x: mapPoint.x, y: positionY),
+                    position: CGPoint(x: hoverPoint.x, y: positionY),
                     markerSize: size
                 )
+            } else if isHovering {
+                // Non-finite conversion: treat as no hover rather than pin a
+                // tooltip at a garbage position.
+                hoverTooltipPointID = nil
+                info = nil
             } else {
                 guard hoverTooltipPointID == annotation.pointID else { return }
                 hoverTooltipPointID = nil
