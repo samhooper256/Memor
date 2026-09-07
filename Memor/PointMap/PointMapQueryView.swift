@@ -207,12 +207,31 @@ struct MapTooltipLabel: View {
 struct PointMapQueryView: View {
     let payload: PointMapStudyPayload
     var revealName: Bool
+    // Locator-pulse request: Study mode hands over a fresh id every time it
+    // ADVANCES to a PointMap query (never on ⌘Z, which restores an already-seen
+    // query), and each new id plays the magenta locator rings once around the
+    // query point. nil = no pulse (Query Preview, previews, reverse queries).
+    var locatorPulseID: UUID?
     var onAnswerSelected: () -> Void
 
     @State private var hoverInfo: HoverInfo?
     @State private var answerInfo: HoverInfo?
     // Reverse queries: which point the user clicked (their guess), if any.
     @State private var clickedPointID: Int64?
+    // The locator pulse currently playing (removed shortly after it fades out).
+    @State private var locatorPulse: LocatorPulse?
+
+    private struct LocatorPulse {
+        let id: UUID
+        let startDate = Date()
+    }
+
+    // The locator rings only make sense on forward queries, where the query
+    // point is already the highlighted (red) marker — on a reverse query they
+    // would give the answer away.
+    private var showsLocatorPulse: Bool {
+        !payload.isReverse && payload.showHighlight
+    }
 
     // The persistent answer tooltip is only for forward queries after reveal.
     private var showsAnswerTooltip: Bool {
@@ -245,9 +264,15 @@ struct PointMapQueryView: View {
             && payload.points.contains { $0.id == payload.pointID }
     }
 
-    init(payload: PointMapStudyPayload, revealName: Bool = false, onAnswerSelected: @escaping () -> Void = {}) {
+    init(
+        payload: PointMapStudyPayload,
+        revealName: Bool = false,
+        locatorPulseID: UUID? = nil,
+        onAnswerSelected: @escaping () -> Void = {}
+    ) {
         self.payload = payload
         self.revealName = revealName
+        self.locatorPulseID = locatorPulseID
         self.onAnswerSelected = onAnswerSelected
     }
 
@@ -281,6 +306,21 @@ struct PointMapQueryView: View {
                     }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                // Locator pulse: three concentric magenta rings around the query
+                // point, fading out over one second after every advance so the
+                // eye finds the point immediately. The pointID check drops the
+                // one frame where answerInfo may still describe the previous
+                // query's point; clipped so rings near the edge stay on the map.
+                if showsLocatorPulse,
+                   let pulse = locatorPulse,
+                   let answer = answerInfo,
+                   answer.pointID == payload.pointID {
+                    PointLocatorPulseView(startDate: pulse.startDate, markerSize: answer.markerSize)
+                        .position(x: answer.position.x, y: answer.position.y)
+                        .clipped()
+                        .allowsHitTesting(false)
+                }
 
                 // Persistent answer tooltip above the answer point (forward queries).
                 if showsAnswerTooltip, let answer = answerInfo, !answer.name.isEmpty {
@@ -321,6 +361,23 @@ struct PointMapQueryView: View {
                     clickedPointID = nil
                 }
             }
+            // Runs on appear and whenever Study mode issues a new pulse id —
+            // so a PointMap query reached from an HTML query (fresh view) and
+            // one reached from another PointMap query (reused view) both
+            // pulse, and re-advancing after ⌘Z pulses again because the id is
+            // fresh. A newer pulse cancels this task; the id check keeps it
+            // from clearing the pulse that replaced it.
+            .task(id: locatorPulseID) {
+                guard let locatorPulseID, showsLocatorPulse else {
+                    locatorPulse = nil
+                    return
+                }
+                locatorPulse = LocatorPulse(id: locatorPulseID)
+                try? await Task.sleep(for: .seconds(PointLocatorPulseView.duration + 0.05))
+                if locatorPulse?.id == locatorPulseID {
+                    locatorPulse = nil
+                }
+            }
 
             ZStack {
                 Color.clear
@@ -350,6 +407,38 @@ struct PointMapQueryView: View {
         let clamped = max(0.0, min(20.0, zoom))
         let latDelta = max(0.0001, 360.0 / pow(2.0, clamped))
         return MKCoordinateSpan(latitudeDelta: latDelta, longitudeDelta: latDelta)
+    }
+}
+
+// Three concentric magenta rings centered on the query point (the caller
+// positions this view at the marker's center), sized off the highlighted marker
+// so they clear it on every point size. Opacity follows 1 − t² over one second
+// — recomputed per frame by TimelineView, like the Study rating flash — so the
+// rings hold nearly full strength while the eye lands, then drop away.
+private struct PointLocatorPulseView: View {
+    let startDate: Date
+    let markerSize: CGFloat
+
+    static let duration: TimeInterval = 1.0
+    private static let ringCount = 3
+    private static let ringGap: CGFloat = 12       // radius step between rings, points
+    private static let lineWidth: CGFloat = 2
+    private static let color = Color(nsColor: .magenta)
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let t = context.date.timeIntervalSince(startDate) / Self.duration
+            let opacity = max(0.0, 1.0 - t * t)
+            ZStack {
+                ForEach(1...Self.ringCount, id: \.self) { index in
+                    let diameter = markerSize + 2 * Self.ringGap * CGFloat(index)
+                    Circle()
+                        .stroke(Self.color, lineWidth: Self.lineWidth)
+                        .frame(width: diameter, height: diameter)
+                }
+            }
+            .opacity(opacity)
+        }
     }
 }
 
@@ -504,9 +593,14 @@ private struct PointMapMKMapView: NSViewRepresentable {
     let onHoverChange: (PointMapQueryView.HoverInfo?) -> Void
     let onAnswerPositionChange: (PointMapQueryView.HoverInfo?) -> Void
 
-    // Forward queries show a persistent tooltip above the answer point once revealed.
-    private var showAnswerTooltip: Bool {
-        revealName && payload.showHighlight && !payload.isReverse
+    // Forward queries report the answer point's screen position from the moment
+    // they appear (not just after reveal): the SwiftUI layer pins the locator
+    // pulse there pre-reveal and the persistent name tooltip there post-reveal
+    // (the tooltip's own gate is `PointMapQueryView.showsAnswerTooltip`). A
+    // reverse query never reports it — nothing may mark the answer before the
+    // user clicks.
+    private var tracksAnswerPosition: Bool {
+        payload.showHighlight && !payload.isReverse
     }
 
     func makeNSView(context: Context) -> MKMapView {
@@ -536,7 +630,7 @@ private struct PointMapMKMapView: NSViewRepresentable {
         context.coordinator.onAnswerPositionChange = onAnswerPositionChange
         context.coordinator.answerPointID = payload.pointID
         context.coordinator.answerName = payload.pointName
-        context.coordinator.showAnswerTooltip = showAnswerTooltip
+        context.coordinator.tracksAnswerPosition = tracksAnswerPosition
         context.coordinator.normalDiameter = payload.pointSize.normalDiameter
         context.coordinator.highlightedDiameter = payload.pointSize.highlightedDiameter
 
@@ -565,7 +659,7 @@ private struct PointMapMKMapView: NSViewRepresentable {
         coordinator.onAnswerPositionChange = onAnswerPositionChange
         coordinator.answerPointID = payload.pointID
         coordinator.answerName = payload.pointName
-        coordinator.showAnswerTooltip = showAnswerTooltip
+        coordinator.tracksAnswerPosition = tracksAnswerPosition
         coordinator.normalDiameter = payload.pointSize.normalDiameter
         coordinator.highlightedDiameter = payload.pointSize.highlightedDiameter
 
@@ -674,7 +768,7 @@ private struct PointMapMKMapView: NSViewRepresentable {
         var onHoverChange: ((PointMapQueryView.HoverInfo?) -> Void)?
         var onAnswerSelected: ((Int64) -> Void)?
         var onAnswerPositionChange: ((PointMapQueryView.HoverInfo?) -> Void)?
-        var showAnswerTooltip = false
+        var tracksAnswerPosition = false
         var answerPointID: Int64 = .min
         var answerName: String = ""
         // Per-instance marker diameters, set from payload.pointSize in make/updateNSView.
@@ -730,7 +824,8 @@ private struct PointMapMKMapView: NSViewRepresentable {
         }
 
         // Reports the answer point's current screen position so the SwiftUI overlay
-        // can pin a persistent tooltip above it (forward queries, after reveal).
+        // can pin the locator pulse on it (forward queries, on advance) and the
+        // persistent tooltip above it (forward queries, after reveal).
         // Reuses the same coordinate→view conversion as `reportHover`. The result
         // is delivered asynchronously because this is invoked during the SwiftUI
         // update cycle (make/updateNSView), and mutating @State synchronously there
@@ -738,7 +833,7 @@ private struct PointMapMKMapView: NSViewRepresentable {
         func reportAnswerPosition() {
             guard let mapView else { return }
             let info: PointMapQueryView.HoverInfo?
-            if showAnswerTooltip,
+            if tracksAnswerPosition,
                let annotation = mapView.annotations
                 .compactMap({ $0 as? PointMapAnnotation })
                 .first(where: { $0.pointID == answerPointID }) {

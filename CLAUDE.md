@@ -161,6 +161,7 @@ Components:
 - Rating multipliers: Again (reset to starter), Hard (1.2x), Good (2.5x), Easy (3.25x)
 - Study mode loads queries into blue/red/green pools, prioritizes overdue red queries, then randomly picks from blue+green
 - Peeked-query override: a query glimpsed then ⌘Z'd away (rating undo) is re-shown on the next advance, preempting even overdue reds, iff it is still in the pools; one-shot and session-only (`peekedNextQueryID` view state in StudyModeView)
+- PointMap locator pulse: every ADVANCE to a PointMap Forward query (incl. re-advancing after ⌘Z) plays three concentric magenta rings around the query point that fade out over 1s. Driven by the `pointMapLocatorPulseID` nonce (fresh in `loadNextQuery` for PointMap queries, nil otherwise and on rating undo) → `PointMapQueryView(locatorPulseID:)`, which pins `PointLocatorPulseView` at the coordinator-reported answer position (`tracksAnswerPosition`: forward queries report it pre-reveal too; reverse never). Study-only — Query Preview passes no id.
 
 ## Keyboard Shortcuts
 

@@ -72,6 +72,12 @@ struct StudyModeView: View {
     /// the session's pools. One-shot, and session-only by virtue of being view
     /// state (exiting Study or the app forgets it).
     @State private var peekedNextQueryID: String?
+    /// Fresh on every ADVANCE to a PointMap query (loadNextQuery), nil on an
+    /// advance to any other kind and on ⌘Z. PointMapQueryView plays its
+    /// one-second magenta locator rings around the query point once per id,
+    /// so re-advancing to a query after undoing pulses again while undoing
+    /// back to an already-seen query does not.
+    @State private var pointMapLocatorPulseID: UUID?
 
     // One-second colored flash over the divider above the rating just pressed
     // (pure overlay — the query HTML is untouched). Geometry is snapshotted at
@@ -410,6 +416,7 @@ struct StudyModeView: View {
             PointMapQueryView(
                 payload: payload,
                 revealName: isAnswerRevealed,
+                locatorPulseID: pointMapLocatorPulseID,
                 onAnswerSelected: { revealAnswerIfPossible() }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -566,6 +573,9 @@ struct StudyModeView: View {
             // after a successful revert: a failed undo leaves the glimpsed
             // query current, where a stale peek would wrongly repeat it.
             peekedNextQueryID = currentQuery?.id
+            // Restoring an already-seen query is not an advance: no locator
+            // pulse (the next real advance issues a fresh id and pulses).
+            pointMapLocatorPulseID = nil
 
             blueQueries = previousBlueQueries
             redQueries = previousRedQueries
@@ -609,6 +619,7 @@ struct StudyModeView: View {
             isCompleted = false
             pendingUndo = nil
             peekedNextQueryID = nil
+            pointMapLocatorPulseID = nil
             streak = 0
             errorMessage = "Failed to load study mode."
         }
@@ -692,6 +703,7 @@ struct StudyModeView: View {
             renderedAnswerHTML = ""
             isAnswerRevealed = false
             isCompleted = true
+            pointMapLocatorPulseID = nil
             errorMessage = nil
             return
         }
@@ -706,6 +718,10 @@ struct StudyModeView: View {
                 renderedQuestionHTML = try buildRenderedQuestionHTML(appDatabase: appDatabase, query: nextQuery)
                 renderedAnswerHTML = try buildRenderedAnswerHTML(appDatabase: appDatabase, query: nextQuery)
             }
+            // Every advance to a PointMap query pulses the locator rings once
+            // — a fresh id even when the same point comes straight back (the
+            // last red query in a session), and after ⌘Z re-advances to it.
+            pointMapLocatorPulseID = nextQuery.kind == .pointMap ? UUID() : nil
             isAnswerRevealed = false
             isCompleted = false
             errorMessage = nil
@@ -715,6 +731,7 @@ struct StudyModeView: View {
             renderedQuestionHTML = ""
             renderedAnswerHTML = ""
             isCompleted = false
+            pointMapLocatorPulseID = nil
             errorMessage = "Failed to load study mode."
         }
     }
