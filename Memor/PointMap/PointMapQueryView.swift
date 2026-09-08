@@ -254,14 +254,22 @@ struct PointMapQueryView: View {
     // points become interactive (hover-red + pointer + click-to-reveal).
     private var reverseInteractive: Bool { payload.isReverse && !revealName }
 
-    // The bottom-left zoomed-in mini-map is shown only on forward queries that
-    // have a highlighted (red) query point to center on. On reverse queries the
-    // answer point isn't revealed until the user clicks, so centering the inset
-    // on it would give it away.
-    private var showsMiniMap: Bool {
-        !payload.isReverse
-            && payload.showHighlight
+    // The bottom-left zoomed-in mini-map needs a highlighted (red) query point
+    // to center on. It stays MOUNTED for every such query — forward or reverse
+    // — and is merely made invisible when it must not show (miniMapIsVisible):
+    // the inset's MKMapView leaks VectorKit resources on teardown, so mounting
+    // and unmounting it per query (reveal → advance → reveal on a reverse-only
+    // stack) is exactly the crash pattern PointMapMiniMap's comment describes.
+    private var hasMiniMap: Bool {
+        payload.showHighlight
             && payload.points.contains { $0.id == payload.pointID }
+    }
+
+    // Forward queries show the inset throughout. On a reverse query the answer
+    // point is the secret until the user clicks, so the inset (centered on it,
+    // with the point in red) appears only once the answer is revealed.
+    private var miniMapIsVisible: Bool {
+        !payload.isReverse || revealName
     }
 
     init(
@@ -341,10 +349,12 @@ struct PointMapQueryView: View {
                 }
 
                 // Zoomed-in locator inset, pinned to the bottom-left corner.
-                if showsMiniMap {
+                // Hidden via opacity, never unmounted (see hasMiniMap).
+                if hasMiniMap {
                     PointMapMiniMap(payload: payload)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                         .padding(12)
+                        .opacity(miniMapIsVisible ? 1 : 0)
                         .allowsHitTesting(false)
                 }
             }
@@ -442,8 +452,9 @@ private struct PointLocatorPulseView: View {
     }
 }
 
-// A small, square, non-interactive map inset zoomed in tight on the forward
-// query's answer point. The query point renders larger and red; every other
+// A small, square, non-interactive map inset zoomed in tight on the query's
+// answer point (visible throughout a forward query, only after reveal on a
+// reverse one). The query point renders larger and red; every other
 // point on the instance renders yellow (regardless of the main map's
 // show-all-points filtering), giving the user precise local context. Centering
 // is on the query point and the camera is fixed — no pan/zoom/clicks.
