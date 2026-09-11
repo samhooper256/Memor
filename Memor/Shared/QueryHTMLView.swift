@@ -413,12 +413,22 @@ struct QueryHTMLView: NSViewRepresentable {
     var onInstanceLinkActivated: ((Int64) -> Void)? = nil
     var onQueryLinkActivated: ((Int64, Int64) -> Void)? = nil
     var onContentCommitted: ((String) -> Void)? = nil
+    /// One-shot "play the FIRST <audio> on the shown page" request, nonce-style like
+    /// PointMapQueryView(locatorPulseID:): each fresh UUID plays once (restarting from 0),
+    /// nil or an unchanged value does nothing. Rides updateNSView without a reload because
+    /// loadHTML dedupes unchanged HTML; a request that lands while a new page is still
+    /// provisional plays once that page commits. Declared LAST so every call site can append
+    /// it (the memberwise init wants declaration order).
+    var playFirstAudioRequestID: UUID? = nil
 
     func makeNSView(context: Context) -> QueryWebContainerView {
         let view = QueryWebContainerView(disableUserInteraction: disableUserInteraction)
         view.onInstanceLinkActivated = onInstanceLinkActivated
         view.onQueryLinkActivated = onQueryLinkActivated
         view.onContentCommitted = onContentCommitted
+        // A nonce minted before this container existed (Study remounts the web view when a
+        // map query gives way to a standard one) is already spent — never replay it on mount.
+        view.markPlayRequestHandled(playFirstAudioRequestID)
         return view
     }
 
@@ -427,6 +437,9 @@ struct QueryHTMLView: NSViewRepresentable {
         containerView.onQueryLinkActivated = onQueryLinkActivated
         containerView.onContentCommitted = onContentCommitted
         containerView.loadHTML(html)
+        if let playFirstAudioRequestID {
+            containerView.requestPlayFirstAudio(id: playFirstAudioRequestID)
+        }
     }
 }
 
@@ -439,6 +452,11 @@ final class QueryWebContainerView: NSView {
     private let imageSchemeHandler = LocalImageURLSchemeHandler()
     private let navigationDelegate = QueryWebNavigationDelegate()
     private var lastLoadedHTML: String?
+
+    // Play-audio request state (see QueryHTMLView.playFirstAudioRequestID).
+    private var lastHandledPlayRequestID: UUID?
+    private var hasPendingPlayRequest = false
+    private var windowWillCloseObserver: NSObjectProtocol?
 
     // Recovery state. Every startLoad bumps loadGeneration (staleness token for
     // the timers) and records the WKNavigation returned by loadHTMLString (the
@@ -486,6 +504,11 @@ final class QueryWebContainerView: NSView {
 
         webView.translatesAutoresizingMaskIntoConstraints = false
         webView.setValue(false, forKey: "drawsBackground")
+        #if DEBUG
+        // Safari ▸ Develop ▸ <Mac> ▸ Memor: the Network tab is the only place to see each
+        // local-file request's Range header and the handler's 206/Content-Range answer.
+        webView.isInspectable = true
+        #endif
         webView.navigationDelegate = navigationDelegate
 
         navigationDelegate.onNavigationCommitted = { [weak self] navigation in
@@ -496,6 +519,13 @@ final class QueryWebContainerView: NSView {
             // shared) WebContent process act as a self-recovering recycle.
             self.retryCount = 0
             self.commitWatchdog?.cancel()
+            // A Play Audio request that arrived while this page was provisional runs now
+            // that the new document exists (the script itself waits for DOMContentLoaded
+            // if parsing is still under way).
+            if self.hasPendingPlayRequest {
+                self.hasPendingPlayRequest = false
+                self.evaluatePlayFirstAudio()
+            }
             self.onContentCommitted?(self.lastLoadedHTML ?? "")
         }
         navigationDelegate.onNavigationFailed = { [weak self] navigation, error in
@@ -540,6 +570,9 @@ final class QueryWebContainerView: NSView {
         if let didBecomeActiveObserver {
             NotificationCenter.default.removeObserver(didBecomeActiveObserver)
         }
+        if let windowWillCloseObserver {
+            NotificationCenter.default.removeObserver(windowWillCloseObserver)
+        }
     }
 
     func loadHTML(_ html: String) {
@@ -548,8 +581,88 @@ final class QueryWebContainerView: NSView {
         // flashing its images as they re-fetch through the local-image scheme handler.
         guard html != lastLoadedHTML else { return }
         lastLoadedHTML = html
+        // A Play Audio request aimed at the previous page must not fire on this one. Cleared
+        // here rather than in startLoad so recovery retries of the SAME page keep it.
+        hasPendingPlayRequest = false
         retryCount = 0
         startLoad(html)
+    }
+
+    // MARK: Play Audio (first <audio> on the shown page)
+
+    /// Seeds the last-handled id so a request minted before this container existed is not
+    /// replayed on mount (see QueryHTMLView.makeNSView).
+    func markPlayRequestHandled(_ id: UUID?) {
+        lastHandledPlayRequestID = id
+    }
+
+    /// (Re)starts the FIRST <audio> in document order — only that one when there are several.
+    /// If a new page is still provisional the request is parked and flushed on didCommit;
+    /// evaluating now would target the OLD document.
+    func requestPlayFirstAudio(id: UUID) {
+        guard id != lastHandledPlayRequestID else { return }
+        lastHandledPlayRequestID = id
+        if hasCommittedCurrentLoad {
+            evaluatePlayFirstAudio()
+        } else {
+            hasPendingPlayRequest = true
+        }
+    }
+
+    private func evaluatePlayFirstAudio() {
+        webView.evaluateJavaScript(Self.playFirstAudioScript) { _, error in
+            if let error {
+                print("Play Audio: JS evaluation failed: \(error)")
+            }
+        }
+    }
+
+    // Restart-from-0 semantics on every press ("hear it again"). Robust to running right after
+    // didCommit, before the parser has produced the element: while the document is still
+    // loading it defers to DOMContentLoaded. play() returns a promise on WebKit; its rejection
+    // (no source, failed load, policy) is swallowed — broken audio must never surface a JS
+    // error. Returns 'played' / 'deferred' / 'none' for debugging.
+    private static let playFirstAudioScript = #"""
+    (function () {
+      function playFirst() {
+        var el = document.querySelector('audio');
+        if (!el) { return 'none'; }
+        try { el.currentTime = 0; } catch (e) {}
+        var p = el.play();
+        if (p && typeof p.catch === 'function') { p.catch(function () {}); }
+        return 'played';
+      }
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', playFirst, { once: true });
+        return 'deferred';
+      }
+      return playFirst();
+    })();
+    """#
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let windowWillCloseObserver {
+            NotificationCenter.default.removeObserver(windowWillCloseObserver)
+            self.windowWillCloseObserver = nil
+        }
+        guard let window else {
+            // Unmounted (Study exit): nothing may keep playing off-window.
+            webView.pauseAllMediaPlayback()
+            hasPendingPlayRequest = false
+            return
+        }
+        // The Query Preview is a `Window` scene: closing it orders the window out WITHOUT
+        // unmounting its views, so viewDidMoveToWindow(nil) never fires and updateNSView is not
+        // guaranteed to run for a closed window. Observe the window's own close instead.
+        windowWillCloseObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            self?.webView.pauseAllMediaPlayback()
+            self?.hasPendingPlayRequest = false
+        }
     }
 
     // One load attempt — new content or a recovery retry. Recovery calls this
