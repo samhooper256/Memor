@@ -66,7 +66,7 @@ Memor/
     PlainCodeTextView.swift         Code editor NSTextView + FocusedEditor + query-type editor split view
     SearchHighlightingTextView.swift Search field + highlight rendering used across search windows
     TextSubstitutions.swift         NSTextView.disableAutomaticSubstitutions() + launch-time defaults kill switch
-    QueryHTMLView.swift             WKWebView wrapper for rendering query HTML (+ scheme handler)
+    QueryHTMLView.swift             WKWebView wrapper for rendering query HTML (+ range-capable local-file scheme handler, play-first-audio nonce)
     WebViewPrewarm.swift            One-shot launch warm-up: pays WebKit init + first WebContent spawn during launch idle
     HTMLPreviewView.swift           Live-preview WebView for the Types page HTML/CSS editors
   Windows/
@@ -129,7 +129,7 @@ Seeded idempotently in `createSchema` (`name='Person' AND is_builtin=1`). Defaul
 - DB path: `~/Library/Containers/com.sam.Memor/Data/Library/Application Support/Memor/Memor.sqlite`
 - Dynamic per-type tables: `type{typeID}` with columns `field{fieldID}`
 - Global settings in `globals` table (global_query_html, global_query_css, stacks_last_updated_timestamp)
-- Security-scoped bookmarks for image file access (`image_file` table)
+- Security-scoped bookmarks for user-picked local files — images and .mp3 audio alike (`image_file` table; the name predates audio — it is the app's file-bookmark store keyed by standardized path, minted by `grantImageFileAccess`, and nothing downstream is image-specific)
 - **Schema evolution — there is NO migration machinery** (deleted July 2026: single user, schema current). `AppDatabase.init` runs `createSchema` on every launch; everything in it is `CREATE TABLE/INDEX IF NOT EXISTS` plus idempotent seeds, so NEW tables and indexes reach an existing database automatically. Adding a column to an EXISTING table is different: editing its `CREATE TABLE` only affects fresh databases, so also apply a one-off `ALTER TABLE` to the live database (or add a `PRAGMA table_info`-guarded helper if it must self-apply on launch).
 
 ## Search Query Language
@@ -174,6 +174,7 @@ The shortcut system lives in `Memor/Shortcuts/`. **Customizable** shortcuts are 
 3. Display it in button text: `ShortcutLabel(title: "Save", action: .myAction)` or interpolate `shortcutSettings.binding(for: .myAction).displayString`.
 4. For `NSEvent.addLocalMonitorForEvents` handlers, store a `ShortcutSettings` ref on the NSView and call `settings.binding(for: .myAction).matches(event)`. See `StudyModeKeyCommandHandler` in Study/StudyModeView.swift for a reference implementation.
 5. Every scene that hosts the view must inject `.environmentObject(shortcutSettings)` (see MemorApp.swift).
+6. A Study-category action that also applies in the Query Preview window (`.studyEditInstance`, `.studyPlayAudio`) must be matched in BOTH monitors — `StudyModeKeyCommandHandler` (and stay in its `ownedActions` auto-repeat swallow list) and `QueryPreviewKeyHandler` (which has no repeat pass; guard `event.isARepeat` inline).
 
 ### Non-customizable bindings (kept hard-coded)
 
@@ -238,6 +239,8 @@ navigates to the linked instance).
 | Study — Edit current instance | E |
 | Study — Edit Type (exit Study, open the instance's type detail page) | ⌘⇧T |
 | Study — Duplicate current instance (open Add Instance prefilled; post-reveal, Object types only) | ⌘D |
+| Study / Query Preview — Play Audio: restart + play the FIRST `<audio>` on the shown page (question pre-reveal, answer post-reveal; no reveal gate; silent no-op without audio) | A |
+| Instance editor — Insert Image or Audio (images or .mp3; inserts `<img>` / `<audio controls>`) | ⌘O |
 | Instance editor — Save | ⌘S |
 | Instance editor — Highlight Query Types (then ↑/↓ move w/ wrap, Return toggles) | ⌘E |
 | Types page — Save current editor | ⌘S |
@@ -248,7 +251,8 @@ navigates to the linked instance).
 - Window state communicated via `@StateObject` ObservableObject classes with UUID nonces for change detection
 - NSViewRepresentable used extensively for key command handling (NSEvent monitors) and WKWebView
 - HTML field values rendered via template substitution: `{{FieldName}}` placeholders, `{{{Content}}}` for global wrapper, `{{#QuestionContent}}` for answer-side question reference, `{{#InstanceID}}` for the instance's numeric id (empty in template previews), `{{#CollectionIDs}}`/`{{#CollectionClasses}}` for collection membership. The instance-scoped `{{#...}}` tokens (InstanceID, CollectionIDs) are substituted in `generatePreviewHTMLForQuestion`/`generatePreviewHTMLForAnswer` (Utilities.swift) using the passed `instanceID`; the answer path re-runs them after `{{#QuestionContent}}` splices the raw question HTML back in.
-- Local images served via custom WKURLSchemeHandler (`flashcards-local-image://`)
+- Local images AND audio served via custom WKURLSchemeHandler (`flashcards-local-image://`; the scheme name predates audio). The handler answers every request with an `HTTPURLResponse` — 200 whole file, 206 for a satisfiable single `Range` (+ `Content-Range`, `Accept-Ranges: bytes`), 416 unsatisfiable — because WebKit's AVFoundation-backed `<audio>` loader issues byte-range requests; it reads only the requested slice via `FileHandle` under `AppDatabase.withSecurityScopedFileAccess`. Delivery is synchronous inside `start` BY DESIGN — that is the only reason `stop` can stay a no-op; async/chunked delivery would need stopped-task tracking (`didReceive` on a stopped task raises). `makeLocalContentWebViewConfiguration` pins `mediaTypesRequiringUserActionForPlayback = []` so the Play Audio key's gesture-less `play()` is allowed. The editor's "Insert Image or Audio" picker (⌘O; images or .mp3) inserts `<img src="file://…">` or `<audio controls src="file://…"></audio>` — the `<audio>` is CLOSED with an EMPTY body on purpose (container element; `formatFieldDisplayValue` keeps inner text). A playing `<audio>` registers Memor in Now Playing / takes the F8 media key — inherent to WKWebView, no public opt-out.
+- One-shot requests INTO a query web view ride a `UUID?` nonce prop (`QueryHTMLView.playFirstAudioRequestID` → `QueryWebContainerView.requestPlayFirstAudio`), never a page reload: the container dedupes by id, seeds the current id on creation (so a stale id is not replayed on remount), parks a request until the current load commits (the script itself waits for `DOMContentLoaded` while parsing), and clears the parked request when new HTML arrives. The container pauses all media when it leaves its window AND on its window's `willCloseNotification` — the Query Preview is a `Window` scene, so closing it never unmounts the view.
 - Query webviews load with the stable `queryHTMLBaseURL` (`memor-query://query/`, QueryHTMLView.swift) — never `baseURL: nil` (empty registrable domain ⇒ WebKit refuses to cache the WebContent process ⇒ one helper process spawned per query load) and never a scheme registered via `setURLSchemeHandler` (WebKit forces a process swap toward registered schemes). Every webview using this baseURL MUST implement `decidePolicyFor` with an explicit `.allow` for non-link navigations: the initial `loadHTMLString` navigation IS policy-checked, and WebKit's default handling of an unimplemented `decidePolicyFor` hands the un-showable custom scheme to Launch Services ("no application set to open memor-query://query/" dialog + blank view). `QueryWebContainerView` self-recovers from failed/uncommitted loads (commit watchdog + budgeted retries + app-activation backstop) — don't "simplify" the recovery paths away. `WebViewPrewarmer.prewarm()` (fired from a ContentView `.task` ~300ms after launch) pays the one-time in-process WebKit init + first WebContent spawn during launch idle instead of on the session's first query render; `QueryWebContainerView.onContentCommitted` reports each load's commit with the committed HTML (the Query Preview keeps its spinner up until a non-empty page commits, since the webview is transparent until then).
 - Play UI sound effects only through `RatingSounds`' background playback queue, never `NSSound.play()` on the main thread — `play()` synchronously primes its playback channel before returning (~10–30ms warm, ~0.5s on the process's first play), which delays everything queued behind it (this was the main source of the rating-press lag in Study mode).
 - Prefer `pointerStyle(...)` over NSCursor for hover effects

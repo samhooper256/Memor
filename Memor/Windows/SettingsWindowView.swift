@@ -140,7 +140,7 @@ struct SettingsWindowView: View {
                 dataStorageSection
             }
 
-            Section(header: Text("Image Folder Access").font(.headline)) {
+            Section(header: Text("Image & Audio Folder Access").font(.headline)) {
                 imageFolderAccessSection
             }
 
@@ -253,7 +253,7 @@ struct SettingsWindowView: View {
 
     @ViewBuilder
     private var imageFolderAccessSection: some View {
-        Text("Folders you grant access to here let Memor read any image file inside them — required for agents that add images via MCP, and for images in your flashcards to keep working after you relaunch.")
+        Text("Folders you grant access to here let Memor read any image or audio file inside them — required for agents that add images via MCP, and for images and audio in your flashcards to keep working after you relaunch.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -304,7 +304,7 @@ struct SettingsWindowView: View {
     private func grantFolderAccess() {
         let panel = NSOpenPanel()
         panel.title = "Grant Folder Access"
-        panel.message = "Choose a folder Memor should be allowed to read images from."
+        panel.message = "Choose a folder Memor should be allowed to read images and audio from."
         panel.prompt = "Grant Access"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true

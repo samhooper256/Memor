@@ -8,13 +8,13 @@
 - Database toolkit: GRDB
 - The app uses App Sandbox during development.
 - Development sandbox database path: `/Users/samhooper/Library/Containers/com.sam.Memor/Data/Library/Application Support/Memor/Memor.sqlite`
-- User-selected image folders are persisted with security-scoped bookmarks so the app can keep loading local image files across launches.
+- User-selected files and folders are persisted with security-scoped bookmarks so the app can keep loading local image and audio (.mp3) files across launches.
 
 ## Core Domain Model
 
 - A "type" is a user-defined data type with several named fields.
 - An "instance" is a concrete object of a type, with a value for each field.
-- Instance field values may contain HTML, including `<img>` tags that point at local files inside granted image folders.
+- Instance field values may contain HTML, including `<img>` and `<audio controls>` tags that point at local files (individually granted, or inside granted folders).
 - Each type has one or more "query types".
 - A "query type" defines a kind of question the app can ask about instances of its associated type.
 - A "query" is a concrete flashcard-like prompt for a specific instance.
