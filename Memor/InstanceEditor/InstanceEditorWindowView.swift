@@ -173,7 +173,7 @@ struct InstanceEditorWindowView: View {
             onCommandS: handleCommandS,
             onCommandB: { wrapFocusedSelection(openTag: "<b>", closeTag: "</b>") },
             onCommandI: { wrapFocusedSelection(openTag: "<i>", closeTag: "</i>") },
-            onCommandO: insertImageIntoCurrentField,
+            onCommandO: insertImageOrAudioIntoCurrentField,
             onCommandJ: { wrapFocusedSelection(openTag: "<e>", closeTag: "</e>") },
             onCommandL: copyInstanceLinkToClipboard,
             onCommandT: mode == .add ? { presentTypePicker() } : nil,
@@ -364,9 +364,9 @@ struct InstanceEditorWindowView: View {
             if !isPointMapSelected && !isBoundaryMapSelected {
                 HStack(spacing: 8) {
                     Button {
-                        insertImageIntoCurrentField()
+                        insertImageOrAudioIntoCurrentField()
                     } label: {
-                        ShortcutLabel(title: "Insert Image", action: .editorInsertImage)
+                        ShortcutLabel(title: "Insert Image or Audio", action: .editorInsertImage)
                     }
                     .controlSize(.small)
 
@@ -2796,36 +2796,56 @@ struct InstanceEditorWindowView: View {
     }
 
     @MainActor
-    private func insertImageIntoCurrentField() {
+    private func insertImageOrAudioIntoCurrentField() {
         guard draft.selectedTypeID != nil else {
-            showToast(message: "Select a type before inserting an image.", style: .error)
+            showToast(message: "Select a type before inserting a file.", style: .error)
             return
         }
 
         let panel = NSOpenPanel()
-        panel.title = "Choose Image"
-        panel.message = "Select an image to insert."
-        panel.prompt = "Insert Image (\(shortcutSettings.binding(for: .editorInsertImage).displayString))"
+        panel.title = "Choose Image or Audio"
+        panel.message = "Select an image or MP3 audio file to insert."
+        panel.prompt = "Insert (\(shortcutSettings.binding(for: .editorInsertImage).displayString))"
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.image]
+        panel.allowedContentTypes = Self.insertableFileTypes
 
-        guard panel.runModal() == .OK, let imageURL = panel.url else { return }
+        guard panel.runModal() == .OK, let fileURL = panel.url else { return }
 
         do {
-            try appDatabase.grantImageFileAccess(fileURL: imageURL)
+            // Same bookmark path as images: image_file is keyed by path, not image-specific.
+            try appDatabase.grantImageFileAccess(fileURL: fileURL)
         } catch {
-            print("Failed to store image access: \(error)")
-            showToast(message: "Failed to access the selected image.", style: .error)
+            print("Failed to store file access: \(error)")
+            showToast(message: "Failed to access the selected file.", style: .error)
             return
         }
 
-        let imageTag = #"<img src="\#(imageURL.absoluteString)">"#
-        guard focusController.insertTextAtFocusedField(imageTag) else {
-            showToast(message: "Select a field before inserting an image.", style: .error)
+        guard focusController.insertTextAtFocusedField(Self.mediaTag(for: fileURL)) else {
+            showToast(message: "Select a field before inserting a file.", style: .error)
             return
         }
+    }
+
+    /// Content types the Insert Image or Audio picker accepts. Audio is MP3-only for now; widen
+    /// THIS list to admit more formats — `mediaTag(for:)` keys off UTType conformance, and
+    /// serving (MIME from the extension) and bookmarks are format-agnostic.
+    private static let insertableFileTypes: [UTType] = [.image, .mp3]
+
+    /// `<img>` for images, `<audio controls>` for anything conforming to public.audio. Both carry
+    /// the raw file:// URL that rewriteLocalFileResourceURLs (Shared/QueryHTMLView.swift) redirects
+    /// to the local-file scheme at render time — its regex is tag-agnostic. The closing tag and
+    /// EMPTY body on <audio> are load-bearing: <audio> is a container element (an unclosed one
+    /// swallows the rest of the page as fallback content), and formatFieldDisplayValue keeps inner
+    /// text when stripping tags, so any body text would leak into Instances/Search labels.
+    private static func mediaTag(for fileURL: URL) -> String {
+        let contentType = (try? fileURL.resourceValues(forKeys: [.contentTypeKey]))?.contentType
+            ?? UTType(filenameExtension: fileURL.pathExtension)
+        if contentType?.conforms(to: .audio) == true {
+            return #"<audio controls src="\#(fileURL.absoluteString)"></audio>"#
+        }
+        return #"<img src="\#(fileURL.absoluteString)">"#
     }
 
     @MainActor

@@ -102,7 +102,9 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         case .editorWrapBold: return "Wrap Bold"
         case .editorWrapItalic: return "Wrap Italic"
         case .editorWrapEmphasis: return "Wrap Emphasis"
-        case .editorInsertImage: return "Insert Image"
+        // The case name is the persisted UserDefaults key for user overrides — only the title
+        // changed when the picker learned to insert .mp3 audio as well.
+        case .editorInsertImage: return "Insert Image or Audio"
         case .editorCopyLink: return "Copy Link"
         case .editorPickType: return "Pick Type"
         case .editorOpenHyperlinkSearch: return "Open Hyperlink Search"
