@@ -189,6 +189,11 @@ func makeLocalContentWebViewConfiguration() -> WKWebViewConfiguration {
     let configuration = WKWebViewConfiguration()
     configuration.websiteDataStore = sharedEphemeralWebsiteDataStore
     configuration.preferences.isFraudulentWebsiteWarningEnabled = false
+    // The Play Audio shortcut drives HTMLMediaElement.play() from evaluateJavaScript, i.e. with
+    // no in-page user gesture. macOS already defaults this to "none" (iOS defaults to .all);
+    // pinned so playback never depends on a platform default. A per-page setting carried by the
+    // configuration, so the prewarmed WebContent process cannot hold a stale policy.
+    configuration.mediaTypesRequiringUserActionForPlayback = []
     return configuration
 }
 
