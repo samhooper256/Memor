@@ -269,7 +269,7 @@ final class LocalImageURLSchemeHandler: NSObject, WKURLSchemeHandler {
             // when no AppDatabase is available (e.g. draft previews) or the file needs no scope.
             let data: Data
             if let appDatabase = AppDatabase.shared {
-                data = try appDatabase.readSecurityScopedFile(at: fileURL)
+                data = try appDatabase.withSecurityScopedFileAccess(at: fileURL) { try Data(contentsOf: $0) }
             } else {
                 data = try Data(contentsOf: fileURL)
             }

@@ -643,6 +643,10 @@ struct AppDatabase {
         }
     }
 
+    /// Persists a security-scoped bookmark for a user-picked local file the editor inserts.
+    /// Despite the name this covers ANY such file — images and audio alike: `image_file` is the
+    /// app's security-scoped file-bookmark store, keyed by standardized path, and nothing
+    /// downstream (restore, re-resolve, the scheme handler) is image-specific.
     func grantImageFileAccess(fileURL: URL) throws {
         let standardizedPath = fileURL.standardizedFileURL.resolvingSymlinksInPath()
             .path(percentEncoded: false)
@@ -700,47 +704,51 @@ struct AppDatabase {
         // The controller takes ownership of the started scope (it stops it on replacement /
         // deinit), so we must not stop it here.
         guard didStartAccess else {
-            throw DatabaseError(message: "Failed to start security-scoped access for the selected image.")
+            throw DatabaseError(message: "Failed to start security-scoped access for the selected file.")
         }
         imageFolderAccessController.replaceAccess(forPath: standardizedPath, with: fileURL)
     }
 
-    /// Reads a local image file, re-asserting the security scope around the read instead of
-    /// relying on a scope started long ago at launch (which can lapse after sleep/idle and break
-    /// rendering of already-inserted images). Tries the retained per-file / granted-folder scope
-    /// first; on a permission failure it re-resolves the stored bookmark (refreshing it if stale)
-    /// and retries once.
-    func readSecurityScopedFile(at fileURL: URL) throws -> Data {
+    /// Runs `body` on a user-picked local file (image or audio) with its security scope
+    /// re-asserted around the access, instead of relying on a scope started long ago at launch
+    /// (which can lapse after sleep/idle and break rendering of already-inserted files). Tries
+    /// the retained per-file / granted-folder scope first; if `body` throws there (permission
+    /// failure), re-resolves the stored bookmark (refreshing it if stale) and retries once;
+    /// finally runs `body` unscoped. `body` throwing is the signal to fall through to the next
+    /// tier, so it must open/read the file itself rather than pre-load anything.
+    func withSecurityScopedFileAccess<T>(at fileURL: URL, _ body: (URL) throws -> T) throws -> T {
         let targetPath = fileURL.standardizedFileURL.resolvingSymlinksInPath()
             .path(percentEncoded: false)
 
-        // 1. Re-assert a retained scope (per-file, else containing granted folder) for the read.
+        // 1. Re-assert a retained scope (per-file, else containing granted folder) for the access.
         if let scopedURL = imageFolderAccessController.scopedURL(coveringPath: targetPath)
             ?? grantedFolderAccessController.scopedURL(coveringPath: targetPath) {
             let didStart = scopedURL.startAccessingSecurityScopedResource()
             defer { if didStart { scopedURL.stopAccessingSecurityScopedResource() } }
-            if let data = try? Data(contentsOf: fileURL) {
-                return data
+            if let result = try? body(fileURL) {
+                return result
             }
         }
 
         // 2. Re-resolve the stored bookmark (per-file row, else any covering folder row), refresh
-        //    it if stale, and retry the read under the freshly-resolved scope.
-        if let data = try? readByReResolvingBookmark(targetPath: targetPath) {
-            return data
+        //    it if stale, and retry under the freshly-resolved scope. (`try?` flattens the T? —
+        //    one binding.)
+        if let result = try? withReResolvedBookmark(targetPath: targetPath, body) {
+            return result
         }
 
-        // 3. Last resort: read directly (covers draft previews and files needing no scope).
-        return try Data(contentsOf: fileURL)
+        // 3. Last resort: unscoped (covers draft previews and files needing no scope).
+        return try body(fileURL)
     }
 
-    private func readByReResolvingBookmark(targetPath: String) throws -> Data? {
-        struct BookmarkRow: FetchableRecord, Decodable {
-            let id: Int64
-            let path: String
-            let bookmarkData: Data
-        }
+    // Declared at type scope: a local type cannot be nested in a generic function.
+    private struct BookmarkRow: FetchableRecord, Decodable {
+        let id: Int64
+        let path: String
+        let bookmarkData: Data
+    }
 
+    private func withReResolvedBookmark<T>(targetPath: String, _ body: (URL) throws -> T) throws -> T? {
         // Per-file bookmark whose path matches exactly, then any folder bookmark that contains it.
         let fileRow = try dbQueue.read { db in
             try BookmarkRow.fetchOne(
@@ -780,12 +788,12 @@ struct AppDatabase {
                 defer { if didStart { resolvedURL.stopAccessingSecurityScopedResource() } }
 
                 let fileURL = URL(fileURLWithPath: targetPath)
-                let data = try Data(contentsOf: fileURL)
+                let result = try body(fileURL)
 
                 if isStale {
                     try? refreshStaleBookmark(table: candidate.table, id: candidate.row.id, url: resolvedURL)
                 }
-                return data
+                return result
             } catch {
                 continue
             }
