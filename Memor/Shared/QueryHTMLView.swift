@@ -232,7 +232,13 @@ func rewriteLocalFileResourceURLs(in html: String) -> String {
     for match in matches.reversed() {
         guard let range = Range(match.range, in: rewrittenHTML) else { continue }
         let originalURLString = String(rewrittenHTML[range])
-        guard let encodedURLString = originalURLString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
+        // The file URL travels as ONE query-item value. `.urlQueryAllowed` leaves the
+        // query delimiters `&`, `+` and `=` literal, so "Rock & Roll.mp3" used to split
+        // the value at the "&" (URLComponents.queryItems saw a stray "Roll.mp3" item)
+        // and the handler failed the read. Subtracting just those three keeps the
+        // encoding ASCII-preserving; the handler decodes via queryItems as before.
+        let allowedCharacters = CharacterSet.urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&+="))
+        guard let encodedURLString = originalURLString.addingPercentEncoding(withAllowedCharacters: allowedCharacters) else {
             continue
         }
 
