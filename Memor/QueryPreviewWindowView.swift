@@ -30,6 +30,10 @@ struct QueryPreviewWindowView: View {
     /// commit, so gating on renderedAnswerHTML alone would drop the spinner
     /// while the window is still visibly blank.
     @State private var hasCommittedContent = false
+    /// Fresh on every Play Audio key press; QueryHTMLView plays the previewed page's first
+    /// <audio> once per id (restarting from 0). Silencing on window close is the container's
+    /// own job (it observes its window's willClose), not these resets'.
+    @State private var playFirstAudioRequestID: UUID?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -69,7 +73,8 @@ struct QueryPreviewWindowView: View {
                         disableUserInteraction: true,
                         onInstanceLinkActivated: navigateToInstance,
                         onQueryLinkActivated: navigateToQuery,
-                        onContentCommitted: { hasCommittedContent = !$0.isEmpty }
+                        onContentCommitted: { hasCommittedContent = !$0.isEmpty },
+                        playFirstAudioRequestID: playFirstAudioRequestID
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .overlay {
@@ -94,6 +99,7 @@ struct QueryPreviewWindowView: View {
                 shortcutSettings: shortcutSettings,
                 onBack: goBack,
                 onEdit: handleEdit,
+                onPlayAudio: handlePlayAudio,
                 onArrowLinkShortcut: handleArrowLinkShortcut
             )
         }
@@ -120,6 +126,7 @@ struct QueryPreviewWindowView: View {
                 renderedAnswerHTML = ""
                 errorMessage = nil
                 hasCommittedContent = false
+                playFirstAudioRequestID = nil
                 Task { loadPreview() }
             }
         }
@@ -136,6 +143,7 @@ struct QueryPreviewWindowView: View {
             historyStack = []
             isInternalNavigation = false
             hasCommittedContent = false
+            playFirstAudioRequestID = nil
         }
     }
 
@@ -233,6 +241,13 @@ struct QueryPreviewWindowView: View {
         openWindow(id: "edit-instance")
     }
 
+    /// Play Audio key (A): restart and play the first <audio> on the previewed page. No-op for
+    /// the map, error, and developer-mode raw-HTML branches — none of them mounts a web view.
+    private func handlePlayAudio() {
+        guard let query, query.kind == .standard, !renderedAnswerHTML.isEmpty else { return }
+        playFirstAudioRequestID = UUID()
+    }
+
     private func isEditInstanceWindowOpen() -> Bool {
         NSApp.windows.contains { window in
             // A minimized window still holds the editor's (possibly unsaved)
@@ -278,6 +293,7 @@ private struct QueryPreviewKeyHandler: NSViewRepresentable {
     let shortcutSettings: ShortcutSettings
     let onBack: () -> Void
     let onEdit: () -> Void
+    let onPlayAudio: () -> Void
     let onArrowLinkShortcut: (LinkShortcutKey) -> Bool
 
     func makeNSView(context: Context) -> KeyView {
@@ -285,6 +301,7 @@ private struct QueryPreviewKeyHandler: NSViewRepresentable {
         view.shortcutSettings = shortcutSettings
         view.onBack = onBack
         view.onEdit = onEdit
+        view.onPlayAudio = onPlayAudio
         view.onArrowLinkShortcut = onArrowLinkShortcut
         return view
     }
@@ -293,6 +310,7 @@ private struct QueryPreviewKeyHandler: NSViewRepresentable {
         nsView.shortcutSettings = shortcutSettings
         nsView.onBack = onBack
         nsView.onEdit = onEdit
+        nsView.onPlayAudio = onPlayAudio
         nsView.onArrowLinkShortcut = onArrowLinkShortcut
     }
 
@@ -300,6 +318,7 @@ private struct QueryPreviewKeyHandler: NSViewRepresentable {
         var shortcutSettings: ShortcutSettings?
         var onBack: (() -> Void)?
         var onEdit: (() -> Void)?
+        var onPlayAudio: (() -> Void)?
         var onArrowLinkShortcut: ((LinkShortcutKey) -> Bool)?
 
         private var monitor: Any?
@@ -331,6 +350,15 @@ private struct QueryPreviewKeyHandler: NSViewRepresentable {
                 // Edit key (E) -> open the Edit Instance window.
                 if self.shortcutSettings?.binding(for: .studyEditInstance).matches(event) == true {
                     self.onEdit?()
+                    return nil
+                }
+                // Play Audio key (A) -> restart and play the first <audio> on the page. This
+                // monitor has no isARepeat pass like Study's, so swallow auto-repeats inline —
+                // a held key would otherwise restart the track many times a second.
+                if self.shortcutSettings?.binding(for: .studyPlayAudio).matches(event) == true {
+                    if !event.isARepeat {
+                        self.onPlayAudio?()
+                    }
                     return nil
                 }
                 // Plain left/right arrow -> instance link shortcuts.
