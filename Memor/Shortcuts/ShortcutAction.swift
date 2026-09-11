@@ -51,6 +51,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
     case studyEditInstance
     case studyEditType
     case studyDuplicateInstance
+    case studyPlayAudio
 
     // Instance editor
     case editorSave
@@ -97,6 +98,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         case .studyEditInstance: return "Edit Current Instance"
         case .studyEditType: return "Edit Type"
         case .studyDuplicateInstance: return "Duplicate Current Instance"
+        case .studyPlayAudio: return "Play Audio"
         case .editorSave: return "Save"
         case .editorSubmit: return "Submit"
         case .editorWrapBold: return "Wrap Bold"
@@ -125,7 +127,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
             return .global
         case .studyRevealOrGood, .studyRatingAgain, .studyRatingHard, .studyRatingGood,
              .studyRatingEasy, .studyUndo, .studyEditInstance, .studyEditType,
-             .studyDuplicateInstance:
+             .studyDuplicateInstance, .studyPlayAudio:
             return .study
         case .editorSave, .editorSubmit, .editorWrapBold, .editorWrapItalic, .editorWrapEmphasis,
              .editorInsertImage, .editorCopyLink, .editorPickType, .editorOpenHyperlinkSearch,
@@ -161,6 +163,13 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         case .studyEditInstance: return KeyBinding(key: "E")
         case .studyEditType: return KeyBinding(key: "T", modifiers: [.command, .shift])
         case .studyDuplicateInstance: return KeyBinding(key: "D", modifiers: .command)
+        // Plays the first <audio> on the shown query page. Also matched by the Query Preview
+        // window's monitor (like .studyEditInstance). Shares bare A with .editorPointMapAddQuery
+        // on purpose: both monitors are window-scoped and never coexist in one window — the same
+        // precedent as the ⌘S / ⌘⇧T / ⌘D cross-category duplicates. Settings' "Reassign" cannot
+        // separate two actions whose DEFAULT is the contested key (it resets the other to its
+        // default, which is A again) — a pre-existing quirk of the conflict resolver.
+        case .studyPlayAudio: return KeyBinding(key: "A")
         case .editorSave: return KeyBinding(key: "S", modifiers: .command)
         case .editorSubmit: return KeyBinding(key: "Return", modifiers: .command)
         case .editorWrapBold: return KeyBinding(key: "B", modifiers: .command)

@@ -78,6 +78,10 @@ struct StudyModeView: View {
     /// so re-advancing to a query after undoing pulses again while undoing
     /// back to an already-seen query does not.
     @State private var pointMapLocatorPulseID: UUID?
+    /// Fresh on every Play Audio key press; QueryHTMLView plays the shown page's first
+    /// <audio> once per id (restarting from 0). Never reset here — the container dedupes by
+    /// id and seeds itself with the current value on (re)creation.
+    @State private var playFirstAudioRequestID: UUID?
 
     // One-second colored flash over the divider above the rating just pressed
     // (pure overlay — the query HTML is untouched). Geometry is snapshotted at
@@ -259,6 +263,13 @@ struct StudyModeView: View {
                         addInstanceWindowState.requestOpenForDuplication(sourceInstanceID: currentQuery.instanceID)
                         openWindow(id: "add-instance")
                     },
+                    onPlayAudio: {
+                        // No reveal gate, unlike Edit/Duplicate/arrows: listening queries put the
+                        // audio on the QUESTION side. Plays whatever page is showing. Map queries
+                        // have no web view — nothing to play.
+                        guard let currentQuery, currentQuery.kind == .standard else { return }
+                        playFirstAudioRequestID = UUID()
+                    },
                     onArrowLinkShortcut: { key in
                         // Only after the answer is revealed; mirrors the link-click callbacks below.
                         guard isAnswerRevealed, let currentQuery else { return false }
@@ -438,7 +449,8 @@ struct StudyModeView: View {
                 onQueryLinkActivated: { instanceID, queryTypeID in
                     queryPreviewWindowState.requestOpen(instanceID: instanceID, queryTypeID: queryTypeID)
                     openWindow(id: "query-preview")
-                }
+                },
+                playFirstAudioRequestID: playFirstAudioRequestID
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -992,6 +1004,7 @@ private struct StudyModeKeyCommandHandler: NSViewRepresentable {
     let onEditInstance: () -> Void
     let onEditType: () -> Void
     let onDuplicateInstance: () -> Void
+    let onPlayAudio: () -> Void
     let onArrowLinkShortcut: (LinkShortcutKey) -> Bool
 
     func makeNSView(context: Context) -> KeyCommandHandlingView {
@@ -1005,6 +1018,7 @@ private struct StudyModeKeyCommandHandler: NSViewRepresentable {
         view.onEditInstance = onEditInstance
         view.onEditType = onEditType
         view.onDuplicateInstance = onDuplicateInstance
+        view.onPlayAudio = onPlayAudio
         view.onArrowLinkShortcut = onArrowLinkShortcut
         return view
     }
@@ -1019,6 +1033,7 @@ private struct StudyModeKeyCommandHandler: NSViewRepresentable {
         nsView.onEditInstance = onEditInstance
         nsView.onEditType = onEditType
         nsView.onDuplicateInstance = onDuplicateInstance
+        nsView.onPlayAudio = onPlayAudio
         nsView.onArrowLinkShortcut = onArrowLinkShortcut
     }
 
@@ -1032,6 +1047,7 @@ private struct StudyModeKeyCommandHandler: NSViewRepresentable {
         var onEditInstance: (() -> Void)?
         var onEditType: (() -> Void)?
         var onDuplicateInstance: (() -> Void)?
+        var onPlayAudio: (() -> Void)?
         var onArrowLinkShortcut: ((LinkShortcutKey) -> Bool)?
 
         private var keyDownMonitor: Any?
@@ -1070,6 +1086,7 @@ private struct StudyModeKeyCommandHandler: NSViewRepresentable {
                                 .studyRevealOrGood, .studyRatingAgain, .studyRatingHard,
                                 .studyRatingGood, .studyRatingEasy, .studyUndo,
                                 .studyEditInstance, .studyEditType, .studyDuplicateInstance,
+                                .studyPlayAudio,
                             ]
                             if ownedActions.contains(where: { settings.binding(for: $0).matches(event) }) {
                                 return nil
@@ -1125,6 +1142,10 @@ private struct StudyModeKeyCommandHandler: NSViewRepresentable {
                     }
                     if settings.binding(for: .studyDuplicateInstance).matches(event) {
                         self.onDuplicateInstance?()
+                        return nil
+                    }
+                    if settings.binding(for: .studyPlayAudio).matches(event) {
+                        self.onPlayAudio?()
                         return nil
                     }
 
