@@ -249,6 +249,13 @@ func rewriteLocalFileResourceURLs(in html: String) -> String {
     return rewrittenHTML
 }
 
+/// Serves every inserted local file — images and audio alike (the scheme name predates audio).
+/// Responses carry HTTP semantics: WebKit's AVFoundation-backed `<audio>` loader issues
+/// `Range: bytes=…` requests and reads `Content-Range` to place the bytes, so a satisfiable single
+/// range is answered 206, an unsatisfiable one 416, and everything else (images never send Range)
+/// 200 with the whole file plus `Accept-Ranges: bytes`. Only the requested slice is read, under the
+/// re-asserted security scope. Delivery stays fully synchronous inside `start`, which is the only
+/// reason the empty `stop` below is safe.
 final class LocalImageURLSchemeHandler: NSObject, WKURLSchemeHandler {
     func webView(_ webView: WKWebView, start urlSchemeTask: any WKURLSchemeTask) {
         guard
@@ -262,33 +269,137 @@ final class LocalImageURLSchemeHandler: NSObject, WKURLSchemeHandler {
             return
         }
 
+        let rangeHeader = urlSchemeTask.request.value(forHTTPHeaderField: "Range")
         do {
             // Re-assert the security scope around the read via AppDatabase rather than reading
             // directly: the scopes started at launch can lapse after sleep/idle, which would
-            // otherwise break rendering of already-inserted images. Falls back to a direct read
+            // otherwise break rendering of already-inserted files. Falls back to an unscoped read
             // when no AppDatabase is available (e.g. draft previews) or the file needs no scope.
-            let data: Data
-            if let appDatabase = AppDatabase.shared {
-                data = try appDatabase.withSecurityScopedFileAccess(at: fileURL) { try Data(contentsOf: $0) }
-            } else {
-                data = try Data(contentsOf: fileURL)
+            let slice = try Self.withScopedAccess(to: fileURL) { url in
+                try LocalFileSlice.read(from: url, rangeHeader: rangeHeader)
             }
             let mimeType = UTType(filenameExtension: fileURL.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-            let response = URLResponse(
+            var headers: [String: String] = [
+                "Content-Type": mimeType,
+                "Accept-Ranges": "bytes",
+                "Content-Length": String(slice.data.count),
+            ]
+            let statusCode: Int
+            switch slice.kind {
+            case .whole:
+                statusCode = 200
+            case .partial(let range) where !slice.data.isEmpty:
+                statusCode = 206
+                // From the bytes ACTUALLY read: a short read (file truncated between sizing and
+                // reading) must never yield a Content-Range that contradicts Content-Length.
+                headers["Content-Range"] = "bytes \(range.lowerBound)-\(range.lowerBound + slice.data.count - 1)/\(slice.totalLength)"
+            case .partial, .unsatisfiable:
+                statusCode = 416
+                headers["Content-Range"] = "bytes */\(slice.totalLength)"
+            }
+            guard let response = HTTPURLResponse(
                 url: requestURL,
-                mimeType: mimeType,
-                expectedContentLength: data.count,
-                textEncodingName: nil
-            )
+                statusCode: statusCode,
+                httpVersion: "HTTP/1.1",
+                headerFields: headers
+            ) else {
+                urlSchemeTask.didFailWithError(NSError(domain: NSURLErrorDomain, code: NSURLErrorBadServerResponse))
+                return
+            }
             urlSchemeTask.didReceive(response)
-            urlSchemeTask.didReceive(data)
+            if !slice.data.isEmpty, urlSchemeTask.request.httpMethod?.uppercased() != "HEAD" {
+                urlSchemeTask.didReceive(slice.data)
+            }
             urlSchemeTask.didFinish()
         } catch {
             urlSchemeTask.didFailWithError(error)
         }
     }
 
+    // Intentionally empty: `start` delivers the whole response synchronously before returning, so
+    // no task is ever in flight when WebKit asks to stop one. Any move to asynchronous or chunked
+    // delivery must track stopped tasks — `didReceive`/`didFinish` on a stopped task raises.
     func webView(_ webView: WKWebView, stop urlSchemeTask: any WKURLSchemeTask) {}
+
+    private static func withScopedAccess<T>(to fileURL: URL, _ body: (URL) throws -> T) throws -> T {
+        if let appDatabase = AppDatabase.shared {
+            return try appDatabase.withSecurityScopedFileAccess(at: fileURL, body)
+        }
+        return try body(fileURL)
+    }
+}
+
+/// One response body for the local-file scheme handler: the whole file, one satisfiable byte
+/// range, or nothing (unsatisfiable). Range parsing follows RFC 7233 §2.1 for a single `bytes=`
+/// spec. Expected outputs for an N-byte file — the spec this was written against:
+///   no header / `bytes=5-2` (malformed) → 200 whole;  `bytes=0-1` → 206 `0-1/N`;
+///   `bytes=0-` → 206 `0-(N-1)/N`;  `bytes=-1024` → 206 `max(0,N-1024)-(N-1)/N`;
+///   `bytes=-0` → 416 `*/N`;  `bytes=N-` → 416 `*/N`.
+private struct LocalFileSlice {
+    enum Kind {
+        case whole
+        /// Half-open, non-empty, within 0..<totalLength — never a negative lower bound
+        /// (`UInt64(negative)` would trap on the main thread inside `start`).
+        case partial(Range<Int>)
+        case unsatisfiable
+    }
+
+    let kind: Kind
+    let totalLength: Int
+    let data: Data
+
+    /// Opens the file (throwing on a permission failure — the scoped-access tiers rely on that
+    /// to fall through), sizes it, and reads only what the Range header asks for.
+    static func read(from url: URL, rangeHeader: String?) throws -> LocalFileSlice {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let totalLength = try Int(handle.seekToEnd())
+        let kind = parseRange(rangeHeader, totalLength: totalLength)
+        switch kind {
+        case .whole:
+            try handle.seek(toOffset: 0)
+            return LocalFileSlice(kind: kind, totalLength: totalLength, data: try handle.readToEnd() ?? Data())
+        case .partial(let range):
+            try handle.seek(toOffset: UInt64(range.lowerBound))
+            return LocalFileSlice(kind: kind, totalLength: totalLength, data: try handle.read(upToCount: range.count) ?? Data())
+        case .unsatisfiable:
+            return LocalFileSlice(kind: kind, totalLength: totalLength, data: Data())
+        }
+    }
+
+    /// Single `bytes=start-end` / `bytes=start-` / `bytes=-suffix` (the first spec of a multi-range
+    /// request; WebKit's media loader sends one). A malformed header is ignored (whole file), as an
+    /// HTTP server would; a range starting past EOF, a zero suffix, or an empty file with any range
+    /// is unsatisfiable; a suffix longer than the file means the whole file, served as a 206.
+    static func parseRange(_ header: String?, totalLength: Int) -> Kind {
+        guard let header else { return .whole }
+        let spec = header.trimmingCharacters(in: .whitespaces).lowercased()
+        guard spec.hasPrefix("bytes=") else { return .whole }
+        let firstSpec = spec.dropFirst("bytes=".count)
+            .split(separator: ",", maxSplits: 1, omittingEmptySubsequences: false)
+            .first.map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+        let parts = firstSpec.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        guard parts.count == 2 else { return .whole }
+        guard totalLength > 0 else { return .unsatisfiable }
+
+        if parts[0].isEmpty {
+            // Suffix form: the last N bytes.
+            guard let suffix = Int(parts[1]) else { return .whole }
+            guard suffix > 0 else { return .unsatisfiable }
+            return .partial(max(0, totalLength - suffix)..<totalLength)
+        }
+        guard let start = Int(parts[0]), start >= 0 else { return .whole }
+        guard start < totalLength else { return .unsatisfiable }
+        let end: Int
+        if parts[1].isEmpty {
+            end = totalLength - 1
+        } else {
+            guard let requestedEnd = Int(parts[1]), requestedEnd >= start else { return .whole }
+            end = min(requestedEnd, totalLength - 1)
+        }
+        return .partial(start..<(end + 1))
+    }
 }
 
 struct QueryHTMLView: NSViewRepresentable {
