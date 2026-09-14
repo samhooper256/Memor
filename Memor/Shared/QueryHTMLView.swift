@@ -221,11 +221,20 @@ func parseLinkedQueryID(from url: URL) -> (instanceID: Int64, queryTypeID: Int64
 }
 
 func rewriteLocalFileResourceURLs(in html: String) -> String {
+    // Quote-aware: the terminator depends on how the URL is delimited. Inside a
+    // double-quoted attribute (what the editor's Insert Image or Audio inserts) an
+    // apostrophe is DATA — file URLs keep `'` literal, and song titles carry them
+    // ("Rock 'n' Roll & Blues.mp3") — so only `"` ends the match; inside a
+    // single-quoted attribute only `'` does; a bare URL stops at either quote.
+    // A match must cover the WHOLE URL: a truncated match leaves the tail spliced
+    // back raw, where a later `&` or `%23` becomes a live query/fragment delimiter
+    // after the handler's single decode and the file never loads.
     // Raw string: `\s` reaches ICU as the whitespace class. (It was `\\s` — a
     // literal backslash plus the letter s — which truncated every match at the
     // first "s" in the path; the rewrite only worked because the un-encoded
     // tail happened to reassemble after the substitution.)
-    guard let regex = try? NSRegularExpression(pattern: #"file://[^"'\s>]+"#) else {
+    let pattern = #"(?<=")file://[^"\s>]+|(?<=')file://[^'\s>]+|file://[^"'\s>]+"#
+    guard let regex = try? NSRegularExpression(pattern: pattern) else {
         return html
     }
 
