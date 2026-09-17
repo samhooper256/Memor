@@ -1,0 +1,25 @@
+# Xcode
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+DerivedData/
+build/
+*.xcarchive
+
+# Swift Package Manager (Package.resolved under xcshareddata stays tracked)
+.build/
+.swiftpm/
+
+# macOS
+.DS_Store
+
+# Claude Code: per-user settings and local-only notes
+.claude/settings.local.json
+CLAUDE.local.md
+
+# Signing material never belongs in the repo
+*.p8
+*.p12
+*.mobileprovision
+*.provisionprofile
