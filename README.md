@@ -47,3 +47,7 @@ Adjust the path to wherever your `Memor.app` ends up.
 `CLAUDE.md` is the detailed reference for the architecture, domain model, search language, spaced-repetition rules, keyboard shortcuts, and MCP tool surface. It is written for AI coding assistants but is the best place to start for humans too.
 
 Third-party assets bundled with the app, including the Natural Earth country boundaries behind the built-in "Countries" set, are listed in `ATTRIBUTIONS.md`.
+
+## License
+
+Memor is released under the MIT License. See `LICENSE`.
