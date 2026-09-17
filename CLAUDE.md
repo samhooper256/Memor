@@ -25,6 +25,8 @@ Memor/
     AppDatabase+Person.swift        Person relationship engine: fetchPersonEditorData, savePersonInstance (diff → conflict collection → propagation), deletePersonRelations (convert-to-bare), fetchPersonCandidates, reset-flag accessors
     AppDatabase+PersonQueries.swift Built-in Person queries: enablement, SRS apply/revert, makePersonStudyQuery (the single computed-HTML seam), personQueryJoinFrom + the search/stacks/study fetchers
     AppDatabase+Offices.swift       Office CRUD (case-insensitive unique names, holder counts) + db-level holding/succession read helpers
+    AppDatabase+Boundaries.swift    Boundary sets: parseUploadedBoundaryFile (FeatureCollection or Feature array; Polygon/MultiPolygon; `nameProperty` picks the properties key), insertBoundarySet (shared by uploads + the seed), reads, PointMap↔boundary links, rename/delete (built-in set protected)
+    AppDatabase+BoundarySeed.swift  First-launch seed of the built-in "Countries" set from Resources/ne_50m_admin_0_countries.geojson (unmodified Natural Earth 1:50m v5.1.2 FeatureCollection, NAME_EN as the name — ATTRIBUTIONS.md) via the upload parser; no-op once any built-in set exists, so swapping the file never re-seeds an existing DB
   Models/
     DatabaseModels.swift            All plain-data structs/enums returned by AppDatabase
     PersonModels.swift              Person types: PersonRef (instance-or-bare-name), slot drafts, PersonQueryKind, PersonSaveError conflicts, the save change set
@@ -87,7 +89,7 @@ memor-mcp/
 There are three classes of type (no `type.kind` column — built-ins are identified by name + `is_builtin`):
 - **Object types** — the open, default class: text/boolean fields + user query types.
 - **Person** — a single built-in, non-deleteable, partially-editable type for genealogy (see the Person section below). Its fields live in the normal `field`/`type{N}` pipeline, so search/templating/user query types work unchanged; its relationships live in bespoke tables.
-- **Map types** (`PointMap`, `BoundaryMap`) — the closed, built-in class with bespoke editors/tables.
+- **Map types** (`PointMap`, `BoundaryMap`) — the closed, built-in class with bespoke editors/tables. Boundaries live in `boundary_set`/`boundary` (geometry_json is always a MultiPolygon); the built-in "Countries" set is seeded once from the bundled Natural Earth file (see Database/AppDatabase+BoundarySeed.swift), user sets come from the Manage Boundaries window's GeoJSON upload.
 
 - **Type** (`type` table) - User-defined data type with named fields and CSS
 - **Field** (`field` table) - Named field on a type (`field_type` 'text' | 'boolean' | 'sex'), with `field_index`, `field_display_index`, `is_primary`, and `is_protected` (built-in Person fields: no rename/delete). The seed-only `sex` kind stores the literal string "Male"/"Female" (normalized, default Male) so `{{Sex}}` renders as-is.

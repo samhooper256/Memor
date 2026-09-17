@@ -24,12 +24,18 @@ extension AppDatabase {
         let multiPolygonCoordinates: [[[[Double]]]]
     }
 
-    /// Parses & validates the raw bytes of a user-uploaded .json/.geojson file
-    /// and returns the individual features ready for insertion. Throws a
-    /// human-readable error on any validation failure. Accepts either a
-    /// top-level array of GeoJSON Feature objects or a top-level GeoJSON
-    /// FeatureCollection object.
-    static func parseUploadedBoundaryFile(data: Data) throws -> [ImportedBoundaryFeature] {
+    /// Parses & validates the raw bytes of a .json/.geojson file — a user
+    /// upload, or the bundled Natural Earth file the first-launch Countries
+    /// seed reads — and returns the individual features ready for insertion.
+    /// Throws a human-readable error on any validation failure. Accepts either
+    /// a top-level array of GeoJSON Feature objects or a top-level GeoJSON
+    /// FeatureCollection object. `nameProperty` is the `properties` key that
+    /// supplies each boundary's display name: `name` for uploads (as the
+    /// upload help documents); the seed passes Natural Earth's `NAME_EN`.
+    static func parseUploadedBoundaryFile(
+        data: Data,
+        nameProperty: String = "name"
+    ) throws -> [ImportedBoundaryFeature] {
         let root: Any
         do {
             root = try JSONSerialization.jsonObject(with: data, options: [])
@@ -68,10 +74,10 @@ extension AppDatabase {
                     message: "Feature #\(index + 1) has no 'properties' object."
                 )
             }
-            guard let name = properties["name"] as? String,
+            guard let name = properties[nameProperty] as? String,
                   !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw BoundaryImportError(
-                    message: "Feature #\(index + 1) is missing a non-empty 'properties.name' string."
+                    message: "Feature #\(index + 1) is missing a non-empty 'properties.\(nameProperty)' string."
                 )
             }
             guard let geometry = feature["geometry"] as? [String: Any] else {
@@ -353,35 +359,55 @@ extension AppDatabase {
         guard !features.isEmpty else {
             throw BoundaryImportError(message: "No features to import.")
         }
+        return try dbQueue.write { db in
+            try Self.insertBoundarySet(in: db, name: finalName, isBuiltin: false, features: features)
+        }
+    }
+
+    /// Inserts a boundary set and one `boundary` row per feature inside an
+    /// existing write transaction. Shared by user uploads and the first-launch
+    /// Countries seed (AppDatabase+BoundarySeed.swift). Returns the set's id.
+    @discardableResult
+    static func insertBoundarySet(
+        in db: Database,
+        name: String,
+        isBuiltin: Bool,
+        features: [ImportedBoundaryFeature]
+    ) throws -> Int64 {
         let createdAt = Int64(Date().timeIntervalSince1970)
         let encoder = JSONEncoder()
 
-        return try dbQueue.write { db in
+        try db.execute(
+            sql: """
+                INSERT INTO boundary_set (name, is_builtin, created_at)
+                VALUES (?, ?, ?)
+                """,
+            arguments: [name, isBuiltin ? 1 : 0, createdAt]
+        )
+        let setID = db.lastInsertedRowID
+
+        for feature in features {
+            let normalized = NormalizedGeometry(
+                type: "MultiPolygon",
+                coordinates: feature.multiPolygonCoordinates
+            )
+            let bytes = try encoder.encode(normalized)
             try db.execute(
                 sql: """
-                    INSERT INTO boundary_set (name, is_builtin, created_at)
-                    VALUES (?, 0, ?)
+                    INSERT INTO boundary (boundary_set_id, name, geometry_json)
+                    VALUES (?, ?, ?)
                     """,
-                arguments: [finalName, createdAt]
+                arguments: [setID, feature.name, bytes]
             )
-            let setID = db.lastInsertedRowID
-
-            for feature in features {
-                let normalized = NormalizedGeometry(
-                    type: "MultiPolygon",
-                    coordinates: feature.multiPolygonCoordinates
-                )
-                let bytes = try encoder.encode(normalized)
-                try db.execute(
-                    sql: """
-                        INSERT INTO boundary (boundary_set_id, name, geometry_json)
-                        VALUES (?, ?, ?)
-                        """,
-                    arguments: [setID, feature.name, bytes]
-                )
-            }
-            return setID
         }
+        return setID
+    }
+
+    /// The shape stored in `boundary.geometry_json`: always a MultiPolygon,
+    /// so a GeoJSON Polygon is wrapped as a one-polygon MultiPolygon on import.
+    struct NormalizedGeometry: Codable {
+        let type: String
+        let coordinates: [[[[Double]]]]
     }
 
     func renameBoundarySet(id: Int64, newName: String) throws {

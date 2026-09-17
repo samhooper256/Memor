@@ -2,6 +2,22 @@
 
 Third-party assets bundled with Memor.
 
+## Map data
+
+- `Memor/Resources/ne_50m_admin_0_countries.geojson` — the built-in
+  "Countries" boundary set, seeded into the database on first launch (each
+  feature's `properties.NAME_EN` becomes the boundary's name).
+
+**Natural Earth**, "Admin 0 – Countries", 1:50m scale, version 5.1.2.
+An unmodified copy of `geojson/ne_50m_admin_0_countries.geojson` from the
+natural-earth-vector repository at tag `v5.1.2`
+(https://github.com/nvkelso/natural-earth-vector/tree/v5.1.2);
+SHA-256 `3e458fc036ad0a66411f2c1e6cac49c5d7bfb81cb1123bc513b22511a2b7fdeb`.
+Source: https://www.naturalearthdata.com/
+License: public domain. Natural Earth requires no permission and no credit;
+its suggested credit line is "Made with Natural Earth. Free vector and raster
+map data @ naturalearthdata.com." Given with thanks.
+
 ## Sounds
 
 - `Memor/Resources/GoodChime.wav` — the Good/Easy study-rating chime for
