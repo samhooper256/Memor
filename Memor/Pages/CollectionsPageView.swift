@@ -8,6 +8,59 @@
 import AppKit
 import SwiftUI
 
+/// Sort order for the Collections list page. Persisted across launches in
+/// UserDefaults (`userDefaultsKey`); A–Z is the default.
+enum CollectionSortOrder: String, CaseIterable, Identifiable {
+    case nameAscending
+    case nameDescending
+    case largestFirst
+    case smallestFirst
+
+    static let userDefaultsKey = "com.sam.Memor.collectionsSortOrder"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .nameAscending: "A–Z"
+        case .nameDescending: "Z–A"
+        case .largestFirst: "Largest first"
+        case .smallestFirst: "Smallest first"
+        }
+    }
+
+    /// Sorts `collections` in this order. Size orders break ties by name A–Z
+    /// and name orders break ties by id, so the result is stable across
+    /// refreshes.
+    func sorted(_ collections: [Collection]) -> [Collection] {
+        collections.sorted { lhs, rhs in
+            switch self {
+            case .nameAscending:
+                return Self.compareNames(lhs, rhs) == .orderedAscending
+            case .nameDescending:
+                return Self.compareNames(lhs, rhs) == .orderedDescending
+            case .largestFirst:
+                if lhs.instanceCount != rhs.instanceCount {
+                    return lhs.instanceCount > rhs.instanceCount
+                }
+                return Self.compareNames(lhs, rhs) == .orderedAscending
+            case .smallestFirst:
+                if lhs.instanceCount != rhs.instanceCount {
+                    return lhs.instanceCount < rhs.instanceCount
+                }
+                return Self.compareNames(lhs, rhs) == .orderedAscending
+            }
+        }
+    }
+
+    private static func compareNames(_ lhs: Collection, _ rhs: Collection) -> ComparisonResult {
+        let byName = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+        guard byName == .orderedSame else { return byName }
+        if lhs.id == rhs.id { return .orderedSame }
+        return lhs.id < rhs.id ? .orderedAscending : .orderedDescending
+    }
+}
+
 struct CollectionsPageView: View {
     @EnvironmentObject private var searchWindowState: SearchWindowState
     @EnvironmentObject private var navigationState: AppNavigationState
@@ -25,6 +78,7 @@ struct CollectionsPageView: View {
     @State private var isAddCollectionSheetPresented = false
     @State private var newCollectionName = ""
     @State private var collectionPendingDeletion: Collection?
+    @AppStorage(CollectionSortOrder.userDefaultsKey) private var sortOrder: CollectionSortOrder = .nameAscending
 
     private var titleText: String {
         let count = collections.count
@@ -32,10 +86,14 @@ struct CollectionsPageView: View {
         return "\(count) \(noun)"
     }
 
+    // The rows shown on the list page: the search filter applied, then the
+    // chosen sort order.
     private var filteredCollections: [Collection] {
         let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return collections }
-        return collections.filter { $0.name.localizedCaseInsensitiveContains(trimmed) }
+        let matching = trimmed.isEmpty
+            ? collections
+            : collections.filter { $0.name.localizedCaseInsensitiveContains(trimmed) }
+        return sortOrder.sorted(matching)
     }
 
     // The keyboard-selected ("currently selected") collection on the list page.
@@ -83,6 +141,14 @@ struct CollectionsPageView: View {
                                 .solidFocusField()
                                 .focused($isSearchFocused)
                                 .frame(maxWidth: .infinity)
+
+                            Picker("Sort:", selection: $sortOrder) {
+                                ForEach(CollectionSortOrder.allCases) { order in
+                                    Text(order.displayName).tag(order)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .fixedSize()
                         }
 
                         if let errorMessage {
@@ -155,6 +221,11 @@ struct CollectionsPageView: View {
         }
         .onChange(of: searchText) { _, _ in
             // Keep the selection on the top match as filtering changes.
+            highlightedCollectionID = filteredCollections.first?.id
+        }
+        .onChange(of: sortOrder) { _, _ in
+            // A re-sort reshuffles the rows, so restart the keyboard selection
+            // at the top like a filter change does.
             highlightedCollectionID = filteredCollections.first?.id
         }
         .onChange(of: navigationState.resetToHomeNonce) { _, _ in
