@@ -25,7 +25,7 @@ Memor/
     AppDatabase+Person.swift        Person relationship engine: fetchPersonEditorData, savePersonInstance (diff → conflict collection → propagation), deletePersonRelations (convert-to-bare), fetchPersonCandidates, reset-flag accessors
     AppDatabase+PersonQueries.swift Built-in Person queries: enablement, SRS apply/revert, makePersonStudyQuery (the single computed-HTML seam), personQueryJoinFrom + the search/stacks/study fetchers
     AppDatabase+Offices.swift       Office CRUD (case-insensitive unique names, holder counts) + db-level holding/succession read helpers
-    AppDatabase+Boundaries.swift    Boundary sets: parseUploadedBoundaryFile (FeatureCollection or Feature array; Polygon/MultiPolygon; `nameProperty` picks the properties key), insertBoundarySet (shared by uploads + the seed), reads, PointMap↔boundary links, rename/delete (built-in set protected)
+    AppDatabase+Boundaries.swift    Boundary sets: parseUploadedBoundaryFile (FeatureCollection or Feature array; Polygon/MultiPolygon; `nameProperty` picks the properties key), insertBoundarySet (shared by uploads + the seed), reads, PointMap↔boundary links, set rename/delete (built-in set protected), per-boundary `renameBoundary` (allowed in built-in sets too; names are not unique)
     AppDatabase+BoundarySeed.swift  First-launch seed of the built-in "Countries" set from Resources/ne_50m_admin_0_countries.geojson (unmodified Natural Earth 1:50m v5.1.2 FeatureCollection, NAME_EN as the name — ATTRIBUTIONS.md) via the upload parser; no-op once any built-in set exists, so swapping the file never re-seeds an existing DB
   Models/
     DatabaseModels.swift            All plain-data structs/enums returned by AppDatabase
@@ -75,6 +75,7 @@ Memor/
     SettingsWindowView.swift        Settings UI with key recorder and conflict resolution
     GlobalCodeEditorWindow.swift    Standalone HTML/CSS editor window opened from the Types page
     ManageOfficesWindowView.swift   "Edit Offices" window: searchable office list w/ holder counts, add/delete (cascade warning), description editor
+    ManageBoundariesWindowView.swift "Manage Boundaries" window (page-style: large title, rounded set cards, hover/right-click set rename + delete): GeoJSON upload, expandable per-set boundary lists, per-boundary rename (double-click or right-click → Rename…, row-scoped popover), success toasts; upload help sheet
   MCP/
     MCPConstants.swift              Host/port/path constants + memorDidChangeDatabase notification name
     MCPHTTPListener.swift           Minimal HTTP/1.1 loopback listener (Network.framework) feeding StatelessHTTPServerTransport
