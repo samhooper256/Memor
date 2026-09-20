@@ -130,7 +130,7 @@ struct ManageBoundariesWindowView: View {
                             .foregroundStyle(.secondary)
                     }
                 } else {
-                    LazyVStack(alignment: .leading, spacing: 12) {
+                    LazyVStack(alignment: .leading, spacing: 6) {
                         ForEach(sets) { set in
                             BoundarySetCard(
                                 set: set,
@@ -321,9 +321,11 @@ private struct BoundarySetCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
+        // 10 rather than the pages' 14: these cards are short when collapsed,
+        // and 14 would round them into near-pills.
+        .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay {
-            RoundedRectangle(cornerRadius: 14)
+            RoundedRectangle(cornerRadius: 10)
                 .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
         }
     }
@@ -382,8 +384,10 @@ private struct BoundarySetCard: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .frame(minHeight: 48)
+        .padding(.vertical, 3)
+        // Tall enough for the hover buttons, so built-in cards (which have
+        // none) match the user sets' height.
+        .frame(minHeight: 34)
         .contentShape(Rectangle())
         .pointerStyle(isHovered ? .link : .default)
         .onTapGesture(perform: onToggleExpanded)
@@ -505,9 +509,9 @@ private struct BoundaryRowIconButton: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .foregroundStyle(tint)
-                .padding(8)
+                .padding(6)
                 .background(
-                    RoundedRectangle(cornerRadius: 8)
+                    RoundedRectangle(cornerRadius: 7)
                         .fill(isHovered ? tint.opacity(0.14) : Color.clear)
                 )
         }
