@@ -327,6 +327,26 @@ extension AppDatabase {
         }
     }
 
+    /// Renames one boundary. Unlike the set-level rename this is allowed inside
+    /// built-in sets too: the Countries seed never re-runs, so a renamed
+    /// country stays renamed. Names are not unique (uploads may repeat them),
+    /// so the only rule is non-empty.
+    func renameBoundary(id: Int64, newName: String) throws {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw BoundaryImportError(message: "Boundary name must not be empty.")
+        }
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE boundary SET name = ? WHERE id = ?",
+                arguments: [trimmed, id]
+            )
+            if db.changesCount == 0 {
+                throw BoundaryImportError(message: "Boundary not found.")
+            }
+        }
+    }
+
     func setBoundaries(forInstance instanceID: Int64, boundaryIDs: [Int64]) throws {
         try dbQueue.write { db in
             try Self.setBoundaries(db: db, instanceID: instanceID, boundaryIDs: boundaryIDs)
