@@ -5,10 +5,14 @@
 //  Standalone window for managing boundary sets, styled like the main tab
 //  pages (large title, rounded cards, hover-revealed row actions): upload new
 //  sets, expand a set to see its boundaries, rename / delete user sets (hover
-//  buttons or right-click), and rename any single boundary (double-click or
-//  right-click → Rename…). Confirmations surface as a toast. The search field
-//  (Find in List shortcut, ⌘F) matches set names AND boundary names; a set
-//  with matching boundaries opens itself and lists only the matches.
+//  buttons or right-click), add boundaries to ANY set from a GeoJSON file
+//  (hover "+" or right-click; built-in included), and rename (double-click or
+//  right-click → Rename…) or delete (hover trash or right-click) any single
+//  boundary. Deletes always confirm with the live cascade counts (PointMap
+//  overlays, BoundaryMap attachments + queries). Confirmations surface as a
+//  toast. The search field (Find in List shortcut, ⌘F) matches set names AND
+//  boundary names; a set with matching boundaries opens itself and lists only
+//  the matches.
 //
 
 import AppKit
@@ -57,6 +61,53 @@ private enum BoundaryRenameTarget: Identifiable, Hashable {
         case .set: return "Set Name"
         case .boundary: return "Boundary Name"
         }
+    }
+}
+
+/// What the delete confirmation is about, with the cascade it would cause
+/// (fetched when the confirmation opens, so the counts are live).
+private enum BoundaryDeleteTarget {
+    case set(BoundarySet, usage: AppDatabase.BoundaryUsage)
+    case boundary(Boundary, usage: AppDatabase.BoundaryUsage)
+
+    var name: String {
+        switch self {
+        case .set(let set, _): return set.name
+        case .boundary(let boundary, _): return boundary.name
+        }
+    }
+
+    var alertMessage: String {
+        switch self {
+        case .set(let set, let usage):
+            let count = set.boundaryCount
+            let lead = "Its \(count) \(count == 1 ? "boundary is" : "boundaries are") deleted."
+            return "\(lead) \(Self.cascadeSentence(usage: usage, plural: count != 1)) This cannot be undone."
+        case .boundary(_, let usage):
+            return "\(Self.cascadeSentence(usage: usage, plural: false)) This cannot be undone."
+        }
+    }
+
+    private static func cascadeSentence(usage: AppDatabase.BoundaryUsage, plural: Bool) -> String {
+        if usage.isEmpty {
+            return "No PointMap or BoundaryMap instance uses \(plural ? "them" : "it")."
+        }
+        var places: [String] = []
+        if usage.pointMapInstanceCount > 0 {
+            places.append(counted(usage.pointMapInstanceCount, "PointMap instance"))
+        }
+        if usage.boundaryMapInstanceCount > 0 {
+            places.append(counted(usage.boundaryMapInstanceCount, "BoundaryMap instance"))
+        }
+        var sentence = "\(plural ? "They are" : "It is") removed from \(places.joined(separator: " and "))"
+        if usage.boundaryMapQueryCount > 0 {
+            sentence += ", along with \(counted(usage.boundaryMapQueryCount, "BoundaryMap query", "BoundaryMap queries")) and their study progress"
+        }
+        return sentence + "."
+    }
+
+    private static func counted(_ count: Int, _ singular: String, _ plural: String? = nil) -> String {
+        "\(count) \(count == 1 ? singular : (plural ?? singular + "s"))"
     }
 }
 
@@ -110,9 +161,11 @@ struct ManageBoundariesWindowView: View {
     @State private var searchCollapsedSetIDs: Set<Int64> = []
 
     @State private var isUploadPresented = false
+    // Set by whichever button opened the file importer, read in its completion.
+    @State private var uploadDestination: BoundaryUploadDestination = .newSet
     @State private var isHelpPresented = false
     @State private var renameTarget: BoundaryRenameTarget?
-    @State private var deleteTarget: BoundarySet?
+    @State private var deleteTarget: BoundaryDeleteTarget?
     @State private var isDeleteConfirmationPresented = false
 
     @State private var errorMessage: String?
@@ -139,6 +192,7 @@ struct ManageBoundariesWindowView: View {
 
                 HStack(spacing: 12) {
                     Button("Upload Boundary Set…") {
+                        uploadDestination = .newSet
                         isUploadPresented = true
                     }
                     .buttonStyle(.borderedProminent)
@@ -173,7 +227,12 @@ struct ManageBoundariesWindowView: View {
                                 isFilteredToMatches: visible.isFilteredToMatches,
                                 renameTarget: $renameTarget,
                                 onToggleExpanded: { toggleExpand(visible) },
+                                onAddFromFile: {
+                                    uploadDestination = .existingSet(visible.set)
+                                    isUploadPresented = true
+                                },
                                 onDelete: { beginDelete(visible.set) },
+                                onDeleteBoundary: beginDelete,
                                 onCommitRename: commitRename
                             )
                         }
@@ -220,12 +279,23 @@ struct ManageBoundariesWindowView: View {
             allowedContentTypes: BoundaryUploader.allowedTypes,
             allowsMultipleSelection: false
         ) { result in
-            let outcome = BoundaryUploader.handle(result: result, appDatabase: appDatabase)
+            let destination = uploadDestination
+            let outcome = BoundaryUploader.handle(result: result, destination: destination, appDatabase: appDatabase)
             switch outcome {
-            case .success(_, let count, let name):
+            case .success(let setID, let count, let name):
                 errorMessage = nil
+                let noun = count == 1 ? "boundary" : "boundaries"
+                switch destination {
+                case .newSet:
+                    showToast("Imported \(count) \(noun) from \(name)")
+                case .existingSet:
+                    // Open the set so the additions are visible, and let the
+                    // map instance editors' pickers see them.
+                    expandedSetIDs.insert(setID)
+                    NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
+                    showToast("Added \(count) \(noun) to \u{201C}\(name)\u{201D}")
+                }
                 reload()
-                showToast("Imported \(count) \(count == 1 ? "boundary" : "boundaries") from \(name)")
             case .failure(let message):
                 errorMessage = message
             }
@@ -241,8 +311,7 @@ struct ManageBoundariesWindowView: View {
                 deleteTarget = nil
             }
         } message: {
-            let count = deleteTarget?.boundaryCount ?? 0
-            Text("Its \(count) \(count == 1 ? "boundary is" : "boundaries are") removed from every PointMap and BoundaryMap instance that uses them, along with their BoundaryMap queries. This cannot be undone.")
+            Text(deleteTarget?.alertMessage ?? "")
         }
         .sheet(isPresented: $isHelpPresented) {
             BoundaryUploadHelpView(onClose: { isHelpPresented = false })
@@ -337,16 +406,38 @@ struct ManageBoundariesWindowView: View {
 
     private func beginDelete(_ set: BoundarySet) {
         guard !set.isBuiltin else { return }
-        deleteTarget = set
-        isDeleteConfirmationPresented = true
+        do {
+            deleteTarget = .set(set, usage: try appDatabase.fetchBoundaryUsage(setID: set.id))
+            isDeleteConfirmationPresented = true
+        } catch {
+            errorMessage = "Delete failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// Always confirmed, even when nothing uses the boundary: unlike an
+    /// office, a boundary's geometry can't be typed back in.
+    private func beginDelete(_ boundary: Boundary) {
+        do {
+            deleteTarget = .boundary(boundary, usage: try appDatabase.fetchBoundaryUsage(boundaryID: boundary.id))
+            isDeleteConfirmationPresented = true
+        } catch {
+            errorMessage = "Delete failed: \(error.localizedDescription)"
+        }
     }
 
     private func commitDelete() {
         guard let target = deleteTarget else { return }
         deleteTarget = nil
         do {
-            try appDatabase.deleteBoundarySet(id: target.id)
-            expandedSetIDs.remove(target.id)
+            switch target {
+            case .set(let set, _):
+                try appDatabase.deleteBoundarySet(id: set.id)
+                expandedSetIDs.remove(set.id)
+            case .boundary(let boundary, _):
+                try appDatabase.deleteBoundary(id: boundary.id)
+            }
+            // Either delete can take attachments and queries with it.
+            NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
             errorMessage = nil
             reload()
             showToast("Deleted \u{201C}\(target.name)\u{201D}")
@@ -377,7 +468,9 @@ private struct BoundarySetCard: View {
     let isFilteredToMatches: Bool
     let renameTarget: Binding<BoundaryRenameTarget?>
     let onToggleExpanded: () -> Void
+    let onAddFromFile: () -> Void
     let onDelete: () -> Void
+    let onDeleteBoundary: (Boundary) -> Void
     let onCommitRename: (BoundaryRenameTarget, String) -> String?
 
     @State private var isHovered = false
@@ -445,9 +538,16 @@ private struct BoundarySetCard: View {
 
             Spacer(minLength: 0)
 
-            // Built-in sets are protected: no set-level rename or delete.
-            if !set.isBuiltin {
-                HStack(spacing: 2) {
+            HStack(spacing: 2) {
+                BoundaryRowIconButton(
+                    systemImage: "plus",
+                    tint: .primary,
+                    tooltip: "Add boundaries from a file",
+                    action: onAddFromFile
+                )
+                // The set itself (its name, its existence) is protected when
+                // built-in; its contents are always editable.
+                if !set.isBuiltin {
                     BoundaryRowIconButton(
                         systemImage: "pencil",
                         tint: .primary,
@@ -461,13 +561,11 @@ private struct BoundarySetCard: View {
                         action: onDelete
                     )
                 }
-                .opacity(isHovered ? 1 : 0)
             }
+            .opacity(isHovered ? 1 : 0)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 3)
-        // Tall enough for the hover buttons, so built-in cards (which have
-        // none) match the user sets' height.
         .frame(minHeight: 34)
         .contentShape(Rectangle())
         .pointerStyle(isHovered ? .link : .default)
@@ -481,7 +579,9 @@ private struct BoundarySetCard: View {
             }
         }
         .contextMenu {
+            Button("Add Boundaries from File…", action: onAddFromFile)
             if !set.isBuiltin {
+                Divider()
                 Button("Rename…") {
                     renameTarget.wrappedValue = .set(set)
                 }
@@ -511,6 +611,7 @@ private struct BoundarySetCard: View {
                     BoundaryRow(
                         boundary: boundary,
                         renameTarget: renameTarget,
+                        onDelete: { onDeleteBoundary(boundary) },
                         onCommitRename: onCommitRename
                     )
                 }
@@ -526,6 +627,7 @@ private struct BoundarySetCard: View {
 private struct BoundaryRow: View {
     let boundary: Boundary
     let renameTarget: Binding<BoundaryRenameTarget?>
+    let onDelete: () -> Void
     let onCommitRename: (BoundaryRenameTarget, String) -> String?
 
     @State private var isHovered = false
@@ -535,53 +637,69 @@ private struct BoundaryRow: View {
     }
 
     var body: some View {
-        Text(boundary.name)
-            .lineLimit(1)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            // 8 (list inset) + 32 lines the names up under the set's name.
-            .padding(.leading, 32)
-            .padding(.trailing, 8)
-            .padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(isHovered || isBeingRenamed ? Color.secondary.opacity(0.12) : Color.clear)
+        HStack(spacing: 8) {
+            Text(boundary.name)
+                .lineLimit(1)
+                .help("Double-click to rename")
+
+            Spacer(minLength: 0)
+
+            BoundaryRowIconButton(
+                systemImage: "trash",
+                tint: .red,
+                tooltip: "Delete boundary",
+                isCompact: true,
+                action: onDelete
             )
-            .contentShape(Rectangle())
-            .help("Double-click to rename")
-            .onTapGesture(count: 2) {
+            .opacity(isHovered ? 1 : 0)
+        }
+        // 8 (list inset) + 32 lines the names up under the set's name.
+        .padding(.leading, 32)
+        .padding(.trailing, 4)
+        .padding(.vertical, 1)
+        .frame(minHeight: 25)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isHovered || isBeingRenamed ? Color.secondary.opacity(0.12) : Color.clear)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            renameTarget.wrappedValue = .boundary(boundary)
+        }
+        .onContinuousHover { phase in
+            switch phase {
+            case .active:
+                isHovered = true
+            case .ended:
+                isHovered = false
+            }
+        }
+        .contextMenu {
+            Button("Rename…") {
                 renameTarget.wrappedValue = .boundary(boundary)
             }
-            .onContinuousHover { phase in
-                switch phase {
-                case .active:
-                    isHovered = true
-                case .ended:
-                    isHovered = false
-                }
-            }
-            .contextMenu {
-                Button("Rename…") {
-                    renameTarget.wrappedValue = .boundary(boundary)
-                }
-            }
-            .popover(item: scopedRenameItem(renameTarget, to: .boundary(boundary)), arrowEdge: .bottom) { target in
-                BoundaryRenamePopover(
-                    target: target,
-                    onCommit: { onCommitRename(target, $0) },
-                    onCancel: { renameTarget.wrappedValue = nil }
-                )
-            }
+            Button("Delete…", role: .destructive, action: onDelete)
+        }
+        .popover(item: scopedRenameItem(renameTarget, to: .boundary(boundary)), arrowEdge: .bottom) { target in
+            BoundaryRenamePopover(
+                target: target,
+                onCommit: { onCommitRename(target, $0) },
+                onCancel: { renameTarget.wrappedValue = nil }
+            )
+        }
     }
 }
 
 // MARK: - Shared pieces
 
-/// Hover-revealed icon button in a set card's header (same look as the
-/// Collections/Types row actions).
+/// Hover-revealed icon button in a set card's header or a boundary row (same
+/// look as the Collections/Types row actions). `isCompact` shrinks it to fit
+/// a boundary row without making the row taller.
 private struct BoundaryRowIconButton: View {
     let systemImage: String
     let tint: Color
     let tooltip: String
+    var isCompact = false
     let action: () -> Void
 
     @State private var isHovered = false
@@ -589,10 +707,11 @@ private struct BoundaryRowIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemImage)
+                .font(isCompact ? .system(size: 11) : .body)
                 .foregroundStyle(tint)
-                .padding(6)
+                .padding(isCompact ? 4 : 6)
                 .background(
-                    RoundedRectangle(cornerRadius: 7)
+                    RoundedRectangle(cornerRadius: isCompact ? 5 : 7)
                         .fill(isHovered ? tint.opacity(0.14) : Color.clear)
                 )
         }
@@ -693,7 +812,7 @@ private struct BoundaryUploadHelpView: View {
                     Text(LocalizedStringKey("Click \"Upload Boundary Set…\" to import a JSON (`.json`) or GeoJSON (`.geojson`) file. The file is read once and all boundary geometries are saved into Memor's database, so you can delete the file from your computer after importing. The set is named after the file but can be renamed later."))
                         .fixedSize(horizontal: false, vertical: true)
 
-                    Text("Any single boundary can be renamed too—double-click it, or right-click it and choose Rename. This works in the built-in Countries set as well.")
+                    Text("To add boundaries to a set that already exists, hover over the set and click its + button (or right-click it and choose Add Boundaries from File…); the file's boundaries are appended to that set. Any single boundary can be renamed (double-click it, or right-click → Rename…) or deleted (hover and click the trash icon, or right-click → Delete…). All of this works in the built-in Countries set as well—only the set itself can't be renamed or deleted.")
                         .fixedSize(horizontal: false, vertical: true)
 
                     VStack(alignment: .leading, spacing: 6) {
