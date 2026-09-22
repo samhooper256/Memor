@@ -6,7 +6,9 @@
 //  pages (large title, rounded cards, hover-revealed row actions): upload new
 //  sets, expand a set to see its boundaries, rename / delete user sets (hover
 //  buttons or right-click), and rename any single boundary (double-click or
-//  right-click → Rename…). Confirmations surface as a toast.
+//  right-click → Rename…). Confirmations surface as a toast. The search field
+//  (Find in List shortcut, ⌘F) matches set names AND boundary names; a set
+//  with matching boundaries opens itself and lists only the matches.
 //
 
 import AppKit
@@ -76,14 +78,36 @@ private func scopedRenameItem(
     )
 }
 
+/// One set card as the list shows it. While a search is active this is the
+/// FILTERED view of the set: a set with matching boundaries lists only those
+/// (and opens itself so the matches are visible); a set matched by its own
+/// name alone keeps its full list and normal expansion state.
+private struct VisibleBoundarySet: Identifiable {
+    let set: BoundarySet
+    let boundaries: [Boundary]
+    let isFilteredToMatches: Bool
+
+    // `self.` is required: a bare leading `set` parses as a setter.
+    var id: Int64 { self.set.id }
+}
+
 struct ManageBoundariesWindowView: View {
     let appDatabase: AppDatabase
     @EnvironmentObject private var windowState: ManageBoundariesWindowState
+    @EnvironmentObject private var shortcutSettings: ShortcutSettings
     @Environment(\.dismiss) private var dismiss
 
     @State private var sets: [BoundarySet] = []
+    // Every set's boundaries (names only — no geometry), loaded up front so
+    // the search can match boundaries inside collapsed sets.
     @State private var boundariesBySetID: [Int64: [Boundary]] = [:]
     @State private var expandedSetIDs: Set<Int64> = []
+
+    @State private var searchText = ""
+    @FocusState private var isSearchFocused: Bool
+    // Sets the user collapsed while a search had auto-opened them. Cleared on
+    // every search-text change, so each new search shows its matches again.
+    @State private var searchCollapsedSetIDs: Set<Int64> = []
 
     @State private var isUploadPresented = false
     @State private var isHelpPresented = false
@@ -113,10 +137,17 @@ struct ManageBoundariesWindowView: View {
                     .help("Learn how to upload boundaries")
                 }
 
-                Button("Upload Boundary Set…") {
-                    isUploadPresented = true
+                HStack(spacing: 12) {
+                    Button("Upload Boundary Set…") {
+                        isUploadPresented = true
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    TextField(searchPlaceholder, text: $searchText)
+                        .solidFocusField()
+                        .focused($isSearchFocused)
+                        .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
 
                 if let errorMessage {
                     Text(errorMessage)
@@ -129,16 +160,20 @@ struct ManageBoundariesWindowView: View {
                         Text("You have no boundary sets.")
                             .foregroundStyle(.secondary)
                     }
+                } else if visibleSets.isEmpty {
+                    Text("No boundary sets or boundaries match your search.")
+                        .foregroundStyle(.secondary)
                 } else {
                     LazyVStack(alignment: .leading, spacing: 6) {
-                        ForEach(sets) { set in
+                        ForEach(visibleSets) { visible in
                             BoundarySetCard(
-                                set: set,
-                                isExpanded: expandedSetIDs.contains(set.id),
-                                boundaries: boundariesBySetID[set.id] ?? [],
+                                set: visible.set,
+                                isExpanded: isExpanded(visible),
+                                boundaries: visible.boundaries,
+                                isFilteredToMatches: visible.isFilteredToMatches,
                                 renameTarget: $renameTarget,
-                                onToggleExpanded: { toggleExpand(set) },
-                                onDelete: { beginDelete(set) },
+                                onToggleExpanded: { toggleExpand(visible) },
+                                onDelete: { beginDelete(visible.set) },
                                 onCommitRename: commitRename
                             )
                         }
@@ -150,6 +185,14 @@ struct ManageBoundariesWindowView: View {
         }
         .frame(minWidth: 520, minHeight: 420)
         .navigationTitle("Manage Boundaries")
+        .background {
+            FindShortcutKeyHandler(shortcutSettings: shortcutSettings) {
+                isSearchFocused = true
+            }
+        }
+        .onChange(of: searchText) { _, _ in
+            searchCollapsedSetIDs = []
+        }
         .overlay(alignment: .topTrailing) {
             if let toast {
                 ToastView(toast: toast)
@@ -206,28 +249,60 @@ struct ManageBoundariesWindowView: View {
         }
     }
 
+    private var searchPlaceholder: String {
+        "Search boundary sets and boundaries (\(shortcutSettings.binding(for: .findInList).displayString))"
+    }
+
+    private var trimmedSearchText: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var visibleSets: [VisibleBoundarySet] {
+        let query = trimmedSearchText
+        guard !query.isEmpty else {
+            return sets.map {
+                VisibleBoundarySet(set: $0, boundaries: boundariesBySetID[$0.id] ?? [], isFilteredToMatches: false)
+            }
+        }
+        return sets.compactMap { set in
+            let boundaries = boundariesBySetID[set.id] ?? []
+            let matches = boundaries.filter { $0.name.localizedCaseInsensitiveContains(query) }
+            if !matches.isEmpty {
+                return VisibleBoundarySet(set: set, boundaries: matches, isFilteredToMatches: true)
+            }
+            if set.name.localizedCaseInsensitiveContains(query) {
+                return VisibleBoundarySet(set: set, boundaries: boundaries, isFilteredToMatches: false)
+            }
+            return nil
+        }
+    }
+
+    private func isExpanded(_ visible: VisibleBoundarySet) -> Bool {
+        visible.isFilteredToMatches
+            ? !searchCollapsedSetIDs.contains(visible.id)
+            : expandedSetIDs.contains(visible.id)
+    }
+
+    private func toggleExpand(_ visible: VisibleBoundarySet) {
+        if visible.isFilteredToMatches {
+            searchCollapsedSetIDs.formSymmetricDifference([visible.id])
+        } else {
+            expandedSetIDs.formSymmetricDifference([visible.id])
+        }
+    }
+
     private func reload() {
         do {
             sets = try appDatabase.fetchBoundarySets()
-            var cache: [Int64: [Boundary]] = [:]
-            for set in sets where expandedSetIDs.contains(set.id) {
-                cache[set.id] = (try? appDatabase.fetchBoundaries(setID: set.id)) ?? []
-            }
-            boundariesBySetID = cache
+            // Already ordered by name within each set.
+            boundariesBySetID = Dictionary(
+                grouping: try appDatabase.fetchAllBoundaryOptions().map(\.boundary),
+                by: \.boundarySetID
+            )
         } catch {
             sets = []
             boundariesBySetID = [:]
             errorMessage = "Failed to load boundary sets: \(error.localizedDescription)"
-        }
-    }
-
-    private func toggleExpand(_ set: BoundarySet) {
-        if expandedSetIDs.contains(set.id) {
-            expandedSetIDs.remove(set.id)
-            boundariesBySetID.removeValue(forKey: set.id)
-        } else {
-            expandedSetIDs.insert(set.id)
-            boundariesBySetID[set.id] = (try? appDatabase.fetchBoundaries(setID: set.id)) ?? []
         }
     }
 
@@ -298,6 +373,8 @@ private struct BoundarySetCard: View {
     let set: BoundarySet
     let isExpanded: Bool
     let boundaries: [Boundary]
+    /// True while a search narrows `boundaries` to the matching ones.
+    let isFilteredToMatches: Bool
     let renameTarget: Binding<BoundaryRenameTarget?>
     let onToggleExpanded: () -> Void
     let onDelete: () -> Void
@@ -306,7 +383,11 @@ private struct BoundarySetCard: View {
     @State private var isHovered = false
 
     private var countText: String {
-        "\(set.boundaryCount) \(set.boundaryCount == 1 ? "boundary" : "boundaries")"
+        let noun = set.boundaryCount == 1 ? "boundary" : "boundaries"
+        if isFilteredToMatches {
+            return "\(boundaries.count) of \(set.boundaryCount) \(noun)"
+        }
+        return "\(set.boundaryCount) \(noun)"
     }
 
     var body: some View {

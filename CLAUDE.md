@@ -75,7 +75,7 @@ Memor/
     SettingsWindowView.swift        Settings UI with key recorder and conflict resolution
     GlobalCodeEditorWindow.swift    Standalone HTML/CSS editor window opened from the Types page
     ManageOfficesWindowView.swift   "Edit Offices" window: searchable office list w/ holder counts, add/delete (cascade warning), description editor
-    ManageBoundariesWindowView.swift "Manage Boundaries" window (page-style: large title, rounded set cards, hover/right-click set rename + delete): GeoJSON upload, expandable per-set boundary lists, per-boundary rename (double-click or right-click → Rename…, row-scoped popover), success toasts; upload help sheet
+    ManageBoundariesWindowView.swift "Manage Boundaries" window (page-style: large title, rounded set cards, hover/right-click set rename + delete): GeoJSON upload, expandable per-set boundary lists, per-boundary rename (double-click or right-click → Rename…, row-scoped popover), success toasts; upload help sheet. Search field (`.findInList`, ⌘F) matches set names AND boundary names — all boundary names are loaded up front (no geometry) so collapsed sets are searchable; a set with matching boundaries auto-opens listing only the matches ("3 of 242 boundaries")
   MCP/
     MCPConstants.swift              Host/port/path constants + memorDidChangeDatabase notification name
     MCPHTTPListener.swift           Minimal HTTP/1.1 loopback listener (Network.framework) feeding StatelessHTTPServerTransport
