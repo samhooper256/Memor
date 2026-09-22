@@ -16,8 +16,18 @@ import UniformTypeIdentifiers
 // MARK: - Shared upload helper
 
 enum BoundaryUploadResult {
+    /// `setName` is the set the features landed in: the file's base name for
+    /// a new set, the existing set's name when appending.
     case success(setID: Int64, featureCount: Int, setName: String)
     case failure(message: String)
+}
+
+/// Where an uploaded file's features go.
+enum BoundaryUploadDestination {
+    /// A new user set named after the file.
+    case newSet
+    /// Appended to an existing set (built-in included).
+    case existingSet(BoundarySet)
 }
 
 enum BoundaryUploader {
@@ -31,6 +41,7 @@ enum BoundaryUploader {
 
     static func handle(
         result: Result<[URL], Error>,
+        destination: BoundaryUploadDestination,
         appDatabase: AppDatabase
     ) -> BoundaryUploadResult {
         switch result {
@@ -40,33 +51,51 @@ enum BoundaryUploader {
             guard let url = urls.first else {
                 return .failure(message: "No file selected.")
             }
-            let needsScope = url.startAccessingSecurityScopedResource()
-            defer {
-                if needsScope { url.stopAccessingSecurityScopedResource() }
-            }
-            let data: Data
-            do {
-                data = try Data(contentsOf: url)
-            } catch {
-                return .failure(message: "Could not read file: \(error.localizedDescription)")
-            }
             let features: [AppDatabase.ImportedBoundaryFeature]
+            switch readFeatures(from: url) {
+            case .success(let parsed): features = parsed
+            case .failure(let message): return .failure(message: message)
+            }
             do {
-                features = try AppDatabase.parseUploadedBoundaryFile(data: data)
+                switch destination {
+                case .newSet:
+                    let baseName = url.deletingPathExtension().lastPathComponent
+                    let setID = try appDatabase.importBoundarySet(name: baseName, features: features)
+                    return .success(setID: setID, featureCount: features.count, setName: baseName)
+                case .existingSet(let set):
+                    try appDatabase.addBoundaries(toSet: set.id, features: features)
+                    return .success(setID: set.id, featureCount: features.count, setName: set.name)
+                }
             } catch let err as AppDatabase.BoundaryImportError {
                 return .failure(message: err.message)
             } catch {
-                return .failure(message: "Invalid file: \(error.localizedDescription)")
+                return .failure(message: "Failed to save boundaries: \(error.localizedDescription)")
             }
-            let baseName = url.deletingPathExtension().lastPathComponent
-            do {
-                let setID = try appDatabase.importBoundarySet(name: baseName, features: features)
-                return .success(setID: setID, featureCount: features.count, setName: baseName)
-            } catch let err as AppDatabase.BoundaryImportError {
-                return .failure(message: err.message)
-            } catch {
-                return .failure(message: "Failed to save set: \(error.localizedDescription)")
-            }
+        }
+    }
+
+    private enum ReadOutcome {
+        case success([AppDatabase.ImportedBoundaryFeature])
+        case failure(String)
+    }
+
+    private static func readFeatures(from url: URL) -> ReadOutcome {
+        let needsScope = url.startAccessingSecurityScopedResource()
+        defer {
+            if needsScope { url.stopAccessingSecurityScopedResource() }
+        }
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            return .failure("Could not read file: \(error.localizedDescription)")
+        }
+        do {
+            return .success(try AppDatabase.parseUploadedBoundaryFile(data: data))
+        } catch let err as AppDatabase.BoundaryImportError {
+            return .failure(err.message)
+        } catch {
+            return .failure("Invalid file: \(error.localizedDescription)")
         }
     }
 }
@@ -205,7 +234,7 @@ struct BoundaryPickerPopoverView: View {
             allowedContentTypes: BoundaryUploader.allowedTypes,
             allowsMultipleSelection: false
         ) { result in
-            let outcome = BoundaryUploader.handle(result: result, appDatabase: appDatabase)
+            let outcome = BoundaryUploader.handle(result: result, destination: .newSet, appDatabase: appDatabase)
             switch outcome {
             case .success(_, let count, let name):
                 errorMessage = nil

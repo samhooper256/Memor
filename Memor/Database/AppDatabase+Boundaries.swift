@@ -299,6 +299,73 @@ extension AppDatabase {
         }
     }
 
+    /// Where one boundary (or every boundary of a set) is in use — what a
+    /// delete cascades through, for confirmation messages.
+    struct BoundaryUsage {
+        /// PointMap instances showing at least one of the boundaries as an overlay.
+        let pointMapInstanceCount: Int
+        /// BoundaryMap instances with at least one of the boundaries attached.
+        let boundaryMapInstanceCount: Int
+        /// Enabled Forward/Reverse queries (with SRS progress) on those attachments.
+        let boundaryMapQueryCount: Int
+
+        var isEmpty: Bool {
+            pointMapInstanceCount == 0 && boundaryMapInstanceCount == 0
+        }
+    }
+
+    func fetchBoundaryUsage(boundaryID: Int64) throws -> BoundaryUsage {
+        try dbQueue.read { db in
+            try Self.fetchBoundaryUsage(
+                db: db,
+                boundaryIDsSubquery: "SELECT id FROM boundary WHERE id = ?",
+                argument: boundaryID
+            )
+        }
+    }
+
+    func fetchBoundaryUsage(setID: Int64) throws -> BoundaryUsage {
+        try dbQueue.read { db in
+            try Self.fetchBoundaryUsage(
+                db: db,
+                boundaryIDsSubquery: "SELECT id FROM boundary WHERE boundary_set_id = ?",
+                argument: setID
+            )
+        }
+    }
+
+    private static func fetchBoundaryUsage(
+        db: Database,
+        boundaryIDsSubquery: String,
+        argument: Int64
+    ) throws -> BoundaryUsage {
+        let pointMapInstanceCount = try Int.fetchOne(
+            db,
+            sql: "SELECT COUNT(DISTINCT instance_id) FROM pointmap_boundary WHERE boundary_id IN (\(boundaryIDsSubquery))",
+            arguments: [argument]
+        ) ?? 0
+        let boundaryMapInstanceCount = try Int.fetchOne(
+            db,
+            sql: "SELECT COUNT(DISTINCT instance_id) FROM boundarymap_attachment WHERE boundary_id IN (\(boundaryIDsSubquery))",
+            arguments: [argument]
+        ) ?? 0
+        let boundaryMapQueryCount = try Int.fetchOne(
+            db,
+            sql: """
+                SELECT COUNT(*) FROM boundarymap_query
+                WHERE attachment_id IN (
+                    SELECT id FROM boundarymap_attachment WHERE boundary_id IN (\(boundaryIDsSubquery))
+                )
+                """,
+            arguments: [argument]
+        ) ?? 0
+        return BoundaryUsage(
+            pointMapInstanceCount: pointMapInstanceCount,
+            boundaryMapInstanceCount: boundaryMapInstanceCount,
+            boundaryMapQueryCount: boundaryMapQueryCount
+        )
+    }
+
     static func parseMultiPolygonJSON(data: Data) -> ParsedMultiPolygon? {
         guard let root = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
               let coords = root["coordinates"] as? [[[[Double]]]] else { return nil }
@@ -347,6 +414,39 @@ extension AppDatabase {
         }
     }
 
+    /// Deletes one boundary. Allowed in built-in sets (like rename). Cascades:
+    /// PointMap overlay links, BoundaryMap attachments, and those attachments'
+    /// queries — see `fetchBoundaryUsage(boundaryID:)` for a confirmation.
+    func deleteBoundary(id: Int64) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM boundary WHERE id = ?", arguments: [id])
+            if db.changesCount == 0 {
+                throw BoundaryImportError(message: "Boundary not found.")
+            }
+        }
+    }
+
+    /// Appends already-parsed features to an existing set (built-in included)
+    /// and returns the new boundary ids in feature order. Names are not
+    /// unique, so a re-imported feature simply becomes a second boundary.
+    @discardableResult
+    func addBoundaries(toSet setID: Int64, features: [ImportedBoundaryFeature]) throws -> [Int64] {
+        guard !features.isEmpty else {
+            throw BoundaryImportError(message: "No features to add.")
+        }
+        return try dbQueue.write { db in
+            let setExists = try Bool.fetchOne(
+                db,
+                sql: "SELECT EXISTS(SELECT 1 FROM boundary_set WHERE id = ?)",
+                arguments: [setID]
+            ) ?? false
+            guard setExists else {
+                throw BoundaryImportError(message: "Boundary set not found.")
+            }
+            return try Self.insertBoundaries(in: db, setID: setID, features: features)
+        }
+    }
+
     func setBoundaries(forInstance instanceID: Int64, boundaryIDs: [Int64]) throws {
         try dbQueue.write { db in
             try Self.setBoundaries(db: db, instanceID: instanceID, boundaryIDs: boundaryIDs)
@@ -369,6 +469,9 @@ extension AppDatabase {
         }
     }
 
+    /// Creates a user boundary set. `features` may be empty (an empty set is a
+    /// valid container to add boundaries to later); a blank name falls back
+    /// to "Uploaded Boundaries". Returns the set's id.
     @discardableResult
     func importBoundarySet(
         name: String,
@@ -376,9 +479,6 @@ extension AppDatabase {
     ) throws -> Int64 {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let finalName = trimmed.isEmpty ? "Uploaded Boundaries" : trimmed
-        guard !features.isEmpty else {
-            throw BoundaryImportError(message: "No features to import.")
-        }
         return try dbQueue.write { db in
             try Self.insertBoundarySet(in: db, name: finalName, isBuiltin: false, features: features)
         }
@@ -395,8 +495,6 @@ extension AppDatabase {
         features: [ImportedBoundaryFeature]
     ) throws -> Int64 {
         let createdAt = Int64(Date().timeIntervalSince1970)
-        let encoder = JSONEncoder()
-
         try db.execute(
             sql: """
                 INSERT INTO boundary_set (name, is_builtin, created_at)
@@ -405,7 +503,21 @@ extension AppDatabase {
             arguments: [name, isBuiltin ? 1 : 0, createdAt]
         )
         let setID = db.lastInsertedRowID
+        try insertBoundaries(in: db, setID: setID, features: features)
+        return setID
+    }
 
+    /// One `boundary` row per feature, appended to `setID`. Returns the new
+    /// ids in feature order.
+    @discardableResult
+    static func insertBoundaries(
+        in db: Database,
+        setID: Int64,
+        features: [ImportedBoundaryFeature]
+    ) throws -> [Int64] {
+        let encoder = JSONEncoder()
+        var ids: [Int64] = []
+        ids.reserveCapacity(features.count)
         for feature in features {
             let normalized = NormalizedGeometry(
                 type: "MultiPolygon",
@@ -419,8 +531,9 @@ extension AppDatabase {
                     """,
                 arguments: [setID, feature.name, bytes]
             )
+            ids.append(db.lastInsertedRowID)
         }
-        return setID
+        return ids
     }
 
     /// The shape stored in `boundary.geometry_json`: always a MultiPolygon,
