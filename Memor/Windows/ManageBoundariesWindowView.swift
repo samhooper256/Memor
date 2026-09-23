@@ -723,56 +723,20 @@ private struct BoundaryRowIconButton: View {
     }
 }
 
+/// The shared RenamePopover, titled for a set or a boundary.
 private struct BoundaryRenamePopover: View {
     let target: BoundaryRenameTarget
-    /// Returns an error message to show in place, or nil once the rename is
-    /// saved (the owner dismisses the popover by clearing the target).
     let onCommit: (String) -> String?
     let onCancel: () -> Void
 
-    @State private var text: String
-    @State private var errorMessage: String?
-
-    init(
-        target: BoundaryRenameTarget,
-        onCommit: @escaping (String) -> String?,
-        onCancel: @escaping () -> Void
-    ) {
-        self.target = target
-        self.onCommit = onCommit
-        self.onCancel = onCancel
-        _text = State(initialValue: target.currentName)
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(target.popoverTitle)
-                .font(.headline)
-
-            TextField(target.fieldPlaceholder, text: $text)
-                .solidFocusField()
-                .frame(width: 240)
-                .onSubmit { commit() }
-
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            }
-
-            HStack {
-                Spacer()
-                Button("Cancel", action: onCancel)
-                Button("Rename") { commit() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-        .padding(12)
-    }
-
-    private func commit() {
-        errorMessage = onCommit(text)
+        RenamePopover(
+            title: target.popoverTitle,
+            placeholder: target.fieldPlaceholder,
+            initialName: target.currentName,
+            onCommit: onCommit,
+            onCancel: onCancel
+        )
     }
 }
 
