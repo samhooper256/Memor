@@ -212,6 +212,40 @@ enum MemorMCPTools {
                 colorRaw: try arguments.requireString("color"),
                 appDatabase: appDatabase
             ))
+        case "create_boundary_set":
+            return try jsonResult(createBoundarySet(
+                name: try arguments.requireString("name"),
+                features: try parseGeoJSONFeatures(arguments, key: "features", required: false),
+                appDatabase: appDatabase
+            ))
+        case "rename_boundary_set":
+            return try jsonResult(renameBoundarySet(
+                boundarySetID: try arguments.requireInt64("boundary_set_id"),
+                name: try arguments.requireString("name"),
+                appDatabase: appDatabase
+            ))
+        case "delete_boundary_set":
+            return try jsonResult(deleteBoundarySet(
+                boundarySetID: try arguments.requireInt64("boundary_set_id"),
+                appDatabase: appDatabase
+            ))
+        case "add_boundaries":
+            return try jsonResult(addBoundaries(
+                boundarySetID: try arguments.requireInt64("boundary_set_id"),
+                features: try parseGeoJSONFeatures(arguments, key: "features", required: true),
+                appDatabase: appDatabase
+            ))
+        case "rename_boundary":
+            return try jsonResult(renameBoundary(
+                boundaryID: try arguments.requireInt64("boundary_id"),
+                name: try arguments.requireString("name"),
+                appDatabase: appDatabase
+            ))
+        case "delete_boundary":
+            return try jsonResult(deleteBoundary(
+                boundaryID: try arguments.requireInt64("boundary_id"),
+                appDatabase: appDatabase
+            ))
 
         // Collections
         case "list_collections":
@@ -1448,7 +1482,167 @@ enum MemorMCPTools {
     }
 
     private static func listBoundarySets(appDatabase: AppDatabase) throws -> [BoundarySetDTO] {
-        try appDatabase.fetchBoundarySets().map(BoundarySetDTO.init)
+        try appDatabase.fetchBoundarySets().map { try boundarySetDTO($0, appDatabase: appDatabase) }
+    }
+
+    private static func boundarySetDTO(_ set: BoundarySet, appDatabase: AppDatabase) throws -> BoundarySetDTO {
+        BoundarySetDTO(set, usage: try appDatabase.fetchBoundaryUsage(setID: set.id))
+    }
+
+    private static func requireBoundarySet(_ boundarySetID: Int64, appDatabase: AppDatabase) throws -> BoundarySet {
+        guard let set = try appDatabase.fetchBoundarySets().first(where: { $0.id == boundarySetID }) else {
+            throw MemorMCPToolError(message: "No boundary set with id \(boundarySetID). Use list_boundary_sets to discover sets.")
+        }
+        return set
+    }
+
+    private static func requireBoundary(_ boundaryID: Int64, appDatabase: AppDatabase) throws -> Boundary {
+        guard let boundary = try appDatabase.fetchAllBoundaryOptions()
+            .first(where: { $0.id == boundaryID })?.boundary else {
+            throw MemorMCPToolError(message: "No boundary with id \(boundaryID). Use list_boundary_sets and list_boundaries to discover boundaries.")
+        }
+        return boundary
+    }
+
+    /// The boundary layer reports its own validation failures (blank names,
+    /// built-in protection, …) as BoundaryImportError; surface the message.
+    private static func mappingBoundaryErrors<T>(_ body: () throws -> T) throws -> T {
+        do {
+            return try body()
+        } catch let error as AppDatabase.BoundaryImportError {
+            throw MemorMCPToolError(message: error.message)
+        }
+    }
+
+    /// Re-encodes the inline GeoJSON `features` argument (a Feature array or
+    /// a FeatureCollection) and runs it through the same validator as a file
+    /// upload. A plain encoder on purpose: the shared one's snake-case key
+    /// strategy would rewrite GeoJSON property keys before validation.
+    private static func parseGeoJSONFeatures(
+        _ arguments: [String: Value],
+        key: String,
+        required: Bool
+    ) throws -> [AppDatabase.ImportedBoundaryFeature] {
+        guard let value = arguments[key], !value.isNull else {
+            if required {
+                throw MemorMCPToolError(message: "Missing argument `\(key)`.")
+            }
+            return []
+        }
+        // An explicit `[]` means the same as omitting an optional argument.
+        if !required, case .array(let items) = value, items.isEmpty {
+            return []
+        }
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(value)
+        } catch {
+            throw MemorMCPToolError(message: "Argument `\(key)` could not be encoded as JSON.")
+        }
+        do {
+            return try AppDatabase.parseUploadedBoundaryFile(data: data)
+        } catch let error as AppDatabase.BoundaryImportError {
+            throw MemorMCPToolError(message: "Invalid `\(key)`: \(error.message)")
+        }
+    }
+
+    private static func createBoundarySet(
+        name: String,
+        features: [AppDatabase.ImportedBoundaryFeature],
+        appDatabase: AppDatabase
+    ) throws -> BoundarySetDTO {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw MemorMCPToolError(message: "`name` must not be blank.")
+        }
+        let setID = try mappingBoundaryErrors {
+            try appDatabase.importBoundarySet(name: trimmed, features: features)
+        }
+        postDatabaseChange()
+        return try boundarySetDTO(try requireBoundarySet(setID, appDatabase: appDatabase), appDatabase: appDatabase)
+    }
+
+    private static func renameBoundarySet(
+        boundarySetID: Int64,
+        name: String,
+        appDatabase: AppDatabase
+    ) throws -> BoundarySetDTO {
+        let set = try requireBoundarySet(boundarySetID, appDatabase: appDatabase)
+        if set.isBuiltin {
+            throw MemorMCPToolError(message: "The built-in \"\(set.name)\" set cannot be renamed.")
+        }
+        try mappingBoundaryErrors {
+            try appDatabase.renameBoundarySet(id: boundarySetID, newName: name)
+        }
+        postDatabaseChange()
+        return try boundarySetDTO(try requireBoundarySet(boundarySetID, appDatabase: appDatabase), appDatabase: appDatabase)
+    }
+
+    private static func deleteBoundarySet(
+        boundarySetID: Int64,
+        appDatabase: AppDatabase
+    ) throws -> DeletedBoundariesDTO {
+        let set = try requireBoundarySet(boundarySetID, appDatabase: appDatabase)
+        if set.isBuiltin {
+            throw MemorMCPToolError(message: "The built-in \"\(set.name)\" set cannot be deleted.")
+        }
+        let usage = try appDatabase.fetchBoundaryUsage(setID: boundarySetID)
+        try mappingBoundaryErrors {
+            try appDatabase.deleteBoundarySet(id: boundarySetID)
+        }
+        postDatabaseChange()
+        return DeletedBoundariesDTO(deletedBoundaryCount: set.boundaryCount, usage: usage)
+    }
+
+    private static func addBoundaries(
+        boundarySetID: Int64,
+        features: [AppDatabase.ImportedBoundaryFeature],
+        appDatabase: AppDatabase
+    ) throws -> AddedBoundariesDTO {
+        let set = try requireBoundarySet(boundarySetID, appDatabase: appDatabase)
+        let ids = try mappingBoundaryErrors {
+            try appDatabase.addBoundaries(toSet: boundarySetID, features: features)
+        }
+        postDatabaseChange()
+        return AddedBoundariesDTO(
+            boundarySetID: set.id,
+            boundarySetName: set.name,
+            boundaryCount: set.boundaryCount + ids.count,
+            added: zip(ids, features).map { id, feature in
+                // New rows take the schema default color.
+                BoundaryDTO(id: id, name: feature.name, color: BoundaryColor.red.rawValue)
+            }
+        )
+    }
+
+    private static func renameBoundary(
+        boundaryID: Int64,
+        name: String,
+        appDatabase: AppDatabase
+    ) throws -> BoundaryDTO {
+        let boundary = try requireBoundary(boundaryID, appDatabase: appDatabase)
+        try mappingBoundaryErrors {
+            try appDatabase.renameBoundary(id: boundaryID, newName: name)
+        }
+        postDatabaseChange()
+        return BoundaryDTO(
+            id: boundary.id,
+            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+            color: boundary.color.rawValue
+        )
+    }
+
+    private static func deleteBoundary(
+        boundaryID: Int64,
+        appDatabase: AppDatabase
+    ) throws -> DeletedBoundariesDTO {
+        _ = try requireBoundary(boundaryID, appDatabase: appDatabase)
+        let usage = try appDatabase.fetchBoundaryUsage(boundaryID: boundaryID)
+        try mappingBoundaryErrors {
+            try appDatabase.deleteBoundary(id: boundaryID)
+        }
+        postDatabaseChange()
+        return DeletedBoundariesDTO(deletedBoundaryCount: 1, usage: usage)
     }
 
     private static func listBoundaries(
@@ -2103,6 +2297,10 @@ enum MemorMCPTools {
             "description": .string("Object whose keys are field names and whose values are strings."),
             "additionalProperties": .object(["type": .string("string")])
         ])
+        let geoJSONFeatures: Value = .object([
+            "type": .array([.string("array"), .string("object")]),
+            "description": .string("Boundary geometry as inline GeoJSON: an array of Feature objects, or a FeatureCollection object. Each feature needs `properties.name` (a non-empty string — the boundary's display name) and a `geometry` of type \"Polygon\" or \"MultiPolygon\" with standard [longitude, latitude] coordinate pairs (longitude in [-180, 180], latitude in [-90, 90]; every ring has at least 3 points). Other properties are ignored and a Polygon is stored as a one-polygon MultiPolygon.")
+        ])
         return [
             Tool(
                 name: "list_types",
@@ -2527,8 +2725,55 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "list_boundary_sets",
-                description: "List the boundary sets (built-in collections of geographic boundary outlines, e.g. countries or US states) available for PointMap overlays and BoundaryMap attachments.",
+                description: "List the boundary sets (named collections of geographic boundary outlines — the built-in \"Countries\" set plus user sets) available for PointMap overlays and BoundaryMap attachments. Each set reports how many PointMap instances, BoundaryMap instances, and BoundaryMap queries use its boundaries (what delete_boundary_set would cascade through).",
                 inputSchema: .object(["type": .string("object"), "properties": .object([:])])
+            ),
+            Tool(
+                name: "create_boundary_set",
+                description: "Create a user boundary set, optionally with initial boundaries (`features`, GeoJSON — same format as add_boundaries). An empty set is allowed and can be filled with add_boundaries later. Geometry is copied into Memor's database; nothing references a file afterwards.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "name": stringValue,
+                        "features": geoJSONFeatures
+                    ]),
+                    "required": .array([.string("name")])
+                ])
+            ),
+            Tool(
+                name: "rename_boundary_set",
+                description: "Rename a user boundary set. The built-in \"Countries\" set cannot be renamed (its boundaries can — see rename_boundary).",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "boundary_set_id": int64Number,
+                        "name": stringValue
+                    ]),
+                    "required": .array([.string("boundary_set_id"), .string("name")])
+                ])
+            ),
+            Tool(
+                name: "delete_boundary_set",
+                description: "Delete a user boundary set. This cascades IRREVERSIBLY with no confirmation: every boundary in it is deleted, removed from every PointMap overlay and BoundaryMap instance, and those attachments' Forward/Reverse queries (including SRS progress) are removed. The built-in set cannot be deleted. Check the usage counts in list_boundary_sets first; the result reports what was cascaded.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "boundary_set_id": int64Number
+                    ]),
+                    "required": .array([.string("boundary_set_id")])
+                ])
+            ),
+            Tool(
+                name: "add_boundaries",
+                description: "Append boundaries to an existing set (the built-in \"Countries\" set included) from inline GeoJSON `features`. The batch is validated as a unit — one bad feature rejects the whole call and nothing is written. Names are not unique, so re-adding a feature creates a second boundary rather than replacing one. Returns the new boundaries (ids, names, default red color).",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "boundary_set_id": int64Number,
+                        "features": geoJSONFeatures
+                    ]),
+                    "required": .array([.string("boundary_set_id"), .string("features")])
+                ])
             ),
             Tool(
                 name: "list_boundaries",
@@ -2552,6 +2797,29 @@ enum MemorMCPTools {
                         "color": stringValue
                     ]),
                     "required": .array([.string("boundary_id"), .string("color")])
+                ])
+            ),
+            Tool(
+                name: "rename_boundary",
+                description: "Rename a single boundary (allowed in the built-in \"Countries\" set too). Renaming never affects the instances or queries that use it.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "boundary_id": int64Number,
+                        "name": stringValue
+                    ]),
+                    "required": .array([.string("boundary_id"), .string("name")])
+                ])
+            ),
+            Tool(
+                name: "delete_boundary",
+                description: "Delete a single boundary (allowed in the built-in \"Countries\" set too — it only comes back by re-adding its geometry with add_boundaries). This cascades IRREVERSIBLY with no confirmation: the boundary is removed from every PointMap overlay and BoundaryMap instance, and those attachments' Forward/Reverse queries (including SRS progress) are removed. The result reports what was cascaded.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "boundary_id": int64Number
+                    ]),
+                    "required": .array([.string("boundary_id")])
                 ])
             ),
 
@@ -2886,12 +3154,19 @@ private struct BoundarySetDTO: Encodable {
     let name: String
     let isBuiltin: Bool
     let boundaryCount: Int
+    // What deleting the set would cascade through.
+    let pointmapInstanceCount: Int
+    let boundarymapInstanceCount: Int
+    let boundarymapQueryCount: Int
 
-    init(_ set: BoundarySet) {
+    init(_ set: BoundarySet, usage: AppDatabase.BoundaryUsage) {
         id = set.id
         name = set.name
         isBuiltin = set.isBuiltin
         boundaryCount = set.boundaryCount
+        pointmapInstanceCount = usage.pointMapInstanceCount
+        boundarymapInstanceCount = usage.boundaryMapInstanceCount
+        boundarymapQueryCount = usage.boundaryMapQueryCount
     }
 }
 
@@ -2899,6 +3174,30 @@ private struct BoundaryDTO: Encodable {
     let id: Int64
     let name: String
     let color: String
+}
+
+private struct AddedBoundariesDTO: Encodable {
+    let boundarySetID: Int64
+    let boundarySetName: String
+    /// The set's size after the addition.
+    let boundaryCount: Int
+    let added: [BoundaryDTO]
+}
+
+/// Result of delete_boundary / delete_boundary_set: what the cascade removed.
+private struct DeletedBoundariesDTO: Encodable {
+    let ok = true
+    let deletedBoundaryCount: Int
+    let removedFromPointmapInstances: Int
+    let removedFromBoundarymapInstances: Int
+    let removedBoundarymapQueries: Int
+
+    init(deletedBoundaryCount: Int, usage: AppDatabase.BoundaryUsage) {
+        self.deletedBoundaryCount = deletedBoundaryCount
+        removedFromPointmapInstances = usage.pointMapInstanceCount
+        removedFromBoundarymapInstances = usage.boundaryMapInstanceCount
+        removedBoundarymapQueries = usage.boundaryMapQueryCount
+    }
 }
 
 private struct RenderedPointDTO: Encodable {
