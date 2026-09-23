@@ -71,6 +71,8 @@ struct InstanceEditorWindowView: View {
     @State private var pointMapMapSelection: String?
     @State private var pointMapListSelection: Set<PointMapEntryRef> = []
     @State private var boundaryMapListSelection: Set<BoundaryMapEntryRef> = []
+    // The boundary list row whose right-click → Rename… popover is open.
+    @State private var boundaryMapRenameTarget: BoundaryMapEntryRef?
     @StateObject private var pointMapPointController = AddPointPopupController()
     @StateObject private var movePointsPickerController = PickerPanelController()
     @State private var isBoundaryPickerPresented = false
@@ -824,6 +826,54 @@ struct InstanceEditorWindowView: View {
         NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
     }
 
+    /// Item-based popover presentation scoped to ONE list row: the modifier
+    /// sits on every row, so a shared target would open the popover from all
+    /// of them. A row sees the target only when it is that row's ref.
+    private func boundaryMapRenameItem(for ref: BoundaryMapEntryRef) -> Binding<BoundaryMapEntryRef?> {
+        Binding(
+            get: { boundaryMapRenameTarget == ref ? ref : nil },
+            set: { newValue in
+                if newValue == nil, boundaryMapRenameTarget == ref {
+                    boundaryMapRenameTarget = nil
+                }
+            }
+        )
+    }
+
+    /// RenamePopover commit: returns an error to show in place, or nil once
+    /// the rename is saved. Like the color, a boundary's name belongs to the
+    /// boundary itself (not this draft), so it is written to the DB at once
+    /// and every draft copy of it is patched to match.
+    private func commitBoundaryRename(boundaryID: Int64, currentName: String, newName: String) -> String? {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Name cannot be empty." }
+        guard trimmed != currentName else {
+            boundaryMapRenameTarget = nil
+            return nil
+        }
+        do {
+            try appDatabase.renameBoundary(id: boundaryID, newName: trimmed)
+        } catch {
+            return "Rename failed: \(error.localizedDescription)"
+        }
+        boundaryMapRenameTarget = nil
+        for index in draft.boundaryMapExistingAttachments.indices
+        where draft.boundaryMapExistingAttachments[index].boundaryID == boundaryID {
+            draft.boundaryMapExistingAttachments[index].name = trimmed
+        }
+        for index in draft.boundaryMapNewAttachments.indices
+        where draft.boundaryMapNewAttachments[index].boundaryID == boundaryID {
+            draft.boundaryMapNewAttachments[index].name = trimmed
+        }
+        draft.boundaryPickerState.reload(appDatabase: appDatabase)
+        draft.boundaryMapPickerState.reload(appDatabase: appDatabase)
+        refreshBoundaryGeometries()
+        refreshBoundaryMapGeometries()
+        NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
+        showToast(message: "Renamed to \u{201C}\(trimmed)\u{201D}", style: .success)
+        return nil
+    }
+
     private func mapContextMenuActions(at localPoint: CGPoint, proxy: MapProxy) -> [MapMenuAction] {
         let hitRadius: CGFloat = 12
         for entry in pointMapDisplayPoints {
@@ -1287,11 +1337,32 @@ struct InstanceEditorWindowView: View {
                                 reverseEnabled: boundaryMapReverseBinding(for: entry.ref)
                             )
                             .tag(entry.ref)
+                            .popover(item: boundaryMapRenameItem(for: entry.ref), arrowEdge: .bottom) { _ in
+                                RenamePopover(
+                                    title: "Rename Boundary",
+                                    placeholder: "Boundary Name",
+                                    initialName: entry.name,
+                                    onCommit: { newName in
+                                        commitBoundaryRename(
+                                            boundaryID: entry.boundaryID,
+                                            currentName: entry.name,
+                                            newName: newName
+                                        )
+                                    },
+                                    onCancel: { boundaryMapRenameTarget = nil }
+                                )
+                            }
                         }
                     }
                     .listStyle(.inset)
                     .contextMenu(forSelectionType: BoundaryMapEntryRef.self) { refs in
                         if !refs.isEmpty {
+                            // Renaming edits the boundary itself (app-wide,
+                            // like its color), so it's a one-row action.
+                            if refs.count == 1, let ref = refs.first {
+                                Button("Rename…") { boundaryMapRenameTarget = ref }
+                                Divider()
+                            }
                             Menu("Enable Queries") {
                                 Button("Forward") { setBoundaryMapEntriesEnabled(refs, forward: true, reverse: nil) }
                                 Button("Reverse") { setBoundaryMapEntriesEnabled(refs, forward: nil, reverse: true) }

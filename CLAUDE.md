@@ -52,6 +52,10 @@ Memor/
   PointMap/
     PointMapInstanceEditor.swift    PointMap editor state, sort modes, entry refs, add-point popup, entry row, right-click menu
     PointMapQueryView.swift         PointMap query rendering + MapPointMarker
+    BoundaryPicker.swift            Boundary picker popover (PointMap overlays + BoundaryMap attachments) + BoundaryUploader (file read/validate → new set or append to an existing set)
+  BoundaryMap/
+    BoundaryMapInstanceEditor.swift BoundaryMap attachment draft, sort modes, entry refs, list entry row (color circle + →/← checkboxes), point-in-polygon hit test. The editor's list context menu (in InstanceEditorWindowView) has a one-row "Rename…" that writes the boundary's app-wide name through immediately (like color) and patches the draft copies
+    BoundaryMapQueryView.swift      BoundaryMap query rendering
   Shortcuts/
     KeyBinding.swift                Codable keystroke model (key + modifiers, NSEvent matching)
     ShortcutAction.swift            Enum registry of every user-customizable shortcut
@@ -63,6 +67,7 @@ Memor/
     BoundaryColorViews.swift        Per-boundary border color UI: color mappings, indicator circle, "Color:" picker popover, right-click catcher
     FlowLayout.swift                Wrapping chip layout (used by the Person editor)
     ToastView.swift                 ToastMessage, ToastStyle, ToastView (used by InstanceEditor)
+    RenamePopover.swift             App-standard "Rename X" popover (name field, in-place error, Cancel/Rename); present via a row-scoped `.popover(item:)` — used by Manage Boundaries and the BoundaryMap editor list
     WindowKeyCommandHandler.swift   Background NSViewRepresentable wiring ⌘Return/⌘S/⌘B/⌘I/⌘O/⌘J/⌘L/⌘T/Esc
     PlainTextEditor.swift           NSTextView wrapper for plain-text fields
     PlainCodeTextView.swift         Code editor NSTextView + FocusedEditor + query-type editor split view

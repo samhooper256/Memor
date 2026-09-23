@@ -16,7 +16,8 @@ import SwiftUI
 struct BoundaryMapAttachmentDraft: Identifiable, Hashable {
     let localID: UUID
     let boundaryID: Int64
-    let name: String
+    // Display copy of the boundary's app-wide name (see BoundaryMapAttachedBoundary).
+    var name: String
     var forwardEnabled: Bool = true
     var reverseEnabled: Bool = false
 

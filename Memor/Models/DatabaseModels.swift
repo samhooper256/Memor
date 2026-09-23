@@ -105,7 +105,9 @@ struct BoundaryMapAttachedBoundary: Identifiable, Hashable {
     let id: Int64
     let instanceID: Int64
     let boundaryID: Int64
-    let name: String
+    // A display copy of the boundary's app-wide name; the editor patches it
+    // after an in-editor rename.
+    var name: String
     var forwardEnabled: Bool = true
     var reverseEnabled: Bool = false
 }
