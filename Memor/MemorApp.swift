@@ -53,6 +53,9 @@ struct MemorApp: App {
 
     init() {
         registerSubstitutionKillDefaults()
+        // No window tabs: the tab bar's "+" (and View › Show Tab Bar) would
+        // otherwise be another way to spawn window copies.
+        NSWindow.allowsAutomaticWindowTabbing = false
         do {
             appDatabase = try AppDatabase()
         } catch {
@@ -63,7 +66,10 @@ struct MemorApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("Memor") {
+        // A single-instance `Window` (not a `WindowGroup`): there is only ever
+        // one main window. See also the emptied `.newItem` command group and
+        // `allowsAutomaticWindowTabbing = false` in init.
+        Window("Memor", id: "main") {
             ContentView(appDatabase: appDatabase)
                 .environmentObject(navigationState)
                 .environmentObject(addInstanceWindowState)
@@ -256,6 +262,9 @@ struct MemorApp: App {
                     openWindow(id: "manage-boundaries")
                 }
             }
+
+            // Drop File › New (⌘N): every window is single-instance.
+            CommandGroup(replacing: .newItem) {}
 
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") {
