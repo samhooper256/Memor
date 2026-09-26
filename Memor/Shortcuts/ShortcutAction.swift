@@ -148,7 +148,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         case .goToCollectionsTab: return KeyBinding(key: "3", modifiers: .command)
         case .goToTypesTab: return KeyBinding(key: "4", modifiers: .command)
         case .goToGraphTab: return KeyBinding(key: "5", modifiers: .command)
-        case .openAddInstance: return KeyBinding(key: "A", modifiers: [.command, .shift])
+        case .openAddInstance: return KeyBinding(key: "N", modifiers: .command)
         case .openSearchInstances: return KeyBinding(key: "S", modifiers: [.command, .shift])
         case .openSearchQueries: return KeyBinding(key: "S", modifiers: [.command, .option])
         case .openSettings: return KeyBinding(key: "Comma", modifiers: .command)

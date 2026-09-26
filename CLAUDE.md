@@ -236,7 +236,7 @@ navigates to the linked instance).
 | Action | Default |
 |---|---|
 | Go to Stacks / Instances / Collections / Types / Graph | ⌘1–⌘5 |
-| Add Instance | ⌘⇧A |
+| Add Instance | ⌘N |
 | Open Search (preserves last mode) | ⌘⇧S |
 | Open Search in Queries mode | ⌘⌥S |
 | Search — switch mode (Instances / Queries / Points & Boundaries) | Shift+Tab |
@@ -265,7 +265,7 @@ navigates to the linked instance).
 - Play UI sound effects only through `RatingSounds`' background playback queue, never `NSSound.play()` on the main thread — `play()` synchronously primes its playback channel before returning (~10–30ms warm, ~0.5s on the process's first play), which delays everything queued behind it (this was the main source of the rating-press lag in Study mode).
 - Prefer `pointerStyle(...)` over NSCursor for hover effects
 - Escape key closes all secondary windows
-- The main window is a single-instance `Window("Memor", id: "main")`, never a `WindowGroup` — only one copy may exist. File › New (⌘N) is emptied via `CommandGroup(replacing: .newItem) {}` and `NSWindow.allowsAutomaticWindowTabbing = false` (MemorApp.init) removes the tab bar's "+"
+- The main window is a single-instance `Window("Memor", id: "main")`, never a `WindowGroup` — only one copy may exist. File › New Window is emptied via `CommandGroup(replacing: .newItem) {}` and `NSWindow.allowsAutomaticWindowTabbing = false` (MemorApp.init) removes the tab bar's "+"
 - Customizable keyboard shortcuts are routed through `ShortcutSettings` / `.shortcut(.action, settings:)` — don't hard-code `.keyboardShortcut(...)` for actions a user should be able to rebind.
 - Popover/sheet content that depends on optional state must use ITEM-based presentation (`.popover(item:)`), never `isPresented:` + `if let` around the whole content — the content closure can evaluate against a nil snapshot and present an EmptyView popover (a tiny empty circle). `PickerPanelState` is `Identifiable` (explicitly — NSObject subclasses don't satisfy the generic requirement on their own) for exactly this.
 - Copy `StudyQuery` only via its copy-helpers (`withFieldValues` / `withStudyOutcome` in Models/DatabaseModels.swift), never with a memberwise `StudyQuery(...)` — the defaulted identity fields (`personQueryKind`/`personPartnershipID`/`personOfficeID`) drop silently and turn a Person card into a broken standard card.
