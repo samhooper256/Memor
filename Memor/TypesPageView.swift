@@ -36,6 +36,12 @@ struct TypesPageView: View {
     @State private var duplicateTypeError: String?
     @FocusState private var isDuplicateTypeNameFocused: Bool
 
+    private var titleText: String {
+        let count = types.count
+        let noun = count == 1 ? "Type" : "Types"
+        return "\(count) \(noun)"
+    }
+
     private var filteredTypes: [FlashcardType] {
         let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return types }
@@ -142,7 +148,7 @@ struct TypesPageView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(spacing: 8) {
-                    Text(AppTab.types.title)
+                    Text(titleText)
                         .font(.largeTitle)
                         .fontWeight(.semibold)
 
