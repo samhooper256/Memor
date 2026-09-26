@@ -41,7 +41,7 @@ struct InstancesPageView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 8) {
-                Text("Instances")
+                Text(titleText)
                     .font(.largeTitle)
                     .fontWeight(.semibold)
 
@@ -189,10 +189,13 @@ struct InstancesPageView: View {
             }
         }
         .onChange(of: addInstanceWindowState.latestAddNonce) { _, _ in
-            guard addInstanceWindowState.latestAddedTypeID == selectedTypeID else { return }
+            let isSelectedType = addInstanceWindowState.latestAddedTypeID == selectedTypeID
             Task {
+                // Always reload types: the title counts instances of every type.
                 await loadTypes()
-                await loadPageData()
+                if isSelectedType {
+                    await loadPageData()
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .memorDidChangeDatabase)) { _ in
@@ -250,6 +253,12 @@ struct InstancesPageView: View {
     private var selectedType: FlashcardType? {
         guard let selectedTypeID else { return nil }
         return types.first(where: { $0.id == selectedTypeID })
+    }
+
+    private var titleText: String {
+        let count = types.reduce(0) { $0 + $1.instanceCount }
+        let noun = count == 1 ? "Instance" : "Instances"
+        return "\(count) \(noun)"
     }
 
     private func resultsCountText(for pageData: TypeInstancesPageData) -> String {
