@@ -50,6 +50,11 @@ struct InstanceEditorWindowView: View {
     @State private var collectionsScrollNonce = UUID()
     @State private var addScrollNonce = UUID()   // bumped after an add to reset field scroll
     @State private var highlightedCollectionID: Int64?   // C; nil = none
+    // The Collections header's "+ Add" popover (styled like the Collection
+    // detail page's rename popover).
+    @State private var isNewCollectionPopoverPresented = false
+    @State private var newCollectionName = ""
+    @FocusState private var isNewCollectionFieldFocused: Bool
     @StateObject private var focusController = AddInstanceFieldFocusController()
     @StateObject private var hyperlinkSearchController = HyperlinkSearchController()
     @StateObject private var typePickerController = TypePickerController()
@@ -2117,6 +2122,20 @@ struct InstanceEditorWindowView: View {
                         .font(.headline)
                         .foregroundStyle(.blue)
                 }
+
+                Spacer(minLength: 0)
+
+                Button {
+                    newCollectionName = ""
+                    isNewCollectionPopoverPresented = true
+                } label: {
+                    Label("Add", systemImage: "plus")
+                        .labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(.borderless)
+                .popover(isPresented: $isNewCollectionPopoverPresented, arrowEdge: .bottom) {
+                    newCollectionPopover
+                }
             }
 
             CollectionSearchTextField(
@@ -2201,6 +2220,67 @@ struct InstanceEditorWindowView: View {
             onApplyPointMapViewport: applyExplicitPointMapViewport,
             onApplyBoundaryMapViewport: applyExplicitBoundaryMapViewport
         )
+    }
+
+    private var newCollectionPopover: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("New Collection")
+                .font(.headline)
+
+            TextField("Collection Name", text: $newCollectionName)
+                .solidFocusField()
+                .focused($isNewCollectionFieldFocused)
+                .onSubmit {
+                    createCollectionFromPopover()
+                }
+
+            if AppDatabase.nameStartsWithDigit(newCollectionName) {
+                Text("A collection name cannot start with a digit.")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            HStack {
+                Spacer()
+
+                Button("Cancel") {
+                    isNewCollectionPopoverPresented = false
+                }
+
+                Button("Add") {
+                    createCollectionFromPopover()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(
+                    newCollectionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || AppDatabase.nameStartsWithDigit(newCollectionName)
+                )
+            }
+        }
+        .padding(16)
+        .frame(width: 280)
+        .onAppear {
+            DispatchQueue.main.async {
+                isNewCollectionFieldFocused = true
+            }
+        }
+    }
+
+    // Creates the collection immediately, then checks it for this instance's
+    // draft (persisted with the rest of the draft on save, like any checkbox).
+    private func createCollectionFromPopover() {
+        let trimmed = newCollectionName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !AppDatabase.nameStartsWithDigit(trimmed) else { return }
+        do {
+            let collection = try appDatabase.createCollection(name: trimmed)
+            isNewCollectionPopoverPresented = false
+            collectionSearchQuery = ""
+            loadCollectionItems()
+            draft.selectedCollectionIDs.insert(collection.id)
+            NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
+        } catch {
+            showToast(message: "Failed to add collection.", style: .error)
+        }
     }
 
     private func togglePin(for item: CollectionChecklistItem) {
