@@ -87,42 +87,59 @@ func injectQueryCSS(into html: String, appDatabase: AppDatabase, typeCSS: String
         """
 }
 
+/// Instance-editor state that rendering uses in place of what the database
+/// holds for the instance, so a Query Preview of a draft (Add mode) or of
+/// unsaved edits (Edit mode) shows the instance as it will be once saved.
+/// Field values ride the StudyQuery itself (`withFieldValues`); these cover
+/// the rest. `.none` renders saved state (Study, Search, MCP).
+struct QueryRenderOverrides {
+    /// The draft's checked collections, for {{#CollectionClasses}}/{{#CollectionIDs}}.
+    var collectionIDs: Set<Int64>? = nil
+    /// A Person draft's office stints, for the `_offices` element.
+    var personOffices: [PersonOfficeDraft]? = nil
+
+    static let none = QueryRenderOverrides()
+}
+
 func buildRenderedQuestionHTML(
     appDatabase: AppDatabase,
     query: StudyQuery,
-    collectionIDsOverride: Set<Int64>? = nil
+    overrides: QueryRenderOverrides = .none
 ) throws -> String {
     let previewHTML = try generatePreviewHTMLForQuestion(
         appDatabase: appDatabase,
         questionHTML: query.questionHTML,
-        instanceID: query.instanceID,
-        collectionIDsOverride: collectionIDsOverride
+        instanceID: query.persistedInstanceID,
+        collectionIDsOverride: overrides.collectionIDs
     )
-    let (substitutedHTML, typeCSS) = try substitutingPersonOffices(
-        appDatabase: appDatabase, query: query, html: previewHTML
-    )
-    let renderedHTML = renderQueryHTMLTemplate(
-        substitutedHTML,
-        fieldValuesByName: query.fieldValuesByName,
-        booleanFieldNames: query.booleanFieldNames
-    )
-    return try injectQueryCSS(into: renderedHTML, appDatabase: appDatabase, typeCSS: typeCSS)
+    return try finishRenderedQueryHTML(previewHTML, appDatabase: appDatabase, query: query, overrides: overrides)
 }
 
 func buildRenderedAnswerHTML(
     appDatabase: AppDatabase,
     query: StudyQuery,
-    collectionIDsOverride: Set<Int64>? = nil
+    overrides: QueryRenderOverrides = .none
 ) throws -> String {
     let previewHTML = try generatePreviewHTMLForAnswer(
         appDatabase: appDatabase,
         questionHTML: query.questionHTML,
         answerHTML: query.answerHTML,
-        instanceID: query.instanceID,
-        collectionIDsOverride: collectionIDsOverride
+        instanceID: query.persistedInstanceID,
+        collectionIDsOverride: overrides.collectionIDs
     )
+    return try finishRenderedQueryHTML(previewHTML, appDatabase: appDatabase, query: query, overrides: overrides)
+}
+
+/// The steps shared by question and answer after the global wrapper and
+/// instance tokens: `_offices`, {{FieldName}} substitution, then CSS.
+private func finishRenderedQueryHTML(
+    _ previewHTML: String,
+    appDatabase: AppDatabase,
+    query: StudyQuery,
+    overrides: QueryRenderOverrides
+) throws -> String {
     let (substitutedHTML, typeCSS) = try substitutingPersonOffices(
-        appDatabase: appDatabase, query: query, html: previewHTML
+        appDatabase: appDatabase, query: query, html: previewHTML, draftOffices: overrides.personOffices
     )
     let renderedHTML = renderQueryHTMLTemplate(
         substitutedHTML,
@@ -138,15 +155,25 @@ func buildRenderedAnswerHTML(
 /// typeCSS to inject — a standard Person query's typeCSS lacks the built-in
 /// default CSS that styles the generated .office-succession/.person-* markup,
 /// so it is prepended here (built-in Person queries already carry it).
+/// `draftOffices` (editor previews) replaces the saved stints.
 private func substitutingPersonOffices(
     appDatabase: AppDatabase,
     query: StudyQuery,
-    html: String
+    html: String,
+    draftOffices: [PersonOfficeDraft]?
 ) throws -> (html: String, typeCSS: String) {
     guard query.typeName == PERSON_TYPE_NAME, html.contains("_offices") else {
         return (html, query.typeCSS)
     }
-    let substituted = try appDatabase.renderPersonOfficesElements(in: html, instanceID: query.instanceID)
+    let substituted: String
+    if let draftOffices {
+        substituted = try appDatabase.renderPersonOfficesElements(in: html, draftOffices: draftOffices)
+    } else if let instanceID = query.persistedInstanceID {
+        substituted = try appDatabase.renderPersonOfficesElements(in: html, instanceID: instanceID)
+    } else {
+        // No instance and no draft (not reachable from the editor): leave as typed.
+        substituted = html
+    }
     let typeCSS = query.personQueryKind == nil
         ? AppDatabase.personBuiltinQueryDefaultCSS + "\n\n" + query.typeCSS
         : query.typeCSS

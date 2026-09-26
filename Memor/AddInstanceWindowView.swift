@@ -122,112 +122,66 @@ final class EditInstanceWindowState: ObservableObject {
     }
 }
 
+/// Everything in an instance editor's draft that affects how its queries
+/// render, captured when a preview is requested. Editor previews render ONLY
+/// from this (plus type-level data: query type HTML, CSS, office names, other
+/// people's names) — never from the edited instance's saved row — so the
+/// Query Preview shows the instance exactly as it will be once saved, in Add
+/// and Edit mode alike. A new draft input that affects rendering belongs here.
+struct InstanceDraftPreviewSnapshot {
+    /// The draft's selected type (may differ from the saved type in Edit mode).
+    let typeID: Int64
+    /// The edited instance's row in Edit mode; nil for an Add-mode draft.
+    let instanceID: Int64?
+    /// Field values, normalized exactly as saving would store them.
+    let fieldValuesByName: [String: String]
+    /// The draft's checked collections.
+    let collectionIDs: Set<Int64>
+    /// The drafted relationships and office stints; nil unless the type is Person.
+    let personRelations: PersonRelationsDraft?
+
+    var renderOverrides: QueryRenderOverrides {
+        QueryRenderOverrides(collectionIDs: collectionIDs, personOffices: personRelations?.offices)
+    }
+}
+
+/// Which of the draft's queries an editor preview shows.
+enum InstanceDraftPreviewTarget {
+    case queryType(Int64)
+    /// A built-in Person query. `partnerIndex` addresses the drafted partners
+    /// for .childrenWith; `officeIndex` picks the previewed OFFICE for
+    /// .office (via any of its stint entries — every stint renders).
+    case personBuiltin(kind: PersonQueryKind, partnerIndex: Int?, officeIndex: Int?)
+}
+
+enum QueryPreviewRequest {
+    /// Saved state (Search, Study, link navigation). A nil query type shows
+    /// the instance's first query.
+    case saved(instanceID: Int64, queryTypeID: Int64?)
+    /// The instance editor's current draft.
+    case draft(InstanceDraftPreviewSnapshot, InstanceDraftPreviewTarget)
+}
+
 @MainActor
 final class QueryPreviewWindowState: ObservableObject {
-    @Published private(set) var requestedInstanceID: Int64?
-    // Non-nil only for draft previews from the Add Instance window, where the
-    // previewed "instance" has no row in the database yet — the query is built
-    // from the type + query type instead.
-    @Published private(set) var requestedTypeID: Int64?
-    @Published private(set) var requestedQueryTypeID: Int64?
-    @Published private(set) var requestedFieldValuesByName: [String: String]?
-    // Built-in Person query previews from the instance editor: the FULL
-    // drafted relations ride the request so unsaved relationship/office edits
-    // render (both modes). partnerIndex/officeIndex pick the childrenWith
-    // partner entry / office holding; selfInstanceID is the edited person's
-    // row in Edit mode and nil in Add mode.
-    @Published private(set) var requestedPersonKind: PersonQueryKind?
-    @Published private(set) var requestedPersonRelationsDraft: PersonRelationsDraft?
-    @Published private(set) var requestedPersonDraftPartnerIndex: Int?
-    @Published private(set) var requestedPersonDraftOfficeIndex: Int?
-    @Published private(set) var requestedPersonDraftSelfInstanceID: Int64?
-    // Non-nil only for previews requested by the instance editor: the draft's
-    // currently-checked collections, so {{#CollectionClasses}}/{{#CollectionIDs}}
-    // reflect unsaved checkbox state instead of the persisted membership.
-    @Published private(set) var requestedCollectionIDs: Set<Int64>?
+    @Published private(set) var request: QueryPreviewRequest?
     @Published private(set) var requestNonce = UUID()
 
-    func requestOpen(
-        instanceID: Int64,
-        queryTypeID: Int64,
-        fieldValuesByName: [String: String]? = nil,
-        collectionIDs: Set<Int64>? = nil
-    ) {
-        requestedInstanceID = instanceID
-        requestedTypeID = nil
-        requestedQueryTypeID = queryTypeID
-        requestedFieldValuesByName = fieldValuesByName
-        requestedPersonKind = nil
-        requestedPersonRelationsDraft = nil
-        requestedPersonDraftPartnerIndex = nil
-        requestedPersonDraftOfficeIndex = nil
-        requestedPersonDraftSelfInstanceID = nil
-        requestedCollectionIDs = collectionIDs
-        requestNonce = UUID()
+    func requestOpen(instanceID: Int64, queryTypeID: Int64) {
+        open(.saved(instanceID: instanceID, queryTypeID: queryTypeID))
     }
 
     func requestOpenFirstQuery(instanceID: Int64) {
-        requestedInstanceID = instanceID
-        requestedTypeID = nil
-        requestedQueryTypeID = nil
-        requestedFieldValuesByName = nil
-        requestedPersonKind = nil
-        requestedPersonRelationsDraft = nil
-        requestedPersonDraftPartnerIndex = nil
-        requestedPersonDraftOfficeIndex = nil
-        requestedPersonDraftSelfInstanceID = nil
-        requestedCollectionIDs = nil
-        requestNonce = UUID()
+        open(.saved(instanceID: instanceID, queryTypeID: nil))
     }
 
-    /// Preview a query for an unsaved instance being composed in the Add Instance
-    /// window. The query is built from `typeID` + `queryTypeID` (no instance row),
-    /// with the editor's current field values supplied as overrides.
-    func requestOpenDraft(
-        typeID: Int64,
-        queryTypeID: Int64,
-        fieldValuesByName: [String: String],
-        collectionIDs: Set<Int64>? = nil
-    ) {
-        requestedInstanceID = nil
-        requestedTypeID = typeID
-        requestedQueryTypeID = queryTypeID
-        requestedFieldValuesByName = fieldValuesByName
-        requestedPersonKind = nil
-        requestedPersonRelationsDraft = nil
-        requestedPersonDraftPartnerIndex = nil
-        requestedPersonDraftOfficeIndex = nil
-        requestedPersonDraftSelfInstanceID = nil
-        requestedCollectionIDs = collectionIDs
-        requestNonce = UUID()
+    /// Preview one of the instance editor's queries from its CURRENT draft.
+    func requestOpenDraft(_ snapshot: InstanceDraftPreviewSnapshot, target: InstanceDraftPreviewTarget) {
+        open(.draft(snapshot, target))
     }
 
-    /// Preview a built-in Person query from the instance editor's CURRENT
-    /// draft state (Add and Edit modes alike): relations, offices, and field
-    /// values come from the editor rather than the database, so unsaved edits
-    /// render. `partnerIndex` picks the childrenWith partner entry;
-    /// `officeIndex` picks the previewed OFFICE for .office (via any of its
-    /// draft entries — the preview renders every stint of that office);
-    /// `selfInstanceID` is nil for a person with no row yet (Add mode).
-    func requestOpenPersonDraft(
-        kind: PersonQueryKind,
-        relations: PersonRelationsDraft,
-        partnerIndex: Int?,
-        officeIndex: Int?,
-        selfInstanceID: Int64?,
-        fieldValuesByName: [String: String],
-        collectionIDs: Set<Int64>? = nil
-    ) {
-        requestedInstanceID = nil
-        requestedTypeID = nil
-        requestedQueryTypeID = nil
-        requestedFieldValuesByName = fieldValuesByName
-        requestedPersonKind = kind
-        requestedPersonRelationsDraft = relations
-        requestedPersonDraftPartnerIndex = partnerIndex
-        requestedPersonDraftOfficeIndex = officeIndex
-        requestedPersonDraftSelfInstanceID = selfInstanceID
-        requestedCollectionIDs = collectionIDs
+    private func open(_ request: QueryPreviewRequest) {
+        self.request = request
         requestNonce = UUID()
     }
 }

@@ -23,7 +23,10 @@ struct QueryPreviewWindowView: View {
     @State private var query: StudyQuery?
     @State private var renderedAnswerHTML = ""
     @State private var errorMessage: String?
-    @State private var historyStack: [(query: StudyQuery, html: String)] = []
+    /// The draft state the shown query was rendered with (`.none` for saved
+    /// queries); kept so arrow-key office navigation follows the draft too.
+    @State private var renderOverrides = QueryRenderOverrides.none
+    @State private var historyStack: [(query: StudyQuery, html: String, overrides: QueryRenderOverrides)] = []
     @State private var isInternalNavigation = false
     /// True once the webview has committed a non-empty page this session.
     /// Gates the loading spinner: the webview is transparent until its first
@@ -123,6 +126,7 @@ struct QueryPreviewWindowView: View {
                 // web view first, then load after the blank state applies, so the
                 // window can never appear showing the old query.
                 query = nil
+                renderOverrides = .none
                 renderedAnswerHTML = ""
                 errorMessage = nil
                 hasCommittedContent = false
@@ -138,6 +142,7 @@ struct QueryPreviewWindowView: View {
             // the reopened window shows the previous session's query until the
             // new one commits.
             query = nil
+            renderOverrides = .none
             renderedAnswerHTML = ""
             errorMessage = nil
             historyStack = []
@@ -149,58 +154,68 @@ struct QueryPreviewWindowView: View {
 
     private func loadPreview() {
         do {
-            let baseQuery: StudyQuery
-            if let personKind = windowState.requestedPersonKind,
-               let relations = windowState.requestedPersonRelationsDraft {
-                // Built-in Person query from the instance editor: computed
-                // from the DRAFTED relations/offices (both modes) so unsaved
-                // edits render.
-                baseQuery = try appDatabase.fetchPersonDraftPreview(
-                    kind: personKind,
-                    relations: relations,
-                    partnerIndex: windowState.requestedPersonDraftPartnerIndex,
-                    officeIndex: windowState.requestedPersonDraftOfficeIndex,
-                    selfInstanceID: windowState.requestedPersonDraftSelfInstanceID
-                )
-            } else if let typeID = windowState.requestedTypeID,
-               let queryTypeID = windowState.requestedQueryTypeID {
-                // Draft preview from the Add Instance window: no instance row yet.
-                baseQuery = try appDatabase.fetchQueryTypePreview(
-                    typeID: typeID,
-                    queryTypeID: queryTypeID
-                )
-            } else if let instanceID = windowState.requestedInstanceID {
-                baseQuery = if let queryTypeID = windowState.requestedQueryTypeID {
+            let query: StudyQuery
+            let overrides: QueryRenderOverrides
+            switch windowState.request {
+            case .saved(let instanceID, let queryTypeID)?:
+                query = if let queryTypeID {
                     try appDatabase.fetchQueryPreview(instanceID: instanceID, queryTypeID: queryTypeID)
                 } else {
                     try appDatabase.fetchFirstQueryPreview(instanceID: instanceID)
                 }
-            } else {
-                query = nil
+                overrides = .none
+            case .draft(let snapshot, let target)?:
+                // Instance-editor preview: built from the draft snapshot alone
+                // (never the edited instance's saved row), both modes.
+                let baseQuery: StudyQuery
+                switch target {
+                case .queryType(let queryTypeID):
+                    baseQuery = try appDatabase.fetchQueryTypePreview(
+                        typeID: snapshot.typeID,
+                        queryTypeID: queryTypeID,
+                        instanceID: snapshot.instanceID
+                    )
+                case .personBuiltin(let kind, let partnerIndex, let officeIndex):
+                    guard let relations = snapshot.personRelations else {
+                        self.query = nil
+                        renderOverrides = .none
+                        renderedAnswerHTML = ""
+                        errorMessage = "Failed to load query preview."
+                        return
+                    }
+                    baseQuery = try appDatabase.fetchPersonDraftPreview(
+                        kind: kind,
+                        relations: relations,
+                        partnerIndex: partnerIndex,
+                        officeIndex: officeIndex,
+                        selfInstanceID: snapshot.instanceID,
+                        fieldValuesByName: snapshot.fieldValuesByName
+                    )
+                }
+                query = baseQuery.withFieldValues(snapshot.fieldValuesByName)
+                overrides = snapshot.renderOverrides
+            case nil:
+                self.query = nil
                 renderedAnswerHTML = ""
                 errorMessage = "No query preview selected."
                 return
             }
 
-            let query: StudyQuery
-            if let overrides = windowState.requestedFieldValuesByName {
-                query = baseQuery.withFieldValues(overrides)
-            } else {
-                query = baseQuery
-            }
             self.query = query
+            renderOverrides = overrides
             if query.kind == .pointMap || query.kind == .boundaryMap {
                 renderedAnswerHTML = ""
             } else {
                 renderedAnswerHTML = try buildRenderedAnswerHTML(
                     appDatabase: appDatabase,
                     query: query,
-                    collectionIDsOverride: windowState.requestedCollectionIDs
+                    overrides: overrides
                 )
             }
             errorMessage = nil
         } catch {
             self.query = nil
+            renderOverrides = .none
             renderedAnswerHTML = ""
             errorMessage = "Failed to load query preview."
         }
@@ -210,21 +225,24 @@ struct QueryPreviewWindowView: View {
         guard let previous = historyStack.popLast() else { return }
         query = previous.query
         renderedAnswerHTML = previous.html
+        renderOverrides = previous.overrides
         errorMessage = nil
     }
 
-    private func navigateToInstance(_ instanceID: Int64) {
+    private func pushHistory() {
         if let query {
-            historyStack.append((query: query, html: renderedAnswerHTML))
+            historyStack.append((query: query, html: renderedAnswerHTML, overrides: renderOverrides))
         }
+    }
+
+    private func navigateToInstance(_ instanceID: Int64) {
+        pushHistory()
         isInternalNavigation = true
         windowState.requestOpenFirstQuery(instanceID: instanceID)
     }
 
     private func navigateToQuery(_ instanceID: Int64, _ queryTypeID: Int64) {
-        if let query {
-            historyStack.append((query: query, html: renderedAnswerHTML))
-        }
+        pushHistory()
         isInternalNavigation = true
         windowState.requestOpen(instanceID: instanceID, queryTypeID: queryTypeID)
     }
@@ -233,11 +251,10 @@ struct QueryPreviewWindowView: View {
     /// Does nothing if that window is already open (so an in-progress edit isn't
     /// clobbered).
     private func handleEdit() {
-        // A draft preview (from the Add Instance window) has no persisted instance
-        // to edit — its instanceID is 0.
-        guard let query, query.instanceID != 0, !isEditInstanceWindowOpen() else { return }
+        // An Add-mode draft preview has no persisted instance to edit.
+        guard let query, let instanceID = query.persistedInstanceID, !isEditInstanceWindowOpen() else { return }
         let autoEditPointID: Int64? = query.kind == .pointMap ? query.pointMapPayload?.pointID : nil
-        editInstanceWindowState.requestOpen(instanceID: query.instanceID, autoEditPointID: autoEditPointID)
+        editInstanceWindowState.requestOpen(instanceID: instanceID, autoEditPointID: autoEditPointID)
         openWindow(id: "edit-instance")
     }
 
@@ -272,7 +289,7 @@ struct QueryPreviewWindowView: View {
             // No authored data-shortcut for this key: fall back to office
             // succession navigation (← predecessor, → successor).
             guard let neighborID = resolveOfficeSuccessionShortcut(
-                key, query: query, appDatabase: appDatabase
+                key, query: query, appDatabase: appDatabase, draftOffices: renderOverrides.personOffices
             ) else { return false }
             navigateToInstance(neighborID)
             return true

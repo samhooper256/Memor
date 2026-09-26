@@ -3231,12 +3231,15 @@ struct AppDatabase {
     }
 
     /// Builds a preview `StudyQuery` for a query type from its type alone, without
-    /// requiring a persisted instance. Used by the Add Instance window, where the
-    /// "instance" being previewed doesn't exist in the database yet. Field values
-    /// are left empty here and supplied by the caller via `StudyQuery.withFieldValues`.
+    /// reading an instance row. Used by the instance editor's previews, which
+    /// render the editor's draft rather than saved state. Field values are left
+    /// empty here and supplied by the caller via `StudyQuery.withFieldValues`.
+    /// `instanceID` is the edited instance in Edit mode (for `{{#InstanceID}}`
+    /// and preview navigation) and nil for an unsaved Add-mode draft.
     func fetchQueryTypePreview(
         typeID: Int64,
-        queryTypeID: Int64
+        queryTypeID: Int64,
+        instanceID: Int64? = nil
     ) throws -> StudyQuery {
         try dbQueue.read { db in
             let typeInfos = try fetchInstanceSearchTypeInfos(db: db)
@@ -3279,7 +3282,7 @@ struct AppDatabase {
             ))
 
             return StudyQuery(
-                instanceID: 0,
+                instanceID: instanceID ?? 0,
                 queryTypeID: queryRow.queryTypeID,
                 interval: queryRow.interval,
                 maxInterval: queryRow.maxInterval,

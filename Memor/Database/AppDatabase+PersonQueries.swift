@@ -768,28 +768,31 @@ extension AppDatabase {
     }
 
     /// Preview ANY built-in Person query from the instance editor's CURRENT
-    /// draft state instead of the database, so unsaved relationship and office
-    /// edits render (both editor modes; saved-state rendering stays in
-    /// makePersonStudyQuery, whose markup this mirrors exactly).
+    /// draft state instead of the database, so unsaved relationship, office,
+    /// and field edits render (both editor modes; saved-state rendering stays
+    /// in makePersonStudyQuery, whose markup this mirrors exactly).
     /// `selfInstanceID` is the edited person's row in Edit mode — their own
     /// name renders as a real id: link — and nil in Add mode, where the person
-    /// has no row yet: their name is the display field's {{FieldName}}
-    /// placeholder, resolved by the live field values the caller supplies via
-    /// `StudyQuery.withFieldValues` (fieldValuesByName is left empty here,
-    /// like fetchQueryTypePreview). Drafted refs to OTHER people are persisted
-    /// instances or bare names, so entries render exactly like the saved-state
-    /// paths (id: links with the DisplayName preference, .person-bare-name
-    /// spans). Full Siblings matches the DRAFTED parents against the database
-    /// and always includes the edited person as .person-self. SRS state is
-    /// zeroed — the preview is about content. `partnerIndex` addresses
-    /// relations.partners exactly for .childrenWith; `officeIndex` addresses
-    /// relations.offices exactly for .office.
+    /// has no row yet (plain text, no link). Either way the name comes from
+    /// the editor's `fieldValuesByName` with the saved paths' DisplayName-then-
+    /// display-field preference, so unsaved name edits show. The returned
+    /// query's fieldValuesByName is left empty, like fetchQueryTypePreview —
+    /// the caller supplies the same values via `StudyQuery.withFieldValues`.
+    /// Drafted refs to OTHER people are persisted instances or bare names, so
+    /// entries render exactly like the saved-state paths (id: links with the
+    /// DisplayName preference, .person-bare-name spans). Full Siblings matches
+    /// the DRAFTED parents against the database and always includes the
+    /// edited person as .person-self. SRS state is zeroed — the preview is
+    /// about content. `partnerIndex` addresses relations.partners exactly for
+    /// .childrenWith; `officeIndex` addresses relations.offices exactly for
+    /// .office.
     func fetchPersonDraftPreview(
         kind: PersonQueryKind,
         relations: PersonRelationsDraft,
         partnerIndex: Int?,
         officeIndex: Int?,
-        selfInstanceID: Int64?
+        selfInstanceID: Int64?,
+        fieldValuesByName: [String: String]
     ) throws -> StudyQuery {
         try dbQueue.read { db in
             let personTypeID = try Self.fetchPersonTypeID(db: db)
@@ -803,28 +806,18 @@ extension AppDatabase {
                 sql: "SELECT css FROM \"type\" WHERE id = ?",
                 arguments: [personTypeID]
             ) ?? ""
-            // Same display-field choice as fetchInstanceDisplayValue, but as a
-            // placeholder — the draft person's typed name substitutes in.
-            let displayFieldName = try String.fetchOne(
-                db,
-                sql: "SELECT name FROM field WHERE type_id = ? ORDER BY is_primary DESC, field_display_index ASC, id LIMIT 1",
-                arguments: [personTypeID]
+            let selfName = try Self.personDraftDisplayName(
+                db: db, personTypeID: personTypeID, fieldValuesByName: fieldValuesByName
             )
-            let selfPlaceholder = displayFieldName.map { "{{\($0)}}" } ?? ""
-            let selfHTML = try selfInstanceID.map { try Self.personEntryHTML(db: db, ref: .instance($0)) }
-                ?? selfPlaceholder
+            let selfHTML: String
+            if let selfInstanceID {
+                selfHTML = "<a href=\"id:\(selfInstanceID)\">\(selfName.isEmpty ? "#\(selfInstanceID)" : selfName)</a>"
+            } else {
+                selfHTML = selfName
+            }
 
             let template = try Self.personOfficeQueryHTML(db: db)
-            let holdings = try relations.offices.map { office in
-                PersonOfficeHolding(
-                    personOfficeID: office.personOfficeID ?? 0,
-                    officeID: office.officeID,
-                    officeName: try Self.fetchOfficeName(db: db, officeID: office.officeID) ?? "#\(office.officeID)",
-                    whenBegan: office.whenBegan,
-                    whenEnded: office.whenEnded,
-                    note: office.note
-                )
-            }
+            let holdings = try Self.draftOfficeHoldings(db: db, offices: relations.offices)
 
             let draftPartner: PersonPartnerDraft?
             if kind == .childrenWith {
@@ -933,7 +926,7 @@ extension AppDatabase {
                 body = try Self.personFullSiblingsBody(
                     db: db,
                     personID: selfInstanceID,
-                    selfPlaceholderHTML: selfInstanceID == nil ? selfPlaceholder : nil,
+                    selfName: selfName,
                     slots: slots
                 )
             case .office:
@@ -1271,15 +1264,49 @@ extension AppDatabase {
     /// query, so it works in Study mode, Query Preview, and MCP render_query.
     func renderPersonOfficesElements(in html: String, instanceID: Int64) throws -> String {
         try dbQueue.read { db in
-            try Self.substitutePersonOfficesElements(db: db, html: html, instanceID: instanceID)
+            try Self.substitutingOfficesElement(in: html) {
+                try Self.personOfficesElementContents(
+                    db: db,
+                    stints: try Self.fetchPersonOfficeHoldings(db: db, instanceID: instanceID).map { holding in
+                        let peers = try Self.fetchOfficeSuccessionPeers(db: db, holdingID: holding.personOfficeID)
+                        return (holding, peers.predecessors, peers.successors)
+                    }
+                )
+            }
         }
     }
 
-    private nonisolated static func substitutePersonOfficesElements(
-        db: Database,
-        html: String,
-        instanceID: Int64
-    ) throws -> String {
+    /// The same substitution from the instance editor's DRAFTED offices (in
+    /// draft order, with their uncommitted dates/notes/succession), so a
+    /// Query Preview of an unsaved or edited person shows their offices as
+    /// they will be once saved.
+    func renderPersonOfficesElements(in html: String, draftOffices: [PersonOfficeDraft]) throws -> String {
+        try dbQueue.read { db in
+            try Self.substitutingOfficesElement(in: html) {
+                let holdings = try Self.draftOfficeHoldings(db: db, offices: draftOffices)
+                return try Self.personOfficesElementContents(
+                    db: db,
+                    stints: zip(holdings, draftOffices).map { holding, draft in
+                        (holding, draft.predecessors, draft.successors)
+                    }
+                )
+            }
+        }
+    }
+
+    private typealias OfficesElementStint = (
+        holding: PersonOfficeHolding,
+        predecessors: [PersonSuccessionPeer],
+        successors: [PersonSuccessionPeer]
+    )
+
+    /// Replaces the contents of the first `_offices` element with `contents()`
+    /// — only called when such an element exists, so HTML without one never
+    /// loads stints.
+    private nonisolated static func substitutingOfficesElement(
+        in html: String,
+        contents: () throws -> String
+    ) rethrows -> String {
         // Groups: 1 = opening tag, 2 = tag name, 3 = contents, 4 = closing tag.
         // Non-greedy contents match: an element nesting its own tag name inside
         // (e.g. a div inside the _offices div) is not supported.
@@ -1291,15 +1318,17 @@ extension AppDatabase {
               let contentRange = Range(match.range(at: 3), in: html)
         else { return html }
 
-        let contents = try personOfficesElementContents(db: db, personID: instanceID)
         var result = html
-        result.replaceSubrange(contentRange, with: contents)
+        result.replaceSubrange(contentRange, with: try contents())
         return result
     }
 
-    private nonisolated static func personOfficesElementContents(db: Database, personID: Int64) throws -> String {
-        let holdings = try fetchPersonOfficeHoldings(db: db, instanceID: personID)
-        return try holdings.map { holding -> String in
+    private nonisolated static func personOfficesElementContents(
+        db: Database,
+        stints: [OfficesElementStint]
+    ) throws -> String {
+        try stints.map { stint -> String in
+            let holding = stint.holding
             let began = holding.whenBegan.trimmingCharacters(in: .whitespacesAndNewlines)
             let ended = holding.whenEnded.trimmingCharacters(in: .whitespacesAndNewlines)
             var center = (began.isEmpty && ended.isEmpty)
@@ -1309,9 +1338,56 @@ extension AppDatabase {
             if !note.isEmpty {
                 center += "\n<div class=\"office-succession-note\">\(note)</div>"
             }
-            return try officeSuccessionRowHTML(db: db, holdingID: holding.personOfficeID, centerHTML: center)
+            return try officeSuccessionRowHTML(
+                db: db,
+                predecessors: stint.predecessors,
+                successors: stint.successors,
+                centerHTML: center
+            )
         }
         .joined(separator: "\n")
+    }
+
+    /// Drafted office stints as holdings (office names from the database —
+    /// the editor's picker creates offices immediately; unsaved stints get
+    /// holding id 0). Shared by every draft-preview path.
+    private nonisolated static func draftOfficeHoldings(
+        db: Database,
+        offices: [PersonOfficeDraft]
+    ) throws -> [PersonOfficeHolding] {
+        try offices.map { office in
+            PersonOfficeHolding(
+                personOfficeID: office.personOfficeID ?? 0,
+                officeID: office.officeID,
+                officeName: try fetchOfficeName(db: db, officeID: office.officeID) ?? "#\(office.officeID)",
+                whenBegan: office.whenBegan,
+                whenEnded: office.whenEnded,
+                note: office.note
+            )
+        }
+    }
+
+    /// A drafted person's name as computed query HTML shows it: the
+    /// DisplayName field when non-blank, else the type's display field
+    /// (personLinkDisplayValue's resolution, applied to unsaved values).
+    private nonisolated static func personDraftDisplayName(
+        db: Database,
+        personTypeID: Int64,
+        fieldValuesByName: [String: String]
+    ) throws -> String {
+        func value(_ name: String) -> String {
+            (fieldValuesByName[name] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let displayName = value("DisplayName")
+        if !displayName.isEmpty {
+            return displayName
+        }
+        guard let displayFieldName = try String.fetchOne(
+            db,
+            sql: "SELECT name FROM field WHERE type_id = ? ORDER BY is_primary DESC, field_display_index ASC, id LIMIT 1",
+            arguments: [personTypeID]
+        ) else { return "" }
+        return value(displayFieldName)
     }
 
     /// The All Offices answer: the office question template rendered once per
@@ -1388,12 +1464,16 @@ extension AppDatabase {
     /// `personID`) `selfPlaceholderHTML` supplies their line instead. Order:
     /// the parents' shared partnership children order for members grouped
     /// there, then the mother's/father's ungrouped order, then id.
+    /// `selfName` (draft previews) overrides the edited person's saved name
+    /// with the editor's live one; with no `personID` (Add mode) the person is
+    /// appended as the last entry, since they have no ranked row yet.
     private nonisolated static func personFullSiblingsBody(
         db: Database,
         personID: Int64?,
-        selfPlaceholderHTML: String? = nil,
+        selfName: String? = nil,
         slots: [PersonParentRole: PersonRef]
     ) throws -> String {
+        let appendsUnsavedSelf = personID == nil && selfName != nil
         guard let mother = slots[.mother], let father = slots[.father] else { return personNAHTML }
 
         func matchingChildIDs(role: PersonParentRole, ref: PersonRef) throws -> Set<Int64> {
@@ -1418,7 +1498,7 @@ extension AppDatabase {
         if let personID {
             siblingIDs.insert(personID)
         }
-        guard !siblingIDs.isEmpty || selfPlaceholderHTML != nil else { return personNAHTML }
+        guard !siblingIDs.isEmpty || appendsUnsavedSelf else { return personNAHTML }
 
         // Rank: shared grouping order under the parents' partnership(s) first,
         // then the mother's (or father's) ungrouped order, then id.
@@ -1471,13 +1551,13 @@ extension AppDatabase {
             if siblingID == personID {
                 // Same DisplayName-then-Name resolution as the sibling links
                 // around it, so the list reads consistently.
-                let name = try personLinkDisplayValue(db: db, instanceID: siblingID)
+                let name = try selfName ?? personLinkDisplayValue(db: db, instanceID: siblingID)
                 return "<span class=\"person-self\">\(name.isEmpty ? "#\(siblingID)" : name)</span>"
             }
             return try personEntryHTML(db: db, ref: .instance(siblingID))
         }
-        if let selfPlaceholderHTML {
-            entries.append("<span class=\"person-self\">\(selfPlaceholderHTML)</span>")
+        if appendsUnsavedSelf, let selfName {
+            entries.append("<span class=\"person-self\">\(selfName)</span>")
         }
         return personAnswerLines(entries)
     }

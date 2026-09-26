@@ -2889,36 +2889,34 @@ struct InstanceEditorWindowView: View {
         showToast(message: "Link copied", style: .success)
     }
 
-    private func liveFieldValuesByName() -> [String: String] {
-        Dictionary(uniqueKeysWithValues: draft.fields.map { field in
-            (field.name, draft.fieldValues[field.id] ?? "")
-        })
+    /// Everything in the draft that affects how its queries render, for the
+    /// Query Preview window (see InstanceDraftPreviewSnapshot). Field values
+    /// are normalized the way saving stores them (Sex → Male/Female, booleans
+    /// → 0/1), so the preview matches the saved instance.
+    private func draftPreviewSnapshot() -> InstanceDraftPreviewSnapshot? {
+        guard let typeID = draft.selectedTypeID else { return nil }
+        if mode == .edit && draft.loadedInstanceID == nil { return nil }
+        return InstanceDraftPreviewSnapshot(
+            typeID: typeID,
+            instanceID: mode == .edit ? draft.loadedInstanceID : nil,
+            fieldValuesByName: Dictionary(uniqueKeysWithValues: draft.fields.map { field in
+                (field.name, AppDatabase.normalizedFieldValue(draft.fieldValues[field.id] ?? "", kind: field.fieldType))
+            }),
+            collectionIDs: draft.selectedCollectionIDs,
+            personRelations: isPersonSelected ? draft.buildPersonRelationsDraft() : nil
+        )
     }
 
-    /// Opens the Query Preview window for one query type, using the editor's live
-    /// field values so the preview reflects what's currently typed. In Edit mode
-    /// the preview is keyed on the persisted instance; in Add mode it's a draft
-    /// preview built from the type alone.
-    private func openPreview(queryTypeID: Int64) {
-        switch mode {
-        case .edit:
-            guard let loadedInstanceID = draft.loadedInstanceID else { return }
-            queryPreviewWindowState.requestOpen(
-                instanceID: loadedInstanceID,
-                queryTypeID: queryTypeID,
-                fieldValuesByName: liveFieldValuesByName(),
-                collectionIDs: draft.selectedCollectionIDs
-            )
-        case .add:
-            guard let selectedTypeID = draft.selectedTypeID else { return }
-            queryPreviewWindowState.requestOpenDraft(
-                typeID: selectedTypeID,
-                queryTypeID: queryTypeID,
-                fieldValuesByName: liveFieldValuesByName(),
-                collectionIDs: draft.selectedCollectionIDs
-            )
-        }
+    /// Opens the Query Preview window on one of the draft's queries, rendered
+    /// from the editor's current state (both modes).
+    private func openDraftPreview(_ target: InstanceDraftPreviewTarget) {
+        guard let snapshot = draftPreviewSnapshot() else { return }
+        queryPreviewWindowState.requestOpenDraft(snapshot, target: target)
         openWindow(id: "query-preview")
+    }
+
+    private func openPreview(queryTypeID: Int64) {
+        openDraftPreview(.queryType(queryTypeID))
     }
 
     private func previewTopmostCheckedQueryType() {
@@ -3192,16 +3190,7 @@ struct InstanceEditorWindowView: View {
             guard let index = draft.personOffices.firstIndex(where: { $0.id == officeEntryID }) else { return }
             officeIndex = index
         }
-        queryPreviewWindowState.requestOpenPersonDraft(
-            kind: kind,
-            relations: draft.buildPersonRelationsDraft(),
-            partnerIndex: partnerIndex,
-            officeIndex: officeIndex,
-            selfInstanceID: mode == .edit ? draft.loadedInstanceID : nil,
-            fieldValuesByName: liveFieldValuesByName(),
-            collectionIDs: draft.selectedCollectionIDs
-        )
-        openWindow(id: "query-preview")
+        openDraftPreview(.personBuiltin(kind: kind, partnerIndex: partnerIndex, officeIndex: officeIndex))
     }
 
     @MainActor

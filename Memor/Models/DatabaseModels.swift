@@ -510,6 +510,12 @@ struct StudyQuery: Identifiable, Hashable {
         return "\(instanceID):\(queryTypeID):\(isReverse ? "r" : "f")"
     }
 
+    /// The instance's row id, or nil for an Add-mode draft preview (whose
+    /// `instanceID` is the placeholder 0 — real row ids start at 1).
+    var persistedInstanceID: Int64? {
+        instanceID == 0 ? nil : instanceID
+    }
+
     func withFieldValues(_ newFieldValuesByName: [String: String]) -> StudyQuery {
         StudyQuery(
             instanceID: instanceID,

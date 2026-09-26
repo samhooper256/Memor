@@ -130,13 +130,15 @@ func resolveLinkShortcut(_ key: LinkShortcutKey, fieldValues: [String: String]) 
 /// (scoped to exactly that query's office) and All Offices / user-defined
 /// (the person's first listed office). Relationship built-ins are excluded.
 /// ← = predecessor, → = successor. Returns the instance to open in the Query
-/// Preview window, or nil when the key isn't mapped.
+/// Preview window, or nil when the key isn't mapped. `draftOffices` (instance
+/// editor previews) replaces the person's saved stints, same selection rules.
 func resolveOfficeSuccessionShortcut(
     _ key: LinkShortcutKey,
     query: StudyQuery,
-    appDatabase: AppDatabase
+    appDatabase: AppDatabase,
+    draftOffices: [PersonOfficeDraft]? = nil
 ) -> Int64? {
-    guard query.typeName == PERSON_TYPE_NAME, query.instanceID != 0 else { return nil }
+    guard query.typeName == PERSON_TYPE_NAME else { return nil }
     let officeID: Int64?
     switch query.personQueryKind {
     case nil, .allOffices:
@@ -147,10 +149,19 @@ func resolveOfficeSuccessionShortcut(
     default:
         return nil
     }
-    guard let neighbors = try? appDatabase.fetchOfficeSuccessionNeighborIDs(
-        instanceID: query.instanceID,
-        officeID: officeID
-    ) else { return nil }
+    let neighbors: (predecessorID: Int64?, successorID: Int64?)
+    if let draftOffices {
+        let stint = officeID.map { id in draftOffices.first { $0.officeID == id } } ?? draftOffices.first
+        neighbors = (
+            stint?.predecessors.compactMap(\.instanceID).first,
+            stint?.successors.compactMap(\.instanceID).first
+        )
+    } else {
+        guard let instanceID = query.persistedInstanceID,
+              let saved = try? appDatabase.fetchOfficeSuccessionNeighborIDs(instanceID: instanceID, officeID: officeID)
+        else { return nil }
+        neighbors = saved
+    }
     return key == .left ? neighbors.predecessorID : neighbors.successorID
 }
 
