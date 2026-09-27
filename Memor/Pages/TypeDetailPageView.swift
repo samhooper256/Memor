@@ -179,6 +179,7 @@ struct TypeDetailPageView: View {
                     Text(type.name)
                         .font(.largeTitle)
                         .fontWeight(.semibold)
+                        .textSelection(.enabled)
 
                     typeIDBadge
                 }
@@ -207,6 +208,7 @@ struct TypeDetailPageView: View {
                     Text(displayedTypeName.isEmpty ? type.name : displayedTypeName)
                         .font(.largeTitle)
                         .fontWeight(.semibold)
+                        .textSelection(.enabled)
 
                     if type.isPerson {
                         Text("(built-in)")
