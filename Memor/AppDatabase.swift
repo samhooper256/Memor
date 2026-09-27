@@ -5118,6 +5118,37 @@ struct AppDatabase {
         }
     }
 
+    func fetchQueryType(queryTypeID: Int64) throws -> QueryType? {
+        try dbQueue.read { db in
+            try QueryType.fetchOne(
+                db,
+                sql: """
+                    SELECT
+                        id,
+                        type_id AS typeID,
+                        name,
+                        question_html AS questionHTML,
+                        answer_html AS answerHTML
+                    FROM query_type
+                    WHERE id = ?
+                    """,
+                arguments: [queryTypeID]
+            )
+        }
+    }
+
+    /// How many instances have this query type enabled (each a `query` row with
+    /// its own SRS progress) — what deleteQueryType cascades through.
+    func fetchQueryCount(forQueryTypeID queryTypeID: Int64) throws -> Int {
+        try dbQueue.read { db in
+            try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM query WHERE query_type_id = ?",
+                arguments: [queryTypeID]
+            ) ?? 0
+        }
+    }
+
     func deleteQueryType(queryTypeID: Int64) throws {
         try dbQueue.write { db in
             try db.execute(

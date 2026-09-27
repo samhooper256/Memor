@@ -406,6 +406,9 @@ struct TypeDetailPageView: View {
             // WebView-backed preview without having blocked the navigation.
             isPreviewMounted = true
         }
+        .onReceive(NotificationCenter.default.publisher(for: .memorDidChangeDatabase)) { _ in
+            reloadCodeAfterExternalChange()
+        }
         .task(id: shouldAutoPresentRenamePopover) {
             guard shouldAutoPresentRenamePopover, !hasAutoPresentedRenamePopover else { return }
             hasAutoPresentedRenamePopover = true
@@ -915,6 +918,34 @@ struct TypeDetailPageView: View {
         } catch {
             errorMessage = "Failed to load type details."
         }
+    }
+
+    /// Picks up CSS / query type edits made elsewhere (MCP) while this page is
+    /// open. Pending autosaves land first, so the reload can't discard typing,
+    /// and the editors — which otherwise hold their own copy of the text —
+    /// can't later save a stale buffer over the external change. The editors
+    /// only reset their text when it actually differs.
+    @MainActor
+    private func reloadCodeAfterExternalChange() {
+        flushPendingHTMLSave()
+        flushPendingCSSSave()
+        guard let currentType = try? appDatabase.fetchType(typeID: type.id),
+              let latestQueryTypes = try? appDatabase.fetchQueryTypes(forTypeID: type.id)
+        else { return }
+        displayedTypeName = currentType.name
+        if selectedTypeCSS != currentType.css {
+            isSyncingEditorState = true
+            selectedTypeCSS = currentType.css
+            isSyncingEditorState = false
+        }
+        queryTypes = latestQueryTypes
+        if !isAnyBuiltinSelected,
+           !latestQueryTypes.contains(where: { $0.id == selectedQueryTypeID }) {
+            selectedQueryTypeID = displayedQueryTypes.first?.id
+                ?? (type.isPerson ? Self.builtinQueriesSelectionID : nil)
+        }
+        syncSelectedQueryTypeEditorState(selectedQueryTypeID: selectedQueryTypeID)
+        refreshPreviewCanvas()
     }
 
     private func syncSelectedQueryTypeEditorState(selectedQueryTypeID: Int64?) {

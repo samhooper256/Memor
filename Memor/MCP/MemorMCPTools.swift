@@ -43,7 +43,18 @@ enum MemorMCPTools {
             return try jsonResult(listTypes(appDatabase: appDatabase))
         case "get_type":
             let typeID = try arguments.requireInt64("type_id")
-            return try jsonResult(getType(typeID: typeID, appDatabase: appDatabase))
+            let includeCode = try arguments.optionalBool("include_code") ?? false
+            return try jsonResult(getType(typeID: typeID, includeCode: includeCode, appDatabase: appDatabase))
+        case "update_type_css":
+            return try updateTypeCSSTool(arguments: arguments, appDatabase: appDatabase)
+        case "get_query_type":
+            return try getQueryTypeTool(arguments: arguments, appDatabase: appDatabase)
+        case "create_query_type":
+            return try createQueryTypeTool(arguments: arguments, appDatabase: appDatabase)
+        case "update_query_type":
+            return try updateQueryTypeTool(arguments: arguments, appDatabase: appDatabase)
+        case "delete_query_type":
+            return try deleteQueryTypeTool(arguments: arguments, appDatabase: appDatabase)
 
         // Instances
         case "create_instance":
@@ -351,7 +362,7 @@ enum MemorMCPTools {
         return types.map(TypeSummaryDTO.init)
     }
 
-    private static func getType(typeID: Int64, appDatabase: AppDatabase) throws -> TypeDetailDTO {
+    private static func getType(typeID: Int64, includeCode: Bool, appDatabase: AppDatabase) throws -> TypeDetailDTO {
         guard let type = try appDatabase.fetchType(typeID: typeID) else {
             throw MemorMCPToolError(message: "Type not found: \(typeID).")
         }
@@ -366,10 +377,116 @@ enum MemorMCPTools {
             isBoundaryMap: type.name == BOUNDARYMAP_TYPE_NAME,
             isPerson: type.isPerson,
             instanceCount: type.instanceCount,
+            css: includeCode ? type.css : nil,
             fields: fields.map(FieldDTO.init),
-            queryTypes: queryTypes.map(QueryTypeDTO.init),
+            queryTypes: queryTypes.map { QueryTypeDTO($0, includeCode: includeCode) },
             builtinQueryKinds: type.isPerson ? PersonQueryKind.allCases.map(\.rawValue) : nil
         )
+    }
+
+    // MARK: - Type code tools (CSS + query types)
+
+    /// The type whose CSS / query types an agent may edit: any Object type or
+    /// Person — not the map types, whose queries are fixed and don't use either
+    /// (their type detail page is read-only too).
+    private static func requireCodeEditableType(_ typeID: Int64, appDatabase: AppDatabase) throws -> FlashcardType {
+        guard let type = try appDatabase.fetchType(typeID: typeID) else {
+            throw MemorMCPToolError(message: "Type not found: \(typeID).")
+        }
+        if type.isBuiltin && !type.isPerson {
+            throw MemorMCPToolError(message: "\(type.name) is a built-in map type: its queries are fixed, so it has no editable CSS or query types.")
+        }
+        return type
+    }
+
+    private static func requireQueryType(_ queryTypeID: Int64, appDatabase: AppDatabase) throws -> QueryType {
+        guard let queryType = try appDatabase.fetchQueryType(queryTypeID: queryTypeID) else {
+            throw MemorMCPToolError(message: "Query type not found: \(queryTypeID).")
+        }
+        return queryType
+    }
+
+    /// Trimmed and non-empty, like the Types page's name fields.
+    private static func requireQueryTypeName(_ raw: String) throws -> String {
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            throw MemorMCPToolError(message: "Query type name must not be empty.")
+        }
+        return name
+    }
+
+    private static func updateTypeCSSTool(arguments: [String: Value], appDatabase: AppDatabase) throws -> CallTool.Result {
+        let type = try requireCodeEditableType(try arguments.requireInt64("type_id"), appDatabase: appDatabase)
+        let css = try arguments.requireString("css")
+        try appDatabase.updateTypeCSS(typeID: type.id, css: css)
+        postDatabaseChange()
+        return try jsonResult(["ok": Value.bool(true), "type_id": Value.int(Int(type.id))])
+    }
+
+    private static func getQueryTypeTool(arguments: [String: Value], appDatabase: AppDatabase) throws -> CallTool.Result {
+        let queryType = try requireQueryType(try arguments.requireInt64("query_type_id"), appDatabase: appDatabase)
+        return try jsonResult(QueryTypeDetailDTO(queryType))
+    }
+
+    private static func createQueryTypeTool(arguments: [String: Value], appDatabase: AppDatabase) throws -> CallTool.Result {
+        let type = try requireCodeEditableType(try arguments.requireInt64("type_id"), appDatabase: appDatabase)
+        let name = try requireQueryTypeName(try arguments.requireString("name"))
+        let questionHTML = try arguments.optionalString("question_html")
+        let answerHTML = try arguments.optionalString("answer_html")
+
+        let created: QueryType
+        if let sourceID = try arguments.optionalInt64("copy_from_query_type_id") {
+            let source = try requireQueryType(sourceID, appDatabase: appDatabase)
+            guard source.typeID == type.id else {
+                throw MemorMCPToolError(message: "copy_from_query_type_id \(sourceID) belongs to a different type (\(source.typeID)); it must be a query type of type \(type.id).")
+            }
+            created = try appDatabase.duplicateQueryType(sourceQueryTypeID: sourceID, name: name)
+        } else {
+            created = try appDatabase.createQueryType(forTypeID: type.id, name: name)
+        }
+        // Explicit HTML overrides the generated default / the copied source.
+        if let questionHTML {
+            try appDatabase.updateQuestionHTML(forQueryTypeID: created.id, questionHTML: questionHTML)
+        }
+        if let answerHTML {
+            try appDatabase.updateAnswerHTML(forQueryTypeID: created.id, answerHTML: answerHTML)
+        }
+        postDatabaseChange()
+        return try jsonResult(QueryTypeDetailDTO(try requireQueryType(created.id, appDatabase: appDatabase)))
+    }
+
+    private static func updateQueryTypeTool(arguments: [String: Value], appDatabase: AppDatabase) throws -> CallTool.Result {
+        let queryType = try requireQueryType(try arguments.requireInt64("query_type_id"), appDatabase: appDatabase)
+        _ = try requireCodeEditableType(queryType.typeID, appDatabase: appDatabase)
+        let name = try arguments.optionalString("name").map(requireQueryTypeName)
+        let questionHTML = try arguments.optionalString("question_html")
+        let answerHTML = try arguments.optionalString("answer_html")
+        guard name != nil || questionHTML != nil || answerHTML != nil else {
+            throw MemorMCPToolError(message: "Provide at least one of name / question_html / answer_html.")
+        }
+        if let name {
+            try appDatabase.renameQueryType(queryTypeID: queryType.id, to: name)
+        }
+        if let questionHTML {
+            try appDatabase.updateQuestionHTML(forQueryTypeID: queryType.id, questionHTML: questionHTML)
+        }
+        if let answerHTML {
+            try appDatabase.updateAnswerHTML(forQueryTypeID: queryType.id, answerHTML: answerHTML)
+        }
+        postDatabaseChange()
+        return try jsonResult(QueryTypeDetailDTO(try requireQueryType(queryType.id, appDatabase: appDatabase)))
+    }
+
+    private static func deleteQueryTypeTool(arguments: [String: Value], appDatabase: AppDatabase) throws -> CallTool.Result {
+        let queryType = try requireQueryType(try arguments.requireInt64("query_type_id"), appDatabase: appDatabase)
+        _ = try requireCodeEditableType(queryType.typeID, appDatabase: appDatabase)
+        let removedQueryCount = try appDatabase.fetchQueryCount(forQueryTypeID: queryType.id)
+        try appDatabase.deleteQueryType(queryTypeID: queryType.id)
+        postDatabaseChange()
+        return try jsonResult([
+            "ok": Value.bool(true),
+            "removed_query_count": Value.int(removedQueryCount),
+        ])
     }
 
     // MARK: - Instance tools
@@ -2309,11 +2426,73 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "get_type",
-                description: "Get full details for a type, including its fields and query types. Use this to discover field_ids and query_type_ids before calling create_instance.",
+                description: "Get full details for a type, including its fields and query types. Use this to discover field_ids and query_type_ids before calling create_instance. include_code (default false) also returns the type's `css` and each query type's `question_html` / `answer_html`.",
                 inputSchema: .object([
                     "type": .string("object"),
-                    "properties": .object(["type_id": int64Number]),
+                    "properties": .object([
+                        "type_id": int64Number,
+                        "include_code": boolValue
+                    ]),
                     "required": .array([.string("type_id")])
+                ])
+            ),
+            Tool(
+                name: "update_type_css",
+                description: "Replace a type's CSS (the whole stylesheet — read the current text via get_type with include_code first and send back the full edited version). One stylesheet is shared by all of the type's query types; it is injected after the app's global query CSS, so it can override it. Allowed for Object types and Person; the built-in map types (PointMap/BoundaryMap) have no editable CSS. Takes effect immediately everywhere (Study, previews); verify with render_query.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "type_id": int64Number,
+                        "css": stringValue
+                    ]),
+                    "required": .array([.string("type_id"), .string("css")])
+                ])
+            ),
+            Tool(
+                name: "get_query_type",
+                description: "Get one query type with its question_html and answer_html (and its type_id).",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object(["query_type_id": int64Number]),
+                    "required": .array([.string("query_type_id")])
+                ])
+            ),
+            Tool(
+                name: "create_query_type",
+                description: "Add a query type (a question/answer template studied once per instance that enables it) to an Object type or Person (not the map types). name is trimmed and must be non-empty. By default the HTML is generated like the app's Add button: the question shows the primary field, the answer is `{{#QuestionContent}}`, an `<hr>`, then every other field. copy_from_query_type_id instead copies another query type OF THE SAME TYPE. question_html / answer_html, when given, replace the generated or copied HTML. Template syntax: `{{FieldName}}` inserts a field's value (raw HTML); boolean fields also support `{{Name:bit}}` (1/0) and `{{Name:if_true:if_false}}`; `{{#QuestionContent}}` (answer only) inserts the rendered question; `{{#InstanceID}}` is the instance id and `{{#CollectionIDs}}` a JSON array of its collection ids. On Person query types, the first element with id=\"_offices\" gets its contents replaced by the person's office rows. The new query type is not enabled on any existing instance (use set_queries_enabled or update_instance's query_type_ids); the Add Instance window pre-checks it for new instances. Returns the created query type.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "type_id": int64Number,
+                        "name": stringValue,
+                        "question_html": stringValue,
+                        "answer_html": stringValue,
+                        "copy_from_query_type_id": int64Number
+                    ]),
+                    "required": .array([.string("type_id"), .string("name")])
+                ])
+            ),
+            Tool(
+                name: "update_query_type",
+                description: "Rename a query type and/or replace its question_html / answer_html (at least one is required; each HTML field replaces that side's whole template — read it first via get_query_type). Template syntax is described on create_query_type. Editing HTML never touches SRS progress. Renaming also changes what `qt:Type:Name` search components match: a Stack whose search names the old name silently stops matching those queries (it does not error). Returns the updated query type.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "query_type_id": int64Number,
+                        "name": stringValue,
+                        "question_html": stringValue,
+                        "answer_html": stringValue
+                    ]),
+                    "required": .array([.string("query_type_id")])
+                ])
+            ),
+            Tool(
+                name: "delete_query_type",
+                description: "Delete a query type. This cascades IRREVERSIBLY with no confirmation: every instance's query of this query type is removed, including its SRS progress (removed_query_count reports how many). Stacks whose search names it via `qt:` silently match nothing for it afterwards. Person's built-in queries are not query types and cannot be deleted.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object(["query_type_id": int64Number]),
+                    "required": .array([.string("query_type_id")])
                 ])
             ),
 
@@ -3099,10 +3278,32 @@ private struct FieldDTO: Encodable {
 private struct QueryTypeDTO: Encodable {
     let id: Int64
     let name: String
+    // Only with get_type's include_code.
+    let questionHTML: String?
+    let answerHTML: String?
+
+    init(_ queryType: QueryType, includeCode: Bool = false) {
+        id = queryType.id
+        name = queryType.name
+        questionHTML = includeCode ? queryType.questionHTML : nil
+        answerHTML = includeCode ? queryType.answerHTML : nil
+    }
+}
+
+/// One query type with its code (get_query_type and the query type write tools).
+private struct QueryTypeDetailDTO: Encodable {
+    let id: Int64
+    let typeID: Int64
+    let name: String
+    let questionHTML: String
+    let answerHTML: String
 
     init(_ queryType: QueryType) {
         id = queryType.id
+        typeID = queryType.typeID
         name = queryType.name
+        questionHTML = queryType.questionHTML
+        answerHTML = queryType.answerHTML
     }
 }
 
@@ -3115,6 +3316,8 @@ private struct TypeDetailDTO: Encodable {
     let isBoundaryMap: Bool
     let isPerson: Bool
     let instanceCount: Int
+    // Only with include_code: the type's CSS, shared by all its query types.
+    let css: String?
     let fields: [FieldDTO]
     let queryTypes: [QueryTypeDTO]
     // Person only: the built-in relationship query kinds (enabled per instance).
