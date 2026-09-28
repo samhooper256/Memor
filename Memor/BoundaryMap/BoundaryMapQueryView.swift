@@ -8,7 +8,8 @@
 //  color (red by default, per-boundary blue). In a reverse query
 //  the boundary's name is the prompt and the user clicks the matching boundary
 //  — hovered boundaries tint translucent purple with a pointer cursor until
-//  the answer is revealed.
+//  the answer is revealed. After a forward query's answer is revealed,
+//  hovering any boundary shows its name in a tooltip below the cursor.
 //
 
 import AppKit
@@ -24,6 +25,15 @@ struct BoundaryMapQueryView: View {
 
     // Reverse queries: which boundary the user clicked (their guess), if any.
     @State private var clickedBoundaryID: Int64?
+    // Revealed forward queries: the boundary under the cursor, for its name tooltip.
+    @State private var hoverInfo: HoverInfo?
+
+    struct HoverInfo: Equatable {
+        let boundaryID: Int64
+        let name: String
+        /// Cursor position in the map's SwiftUI (top-left origin) coordinates.
+        let position: CGPoint
+    }
 
     init(
         payload: BoundaryMapStudyPayload,
@@ -39,6 +49,10 @@ struct BoundaryMapQueryView: View {
 
     private var reverseInteractive: Bool { payload.isReverse && !revealName }
 
+    // Boundary names on hover: forward queries, once the answer is revealed
+    // (before that they would give the answer away).
+    private var showsHoverNames: Bool { !payload.isReverse && revealName }
+
     // After a reverse query is revealed, color the prompt by whether the user
     // clicked the correct boundary: green if correct, red if wrong. Neutral if
     // no guess was made (e.g. revealed via the keyboard) or for forward
@@ -50,16 +64,32 @@ struct BoundaryMapQueryView: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            BoundaryMapMKMapView(
-                payload: payload,
-                revealName: revealName,
-                reverseInteractive: reverseInteractive,
-                showFinder: showFinder,
-                onAnswerSelected: { clickedID in
-                    clickedBoundaryID = clickedID
-                    onAnswerSelected()
+            ZStack(alignment: .topLeading) {
+                BoundaryMapMKMapView(
+                    payload: payload,
+                    revealName: revealName,
+                    reverseInteractive: reverseInteractive,
+                    showsHoverNames: showsHoverNames,
+                    showFinder: showFinder,
+                    onAnswerSelected: { clickedID in
+                        clickedBoundaryID = clickedID
+                        onAnswerSelected()
+                    },
+                    onHoverChange: { info in
+                        if hoverInfo != info {
+                            hoverInfo = info
+                        }
+                    }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                // Hover tooltip below the cursor (same offset + styling as the
+                // PointMap hover tooltip).
+                if showsHoverNames, let hover = hoverInfo, !hover.name.isEmpty {
+                    MapTooltipLabel(name: hover.name)
+                        .position(x: hover.position.x, y: hover.position.y + 22)
                 }
-            )
+            }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             ZStack {
@@ -78,10 +108,12 @@ struct BoundaryMapQueryView: View {
         }
         .onChange(of: payload.attachmentID) { _, _ in
             clickedBoundaryID = nil
+            hoverInfo = nil
         }
         .onChange(of: revealName) { _, newValue in
             if !newValue {
                 clickedBoundaryID = nil
+                hoverInfo = nil
             }
         }
     }
@@ -97,9 +129,12 @@ private struct BoundaryMapMKMapView: NSViewRepresentable {
     let payload: BoundaryMapStudyPayload
     let revealName: Bool
     let reverseInteractive: Bool
+    let showsHoverNames: Bool
     let showFinder: Bool
     // Called with the clicked boundary's id (the user's guess).
     let onAnswerSelected: (Int64) -> Void
+    // Called from mouse events only (never synchronously from make/updateNSView).
+    let onHoverChange: (BoundaryMapQueryView.HoverInfo?) -> Void
 
     func makeNSView(context: Context) -> MKMapView {
         let mapView = BoundaryMapInteractiveMapView()
@@ -164,6 +199,8 @@ private struct BoundaryMapMKMapView: NSViewRepresentable {
         coordinator.geometries = payload.geometries
         coordinator.queryableBoundaryIDs = payload.queryableBoundaryIDs
         coordinator.onAnswerSelected = onAnswerSelected
+        coordinator.showsHoverNames = showsHoverNames
+        coordinator.onHoverChange = onHoverChange
         if !reverseInteractive {
             coordinator.hoveredBoundaryID = nil
         }
@@ -222,6 +259,8 @@ private struct BoundaryMapMKMapView: NSViewRepresentable {
         var queryableBoundaryIDs: Set<Int64> = []
         var hoveredBoundaryID: Int64?
         var onAnswerSelected: ((Int64) -> Void)?
+        var showsHoverNames: Bool = false
+        var onHoverChange: ((BoundaryMapQueryView.HoverInfo?) -> Void)?
         weak var mapView: MKMapView?
         weak var finderOverlay: BoundaryFinderOverlayView?
         /// Last APPLIED filled-ness per live renderer, so refreshOverlayFills
@@ -258,6 +297,20 @@ private struct BoundaryMapMKMapView: NSViewRepresentable {
             return nil
         }
 
+        /// Any visible boundary under the coordinate, for the name tooltip —
+        /// unlike boundaryID(at:), boundaries without queries count too.
+        func namedBoundary(at coordinate: CLLocationCoordinate2D) -> BoundaryGeometry? {
+            geometries.first { boundaryContains(coordinate: coordinate, geometry: $0.geometry) }
+        }
+
+        /// Clears the name tooltip when the map moves under a still cursor.
+        /// Deferred: the region callbacks can fire inside setRegion during
+        /// make/updateNSView, where a SwiftUI @State write is not allowed.
+        func clearHoverName() {
+            guard let onHoverChange else { return }
+            DispatchQueue.main.async { onHoverChange(nil) }
+        }
+
         func updateHoveredBoundary(_ boundaryID: Int64?) {
             guard hoveredBoundaryID != boundaryID else { return }
             hoveredBoundaryID = boundaryID
@@ -291,6 +344,9 @@ private struct BoundaryMapMKMapView: NSViewRepresentable {
         // Keep the gold finder glued to the boundary as the map pans/zooms.
         func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
             finderOverlay?.needsDisplay = true
+            if showsHoverNames {
+                clearHoverName()
+            }
         }
 
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
@@ -348,8 +404,23 @@ private final class BoundaryMapInteractiveMapView: DeferredRegionMKMapView {
         return coordinator.boundaryID(at: coordinate)
     }
 
+    // Revealed forward queries: report the boundary under the cursor (any
+    // visible one, with or without queries) for the name tooltip.
+    private func reportHoverName(at locationInWindow: NSPoint) {
+        guard let coordinator, coordinator.showsHoverNames else { return }
+        let point = convert(locationInWindow, from: nil)
+        guard let boundary = coordinator.namedBoundary(at: convert(point, toCoordinateFrom: self)) else {
+            coordinator.onHoverChange?(nil)
+            return
+        }
+        // SwiftUI's overlay space has a top-left origin.
+        let position = CGPoint(x: point.x, y: isFlipped ? point.y : bounds.height - point.y)
+        coordinator.onHoverChange?(.init(boundaryID: boundary.id, name: boundary.name, position: position))
+    }
+
     override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
+        reportHoverName(at: event.locationInWindow)
         guard let coordinator, coordinator.reverseInteractive else { return }
         let hovered = boundaryID(at: event.locationInWindow)
         coordinator.updateHoveredBoundary(hovered)
@@ -362,6 +433,7 @@ private final class BoundaryMapInteractiveMapView: DeferredRegionMKMapView {
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
+        coordinator?.onHoverChange?(nil)
         coordinator?.updateHoveredBoundary(nil)
         NSCursor.arrow.set()
     }

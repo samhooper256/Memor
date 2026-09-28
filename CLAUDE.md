@@ -55,7 +55,7 @@ Memor/
     BoundaryPicker.swift            Boundary picker popover (PointMap overlays + BoundaryMap attachments) + BoundaryUploader (file read/validate → new set or append to an existing set)
   BoundaryMap/
     BoundaryMapInstanceEditor.swift BoundaryMap attachment draft, sort modes, entry refs, list entry row (color circle + →/← checkboxes), point-in-polygon hit test. The editor's list context menu (in InstanceEditorWindowView) has a one-row "Rename…" that writes the boundary's app-wide name through immediately (like color) and patches the draft copies
-    BoundaryMapQueryView.swift      BoundaryMap query rendering
+    BoundaryMapQueryView.swift      BoundaryMap query rendering (revealed forward queries: hovering any boundary shows its name in a `MapTooltipLabel` below the cursor)
   Shortcuts/
     KeyBinding.swift                Codable keystroke model (key + modifiers, NSEvent matching)
     ShortcutAction.swift            Enum registry of every user-customizable shortcut
