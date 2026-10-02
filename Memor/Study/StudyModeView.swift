@@ -235,6 +235,10 @@ struct StudyModeView: View {
                     },
                     onShiftDown: {
                         if currentQuery?.kind == .boundaryMap {
+                            // Reverse queries only get the finder after the
+                            // reveal (before it, the finder would give the
+                            // answer away), so ignore the key until then.
+                            guard currentQuery?.isReverse != true || isAnswerRevealed else { return }
                             showBoundaryFinder.toggle()
                         } else {
                             showCollectionOverlay.toggle()

@@ -205,9 +205,9 @@ private struct BoundaryMapMKMapView: NSViewRepresentable {
             coordinator.hoveredBoundaryID = nil
         }
 
-        // The finder is forward-only (showing it during a reverse "click the
-        // boundary" question would reveal the answer).
-        let finderActive = showFinder && !payload.isReverse
+        // On reverse queries the finder waits for the reveal (showing it during
+        // the "click the boundary" question would give the answer away).
+        let finderActive = showFinder && (!payload.isReverse || revealName)
         if let overlay = coordinator.finderOverlay {
             overlay.isActive = finderActive
             let currentGeometry = payload.geometries.first { $0.id == payload.boundaryID }

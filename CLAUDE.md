@@ -191,7 +191,7 @@ These are intentionally NOT in `ShortcutAction`:
 - Tab / Shift-Tab (instance-editor field navigation)
 - Arrow keys (⌘← for Query Preview back history; bare ←/→ reserved for instance link shortcuts — see below; up/down in popups)
 - Delete key (remove row from instance table / collection table)
-- Shift (press to toggle the collection overlay in Study mode; on BoundaryMap queries it instead toggles the gold "boundary finder" — a gold frame around the current boundary, or a gold edge arrow pointing to it when off-screen — for forward queries only)
+- Shift (press to toggle the collection overlay in Study mode; on BoundaryMap queries it instead toggles the gold "boundary finder" — a gold frame around the current boundary, or a gold edge arrow pointing to it when off-screen — on forward queries any time, on reverse queries only after the answer is revealed; Study ignores the key on an unrevealed reverse query so the sticky toggle can't flip invisibly)
 - `.defaultAction` on confirmation buttons (Return)
 
 If you reach for these, leave them in place. Don't promote them to `ShortcutAction`.
