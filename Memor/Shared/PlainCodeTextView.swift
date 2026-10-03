@@ -139,6 +139,14 @@ struct PlainCodeTextView: NSViewRepresentable {
         }
     }
 
+    static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
+        // Nothing can route undo: to this editor's manager once the editor is gone
+        // (see undoManager(for:)), but drop its entries anyway so no stored
+        // invocation outlives the text storage it targets.
+        coordinator.editorUndoManager.removeAllActions()
+        (nsView.documentView as? NSTextView)?.delegate = nil
+    }
+
     final class Coordinator: NSObject, NSTextViewDelegate {
         @Binding private var text: String
         var highlightedTokens: Set<String>
@@ -146,6 +154,8 @@ struct PlainCodeTextView: NSViewRepresentable {
         var booleanFieldNames: Set<String>
         @Binding var isFocused: Bool
         weak var textView: NSTextView?
+        /// This editor's own undo stack — handed to AppKit via undoManager(for:).
+        let editorUndoManager = UndoManager()
 
         init(
             text: Binding<String>,
@@ -159,6 +169,20 @@ struct PlainCodeTextView: NSViewRepresentable {
             self.fieldNames = fieldNames
             self.booleanFieldNames = booleanFieldNames
             _isFocused = isFocused
+        }
+
+        /// Gives the text view its OWN undo manager instead of the window's.
+        ///
+        /// AppKit registers typing undo with the text view's NSTextStorage as an
+        /// UNRETAINED target on `textView.undoManager` — without this method, the
+        /// window's manager. The Types page tears these editors down on every
+        /// page/type/query-type switch while the main window (and its manager)
+        /// lives on, leaving invocations aimed at freed storage; the next
+        /// Edit › Undo anywhere in that window would pop one and crash in
+        /// objc_msgSend (the 2026-10-02 crash — same mechanism as InstanceTextView).
+        /// A per-editor manager dies with the editor.
+        func undoManager(for view: NSTextView) -> UndoManager? {
+            editorUndoManager
         }
 
         func textDidChange(_ notification: Notification) {

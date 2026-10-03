@@ -490,6 +490,14 @@ struct InstanceTextView: NSViewRepresentable {
         context.coordinator.updateContentHeight(for: textView)
     }
 
+    static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
+        // Nothing can route undo: to this field's manager once the field is gone
+        // (see undoManager(for:)), but drop its entries anyway so no stored
+        // invocation outlives the text storage it targets.
+        coordinator.fieldUndoManager.removeAllActions()
+        (nsView.documentView as? NSTextView)?.delegate = nil
+    }
+
     final class Coordinator: NSObject, NSTextViewDelegate {
         @Binding private var text: String
         let focusController: AddInstanceFieldFocusController
@@ -500,6 +508,8 @@ struct InstanceTextView: NSViewRepresentable {
         let onMoveToNextField: () -> Void
         let onMoveToPreviousField: () -> Void
         weak var textView: NSTextView?
+        /// This field's own undo stack — handed to AppKit via undoManager(for:).
+        let fieldUndoManager = UndoManager()
         /// Last height reported to SwiftUI; a decrease means the text view is
         /// vacating a strip of the clip view that must be repainted (see
         /// updateContentHeight).
@@ -537,6 +547,23 @@ struct InstanceTextView: NSViewRepresentable {
             text = textView.string
             applySyntaxHighlighting()
             updateContentHeight(for: textView)
+        }
+
+        /// Gives the text view its OWN undo manager instead of the window's.
+        ///
+        /// AppKit registers typing undo (`_undoRedoTextOperation:`) with the text
+        /// view's NSTextStorage as an UNRETAINED target, on whatever
+        /// `textView.undoManager` returns — without this method, the window's
+        /// manager via the responder chain. That manager outlives the field:
+        /// SwiftUI tears fields down on an Add-Instance tab switch (`.id(draft.id)`),
+        /// a type change, or an instance load that rebuilds the field list, and the
+        /// window's manager kept invocations aimed at the freed storage. The next
+        /// Edit › Undo in that window popped one and crashed in objc_msgSend
+        /// (the 2026-10-02 crash). A per-field manager dies with the field, and
+        /// Edit › Undo can only reach it through the live field (NSTextView's
+        /// `undoManager` consults this delegate method).
+        func undoManager(for view: NSTextView) -> UndoManager? {
+            fieldUndoManager
         }
 
         func applySyntaxHighlighting() {
