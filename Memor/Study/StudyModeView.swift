@@ -1071,10 +1071,25 @@ private struct StudyModeKeyCommandHandler: NSViewRepresentable {
             removeMonitors()
         }
 
+        /// Whether AppKit would deliver `event` to this view's window: the event's
+        /// own window, else the key window, else the main window (an event can
+        /// carry no window — one dequeued just after its window closed, say).
+        /// Claiming a key only when its destination is our window keeps this
+        /// monitor and AppKit in agreement about who gets a keystroke. On
+        /// 2026-10-02 a study ⌘Z slipped past the stricter `event.window ===
+        /// self.window` test with this monitor installed and the study view in
+        /// the main window; AppKit then handed it to Edit › Undo, which popped a
+        /// stale text-view entry off the main window's undo manager and crashed.
+        private func targetsOwnWindow(_ event: NSEvent) -> Bool {
+            guard let window else { return false }
+            let destination = event.window ?? NSApp.keyWindow ?? NSApp.mainWindow
+            return destination === window
+        }
+
         private func installMonitorsIfNeeded() {
             if keyDownMonitor == nil {
                 keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                    guard let self, event.window === self.window else {
+                    guard let self, self.targetsOwnWindow(event) else {
                         return event
                     }
 
@@ -1167,7 +1182,7 @@ private struct StudyModeKeyCommandHandler: NSViewRepresentable {
 
             if flagsMonitor == nil {
                 flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-                    guard let self, event.window === self.window else {
+                    guard let self, self.targetsOwnWindow(event) else {
                         return event
                     }
                     let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
