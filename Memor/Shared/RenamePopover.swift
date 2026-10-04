@@ -10,6 +10,50 @@
 
 import SwiftUI
 
+/// Tracks the rename popovers currently on screen so a window-level ⌘Return
+/// handler (the instance editor's) can commit the open rename BEFORE it acts.
+/// Needed for the same reason as PickerPopoverEscapeRegistry: the editor's
+/// local key monitor sees the chord before the popover's field editor can
+/// whenever the key event targets the editor window rather than the popover,
+/// so without this ⌘Return saved and closed the instance around the popover
+/// and the typed name was lost. Popovers register onAppear and unregister
+/// onDisappear, keyed by a per-presentation token; realistically one is open
+/// at a time, but the keyed order keeps an overlapping sequence correct.
+final class RenamePopoverSubmitRegistry {
+    static let shared = RenamePopoverSubmitRegistry()
+
+    enum CommitOutcome {
+        /// No rename popover is open — the caller proceeds as usual.
+        case noneOpen
+        /// The open popover's name was accepted (its owner dismissed it).
+        case committed
+        /// The open popover rejected the name and is showing the error in
+        /// place — the caller stops and leaves it up.
+        case rejected
+    }
+
+    private var commitsByToken: [UUID: () -> Bool] = [:]
+    private var order: [UUID] = []
+
+    func register(_ token: UUID, commit: @escaping () -> Bool) {
+        if commitsByToken[token] == nil {
+            order.append(token)
+        }
+        commitsByToken[token] = commit
+    }
+
+    func unregister(_ token: UUID) {
+        commitsByToken[token] = nil
+        order.removeAll { $0 == token }
+    }
+
+    /// Commits the most recently opened popover's rename.
+    func commitTopmost() -> CommitOutcome {
+        guard let token = order.last, let commit = commitsByToken[token] else { return .noneOpen }
+        return commit() ? .committed : .rejected
+    }
+}
+
 struct RenamePopover: View {
     let title: String
     let placeholder: String
@@ -22,6 +66,7 @@ struct RenamePopover: View {
 
     @State private var text: String
     @State private var errorMessage: String?
+    @State private var submitToken = UUID()
 
     init(
         title: String,
@@ -63,9 +108,19 @@ struct RenamePopover: View {
             }
         }
         .padding(12)
+        .onAppear {
+            RenamePopoverSubmitRegistry.shared.register(submitToken) { commit() }
+        }
+        .onDisappear {
+            RenamePopoverSubmitRegistry.shared.unregister(submitToken)
+        }
     }
 
-    private func commit() {
+    /// Returns true once the owner accepted the name (it then dismisses the
+    /// popover); false leaves the popover up showing the owner's error.
+    @discardableResult
+    private func commit() -> Bool {
         errorMessage = onCommit(text)
+        return errorMessage == nil
     }
 }

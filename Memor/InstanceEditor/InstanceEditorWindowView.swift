@@ -176,7 +176,7 @@ struct InstanceEditorWindowView: View {
     private var keyCommandHandler: some View {
         WindowKeyCommandHandler(
             onEscape: { handleEscape() },
-            onCommandReturn: submitInstance,
+            onCommandReturn: submitInstanceFromCommandReturn,
             onCommandS: handleCommandS,
             onCommandB: { wrapFocusedSelection(openTag: "<b>", closeTag: "</b>") },
             onCommandI: { wrapFocusedSelection(openTag: "<i>", closeTag: "</i>") },
@@ -2858,6 +2858,19 @@ struct InstanceEditorWindowView: View {
         Task {
             await submitCurrentInstance()
         }
+    }
+
+    /// ⌘Return. An open "Rename Boundary" popover (the BoundaryMap list's
+    /// right-click → Rename…) has its rename committed FIRST: the window's key
+    /// monitor sees the chord before the popover's field editor can (as with
+    /// Escape — see PickerPopoverEscapeRegistry), so without this the window
+    /// saved and closed around the popover and the typed name was lost. A
+    /// rejected name stays up with its in-place error and the submit waits.
+    private func submitInstanceFromCommandReturn() {
+        if RenamePopoverSubmitRegistry.shared.commitTopmost() == .rejected {
+            return
+        }
+        submitInstance()
     }
 
     private func handleCommandS() {

@@ -67,7 +67,7 @@ Memor/
     BoundaryColorViews.swift        Per-boundary border color UI: color mappings, indicator circle, "Color:" picker popover, right-click catcher
     FlowLayout.swift                Wrapping chip layout (used by the Person editor)
     ToastView.swift                 ToastMessage, ToastStyle, ToastView (used by InstanceEditor)
-    RenamePopover.swift             App-standard "Rename X" popover (name field, in-place error, Cancel/Rename); present via a row-scoped `.popover(item:)` — used by Manage Boundaries and the BoundaryMap editor list
+    RenamePopover.swift             App-standard "Rename X" popover (name field, in-place error, Cancel/Rename); present via a row-scoped `.popover(item:)` — used by Manage Boundaries and the BoundaryMap editor list. Each open popover enrolls in `RenamePopoverSubmitRegistry` so a window-level ⌘Return handler can commit it first (the instance editor's: rename saved, then the instance saved + window closed; a rejected name stays up and the submit waits) — the window's key monitor sees the chord before the popover's field editor, as with Escape
     WindowKeyCommandHandler.swift   Background NSViewRepresentable wiring ⌘Return/⌘S/⌘B/⌘I/⌘O/⌘J/⌘L/⌘T/Esc
     PlainTextEditor.swift           NSTextView wrapper for plain-text fields
     PlainCodeTextView.swift         Code editor NSTextView + FocusedEditor + query-type editor split view
