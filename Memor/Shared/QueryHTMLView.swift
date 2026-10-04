@@ -183,22 +183,27 @@ let localImageResourceScheme = "flashcards-local-image"
 let instanceLinkScheme = "id"
 
 /// Stable base URL for every query `loadHTMLString`. With `baseURL: nil` each
-/// query is an about:blank document with an EMPTY registrable domain, and
-/// WebKit's WebProcessCache refuses to cache such processes — so every query
-/// load spawned a fresh WebContent helper and tore down the old one (64
-/// helpers in one 67-minute study session; one spawn hit a RunningBoard
-/// registration flake and left a permanently blank query, 2026-07-18). A
-/// stable non-empty host makes consecutive loads same-site so one WebContent
-/// process is reused.
+/// query is an about:blank document with an EMPTY registrable domain; the
+/// 2026-07-18 session that ran that way spawned a fresh WebContent helper per
+/// query load and tore down the old one (64 helpers in 67 minutes; one spawn
+/// hit a RunningBoard registration flake and left a permanently blank query).
+/// A stable non-empty host makes consecutive loads same-site, and one
+/// WebContent process is reused for them. (The exact trigger of the per-load
+/// spawn is unconfirmed — a bare loadHTMLString sequence with baseURL nil did
+/// not reproduce it in an October 2026 scratch test — so keep the stable base.)
+/// Note WebKit's WebProcessCache is disabled for this app regardless (it needs
+/// process-swap-on-navigation), so a page-less process is always terminated:
+/// hosts must keep their web view MOUNTED to keep its process — see
+/// StudyModeView.queryContent.
 ///
 /// - This scheme must NEVER be registered via setURLSchemeHandler: WebKit
 ///   forces a process swap when navigating to a registered scheme.
 /// - Same-origin side effect: all queries/previews share one (in-memory,
 ///   ephemeral) storage bucket. No app-generated HTML uses storage.
-/// - If custom schemes turn out not to be process-cached (undocumented),
-///   flip this single line to `URL(string: "https://memor-query.invalid/")!`
-///   — decidePolicyFor matches this constant's scheme+host, nothing else
-///   changes. Verify local images still render before adopting the fallback.
+/// - Fallback if the custom scheme ever misbehaves: flip this single line to
+///   `URL(string: "https://memor-query.invalid/")!` — decidePolicyFor matches
+///   this constant's scheme+host, nothing else changes. Verify local images
+///   still render before adopting it.
 let queryHTMLBaseURL = URL(string: "memor-query://query/")!
 
 /// The single ephemeral data store shared by every WKWebView in the app (still
@@ -449,6 +454,16 @@ struct QueryHTMLView: NSViewRepresentable {
     var onInstanceLinkActivated: ((Int64) -> Void)? = nil
     var onQueryLinkActivated: ((Int64, Int64) -> Void)? = nil
     var onContentCommitted: ((String) -> Void)? = nil
+    /// True while the host is showing something else over this view (a map query). The
+    /// container NSView is then HIDDEN, not merely transparent: a hidden view receives no
+    /// tracking-area or cursor-update events, is excluded from hit-testing, and gives up first
+    /// responder, while its page and WebContent process stay alive (that is the whole point
+    /// of keeping it mounted — see StudyModeView.queryContent). SwiftUI's `.opacity(0)` alone
+    /// leaves the NSView non-hidden with WKWebView's mouse-moved tracking area active, and
+    /// WebKit (through the build on macOS 26.4) answers every move over the covered blank
+    /// page with a SetCursor(arrow) it applies without a hit test — stomping the
+    /// pointing-hand cursor the reverse map queries set on hover.
+    var isObscured: Bool = false
     /// One-shot "play the FIRST <audio> on the shown page" request, nonce-style like
     /// PointMapQueryView(locatorPulseID:): each fresh UUID plays once (restarting from 0),
     /// nil or an unchanged value does nothing. Rides updateNSView without a reload because
@@ -462,8 +477,10 @@ struct QueryHTMLView: NSViewRepresentable {
         view.onInstanceLinkActivated = onInstanceLinkActivated
         view.onQueryLinkActivated = onQueryLinkActivated
         view.onContentCommitted = onContentCommitted
-        // A nonce minted before this container existed (Study remounts the web view when a
-        // map query gives way to a standard one) is already spent — never replay it on mount.
+        view.isHidden = isObscured
+        // A nonce minted before this container existed is already spent — never replay it on
+        // mount. (Study and the Query Preview now keep their web view mounted through map
+        // queries, so this is a guard for hosts that mount lazily, not the common path.)
         view.markPlayRequestHandled(playFirstAudioRequestID)
         return view
     }
@@ -472,6 +489,9 @@ struct QueryHTMLView: NSViewRepresentable {
         containerView.onInstanceLinkActivated = onInstanceLinkActivated
         containerView.onQueryLinkActivated = onQueryLinkActivated
         containerView.onContentCommitted = onContentCommitted
+        // Un-hide BEFORE loading so the next HTML page loads into a visible view (a hidden
+        // view still loads and commits — WebKit just marks the page not visible).
+        containerView.isHidden = isObscured
         containerView.loadHTML(html)
         if let playFirstAudioRequestID {
             containerView.requestPlayFirstAudio(id: playFirstAudioRequestID)

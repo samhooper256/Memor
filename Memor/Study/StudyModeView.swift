@@ -270,7 +270,8 @@ struct StudyModeView: View {
                     onPlayAudio: {
                         // No reveal gate, unlike Edit/Duplicate/arrows: listening queries put the
                         // audio on the QUESTION side. Plays whatever page is showing. Map queries
-                        // have no web view — nothing to play.
+                        // keep the web view mounted on a blank page (see queryContent) — nothing
+                        // to play, so gate on .standard.
                         guard let currentQuery, currentQuery.kind == .standard else { return }
                         playFirstAudioRequestID = UUID()
                     },
@@ -427,23 +428,22 @@ struct StudyModeView: View {
 
     @ViewBuilder
     private func queryContent(for currentQuery: StudyQuery) -> some View {
-        if currentQuery.kind == .pointMap, let payload = currentQuery.pointMapPayload {
-            PointMapQueryView(
-                payload: payload,
-                revealName: isAnswerRevealed,
-                locatorPulseID: pointMapLocatorPulseID,
-                onAnswerSelected: { revealAnswerIfPossible() }
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if currentQuery.kind == .boundaryMap, let payload = currentQuery.boundaryMapPayload {
-            BoundaryMapQueryView(
-                payload: payload,
-                revealName: isAnswerRevealed,
-                showFinder: showBoundaryFinder,
-                onAnswerSelected: { revealAnswerIfPossible() }
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
+        let pointMapPayload = currentQuery.kind == .pointMap ? currentQuery.pointMapPayload : nil
+        let boundaryMapPayload = currentQuery.kind == .boundaryMap ? currentQuery.boundaryMapPayload : nil
+        let showsMap = pointMapPayload != nil || boundaryMapPayload != nil
+        ZStack {
+            // The web view stays MOUNTED through map queries — hidden under the map,
+            // showing a blank page — instead of being swapped out for the map view.
+            // Unmounting the session's only WKWebView destroys its page, and WebKit
+            // then terminates the WebContent process outright (its process cache has
+            // no capacity for apps that don't swap processes on navigation), so every
+            // return to an HTML query paid a fresh process spawn plus the
+            // blank-until-commit gap: 553 spawns in one 25-hour session (2026-10-02).
+            // renderedQuestionHTML/renderedAnswerHTML are "" for map queries, so the
+            // kept view loads a blank page, which also silences any audio the previous
+            // query left playing — what unmounting used to do. `isObscured` hides the
+            // NSView itself (no tracking-area/cursor events, no first responder); the
+            // SwiftUI modifiers below are belt and braces on top of that.
             QueryHTMLView(
                 html: isAnswerRevealed ? renderedAnswerHTML : renderedQuestionHTML,
                 onInstanceLinkActivated: { instanceID in
@@ -454,10 +454,33 @@ struct StudyModeView: View {
                     queryPreviewWindowState.requestOpen(instanceID: instanceID, queryTypeID: queryTypeID)
                     openWindow(id: "query-preview")
                 },
+                isObscured: showsMap,
                 playFirstAudioRequestID: playFirstAudioRequestID
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .opacity(showsMap ? 0 : 1)
+            .allowsHitTesting(!showsMap)
+            .accessibilityHidden(showsMap)
+
+            if let payload = pointMapPayload {
+                PointMapQueryView(
+                    payload: payload,
+                    revealName: isAnswerRevealed,
+                    locatorPulseID: pointMapLocatorPulseID,
+                    onAnswerSelected: { revealAnswerIfPossible() }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let payload = boundaryMapPayload {
+                BoundaryMapQueryView(
+                    payload: payload,
+                    revealName: isAnswerRevealed,
+                    showFinder: showBoundaryFinder,
+                    onAnswerSelected: { revealAnswerIfPossible() }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder

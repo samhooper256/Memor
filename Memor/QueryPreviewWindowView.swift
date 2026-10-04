@@ -48,43 +48,66 @@ struct QueryPreviewWindowView: View {
                         .foregroundStyle(.red)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                         .padding(24)
-                } else if let query, query.kind == .pointMap, let payload = query.pointMapPayload {
-                    PointMapQueryView(payload: payload, revealName: true)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let query, query.kind == .boundaryMap, let payload = query.boundaryMapPayload {
-                    BoundaryMapQueryView(payload: payload, revealName: true)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if developerState.isDeveloperModeEnabled, !renderedAnswerHTML.isEmpty {
-                    ScrollView([.vertical, .horizontal]) {
-                        Text(renderedAnswerHTML)
-                            .font(.system(.body, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(12)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    // Mounted while renderedAnswerHTML is still empty (the old
-                    // gate was `!renderedAnswerHTML.isEmpty`), so WKWebView
-                    // creation + WebContent-process attach overlap the DB fetch
-                    // and HTML build instead of only starting after them. The
-                    // superseded empty-page load is harmless: its cancellation
-                    // is NSURLErrorCancelled, which the recovery machinery
-                    // explicitly ignores.
-                    QueryHTMLView(
-                        html: renderedAnswerHTML,
-                        disableUserInteraction: true,
-                        onInstanceLinkActivated: navigateToInstance,
-                        onQueryLinkActivated: navigateToQuery,
-                        onContentCommitted: { hasCommittedContent = !$0.isEmpty },
-                        playFirstAudioRequestID: playFirstAudioRequestID
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .overlay {
-                        if !hasCommittedContent {
-                            ProgressView()
+                    let pointMapPayload = query?.kind == .pointMap ? query?.pointMapPayload : nil
+                    let boundaryMapPayload = query?.kind == .boundaryMap ? query?.boundaryMapPayload : nil
+                    let showsMap = pointMapPayload != nil || boundaryMapPayload != nil
+                    let showsSource = !showsMap && developerState.isDeveloperModeEnabled && !renderedAnswerHTML.isEmpty
+                    ZStack {
+                        if !showsSource {
+                            // Mounted while renderedAnswerHTML is still empty (the old
+                            // gate was `!renderedAnswerHTML.isEmpty`), so WKWebView
+                            // creation + WebContent-process attach overlap the DB fetch
+                            // and HTML build instead of only starting after them. The
+                            // superseded empty-page load is harmless: its cancellation
+                            // is NSURLErrorCancelled, which the recovery machinery
+                            // explicitly ignores.
+                            //
+                            // Also kept mounted — hidden, on a blank page — while a map
+                            // query is previewed, so navigating map → HTML reuses the
+                            // web view's WebContent process instead of spawning one
+                            // (see StudyModeView.queryContent; `isObscured` hides the
+                            // NSView itself, the SwiftUI modifiers are belt and braces).
+                            QueryHTMLView(
+                                html: renderedAnswerHTML,
+                                disableUserInteraction: true,
+                                onInstanceLinkActivated: navigateToInstance,
+                                onQueryLinkActivated: navigateToQuery,
+                                onContentCommitted: { hasCommittedContent = !$0.isEmpty },
+                                isObscured: showsMap,
+                                playFirstAudioRequestID: playFirstAudioRequestID
+                            )
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .overlay {
+                                // The hidden web view's blank commit resets the flag during
+                                // a map preview; don't leave a spinner animating under the map.
+                                if !hasCommittedContent && !showsMap {
+                                    ProgressView()
+                                }
+                            }
+                            .opacity(showsMap ? 0 : 1)
+                            .allowsHitTesting(!showsMap)
+                            .accessibilityHidden(showsMap)
+                        }
+
+                        if let payload = pointMapPayload {
+                            PointMapQueryView(payload: payload, revealName: true)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else if let payload = boundaryMapPayload {
+                            BoundaryMapQueryView(payload: payload, revealName: true)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else if showsSource {
+                            ScrollView([.vertical, .horizontal]) {
+                                Text(renderedAnswerHTML)
+                                    .font(.system(.body, design: .monospaced))
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(12)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                         }
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -122,8 +145,8 @@ struct QueryPreviewWindowView: View {
                 // observe the previous query's state.
                 loadPreview()
             } else {
-                // Fresh open of a closed window: unmount the previous session's
-                // web view first, then load after the blank state applies, so the
+                // Fresh open of a closed window: blank the (still-mounted) web
+                // view first, then load after the blank state applies, so the
                 // window can never appear showing the old query.
                 query = nil
                 renderOverrides = .none
@@ -259,7 +282,8 @@ struct QueryPreviewWindowView: View {
     }
 
     /// Play Audio key (A): restart and play the first <audio> on the previewed page. No-op for
-    /// the map, error, and developer-mode raw-HTML branches — none of them mounts a web view.
+    /// the map branch (the web view stays mounted but on a blank page) and for the error and
+    /// developer-mode raw-HTML branches (no web view at all) — hence the .standard gate.
     private func handlePlayAudio() {
         guard let query, query.kind == .standard, !renderedAnswerHTML.isEmpty else { return }
         playFirstAudioRequestID = UUID()
