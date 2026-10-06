@@ -249,6 +249,17 @@ struct PointMapQueryView: View {
     // Reddish tint for the pre-reveal hint text on Forward point queries.
     private static let hintColor = Color(red: 0.85, green: 0.26, blue: 0.26)
 
+    // Height of the name/hint strip under the map: room for TWO lines of the
+    // .title2 name (22pt each on macOS) plus slack, so a multi-line point name
+    // shows its first two lines instead of truncating after one — the old 40pt
+    // strip fit a single line. Fixed rather than content-sized so the map
+    // above never resizes between queries or at reveal.
+    private static let answerAreaHeight: CGFloat = {
+        let font = NSFont.preferredFont(forTextStyle: .title2)
+        let lineHeight = (font.ascender - font.descender + font.leading).rounded(.up)
+        return 2 * lineHeight + 4
+    }()
+
     // In a reverse query the user is shown the name and must click the matching
     // point. Before they reveal, the answer must not be pre-highlighted and the
     // points become interactive (hover-red + pointer + click-to-reveal).
@@ -406,9 +417,11 @@ struct PointMapQueryView: View {
                         .font(.title2)
                         .fontWeight(.semibold)
                         .foregroundStyle(answerTextColor)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
                 }
             }
-            .frame(height: 40)
+            .frame(height: Self.answerAreaHeight)
             .padding(.bottom, 12)
         }
     }
