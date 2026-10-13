@@ -124,6 +124,12 @@ struct InstancesPageView: View {
                                     maxIntervalInput = ""
                                     isSetMaxIntervalPresented = true
                                 },
+                                sharedPriority: { instanceIDs in
+                                    appDatabase.fetchSharedInstancePriority(instanceIDs: instanceIDs)
+                                },
+                                onSetPriority: { instanceIDs, priority in
+                                    applyInstancePriority(priority, to: instanceIDs)
+                                },
                                 onDuplicateInstance: { instanceID in
                                     addInstanceWindowState.requestOpenForDuplication(sourceInstanceID: instanceID)
                                     openWindow(id: "add-instance")
@@ -374,6 +380,21 @@ struct InstancesPageView: View {
             revertedPageData.rows = previousRows
             self.pageData = revertedPageData
             errorMessage = "Failed to update query."
+        }
+    }
+
+    /// Sets the selected instances' own priority (their queries' stored
+    /// priorities are untouched).
+    @MainActor
+    private func applyInstancePriority(_ priority: Int, to instanceIDs: Set<Int64>) {
+        guard !instanceIDs.isEmpty else { return }
+        do {
+            try appDatabase.setInstancePriority(instanceIDs: instanceIDs, priority: priority)
+            NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
+            let count = instanceIDs.count
+            showToast("Priority \(priority) set on \(count) \(count == 1 ? "instance" : "instances")")
+        } catch {
+            errorMessage = "Failed to set priority."
         }
     }
 
@@ -657,6 +678,8 @@ private struct TypeInstancesTableView: View {
     let onApplyQueryChange: (_ isEnabled: Bool, _ queryTypeID: Int64, _ instanceIDs: Set<Int64>) async -> Void
     let onRequestOfficeQueryChange: (_ isEnabled: Bool, _ instanceIDs: Set<Int64>) -> Void
     let onRequestSetMaxInterval: (Set<Int64>) -> Void
+    let sharedPriority: (Set<Int64>) -> Int?
+    let onSetPriority: (_ instanceIDs: Set<Int64>, _ priority: Int) -> Void
     let onDuplicateInstance: (Int64) -> Void
     let onRequestDelete: (Set<Int64>) -> Void
 
@@ -711,6 +734,11 @@ private struct TypeInstancesTableView: View {
             }
             Button("Set Max Interval") {
                 onRequestSetMaxInterval(items)
+            }
+            if !items.isEmpty {
+                SetPrioritySubmenu(currentPriority: sharedPriority(items)) { priority in
+                    onSetPriority(items, priority)
+                }
             }
             if !items.isEmpty {
                 Divider()

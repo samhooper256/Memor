@@ -540,6 +540,12 @@ private struct CollectionDetailPageView: View {
                         }
                     }
                     if !items.isEmpty {
+                        SetPrioritySubmenu(
+                            currentPriority: appDatabase.fetchSharedInstancePriority(instanceIDs: items)
+                        ) { priority in
+                            setInstancePriority(priority, for: items)
+                        }
+                        Divider()
                         Button("Remove from Collection", role: .destructive) {
                             promptToRemoveInstances(items)
                         }
@@ -677,6 +683,15 @@ private struct CollectionDetailPageView: View {
         guard !instanceIDs.isEmpty else { return }
         pendingDeletionInstanceIDs = Array(instanceIDs)
         isDeletionConfirmationPresented = true
+    }
+
+    /// Sets the instances' own priority (their queries' stored priorities are
+    /// untouched).
+    private func setInstancePriority(_ priority: Int, for instanceIDs: Set<Int64>) {
+        // `errorMessage` would replace the whole table, so a failure here is
+        // silent like the delete path's.
+        try? appDatabase.setInstancePriority(instanceIDs: instanceIDs, priority: priority)
+        NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
     }
 
     private func confirmPendingDeletion() {

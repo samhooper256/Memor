@@ -602,6 +602,11 @@ struct SearchWindowView: View {
                 Button("Remove from collection…") {
                     presentCollectionPicker(instanceIDs: items, adding: false)
                 }
+                SetPrioritySubmenu(
+                    currentPriority: appDatabase.fetchSharedInstancePriority(instanceIDs: items)
+                ) { priority in
+                    setInstancePriority(priority, for: items)
+                }
             }
             if let selection = convertibleSelection(items) {
                 Button("Change Type") {
@@ -673,6 +678,23 @@ struct SearchWindowView: View {
                 }
                 Button("Remove from collection…") {
                     presentCollectionPicker(instanceIDs: queryInstanceIDs(forSelectedQueryIDs: items), adding: false)
+                }
+                Divider()
+                // A query's own priority and its instance's are separate
+                // settings (the higher one wins in Study), so both are offered.
+                SetPrioritySubmenu(
+                    title: items.count == 1 ? "Set Query Priority" : "Set Query Priorities",
+                    currentPriority: appDatabase.fetchSharedQueryPriority(targets: collectQueryTargets(selecting: items))
+                ) { priority in
+                    setQueryPriority(priority, forQueryIDs: items)
+                }
+                SetPrioritySubmenu(
+                    title: "Set Instance Priority",
+                    currentPriority: appDatabase.fetchSharedInstancePriority(
+                        instanceIDs: queryInstanceIDs(forSelectedQueryIDs: items)
+                    )
+                ) { priority in
+                    setInstancePriority(priority, for: queryInstanceIDs(forSelectedQueryIDs: items))
                 }
                 Divider()
                 Button(items.count == 1 ? "Reset Due Date" : "Reset Due Dates") {
@@ -1001,6 +1023,35 @@ struct SearchWindowView: View {
             errorMessage = nil
         } catch {
             errorMessage = "Failed to reset due dates."
+        }
+    }
+
+    /// Sets the stored priority of the selected query rows (instance
+    /// priorities are untouched).
+    @MainActor
+    private func setQueryPriority(_ priority: Int, forQueryIDs ids: Set<String>) {
+        let targets = collectQueryTargets(selecting: ids)
+        guard !targets.isEmpty else { return }
+        do {
+            try appDatabase.setQueryPriority(targets: targets, priority: priority)
+            NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
+            errorMessage = nil
+        } catch {
+            errorMessage = "Failed to set priority."
+        }
+    }
+
+    /// Sets the instances' own priority (their queries' stored priorities are
+    /// untouched). Shared by Instances mode and Queries mode.
+    @MainActor
+    private func setInstancePriority(_ priority: Int, for instanceIDs: Set<Int64>) {
+        guard !instanceIDs.isEmpty else { return }
+        do {
+            try appDatabase.setInstancePriority(instanceIDs: instanceIDs, priority: priority)
+            NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
+            errorMessage = nil
+        } catch {
+            errorMessage = "Failed to set priority."
         }
     }
 

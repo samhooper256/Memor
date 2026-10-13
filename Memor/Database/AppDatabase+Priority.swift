@@ -36,6 +36,22 @@ extension AppDatabase {
         }
     }
 
+    /// The priority every given instance shares, or nil when they differ —
+    /// the "Set Priority" submenus checkmark it. Large selections (beyond one
+    /// statement's comfortable parameter count) also return nil.
+    func fetchSharedInstancePriority(instanceIDs: some Swift.Collection<Int64>) -> Int? {
+        guard !instanceIDs.isEmpty, instanceIDs.count <= 500 else { return nil }
+        let placeholders = repeatElement("?", count: instanceIDs.count).joined(separator: ", ")
+        let priorities = (try? dbQueue.read { db in
+            try Int.fetchAll(
+                db,
+                sql: "SELECT DISTINCT priority FROM instance_id_type_id WHERE instance_id IN (\(placeholders))",
+                arguments: StatementArguments(Array(instanceIDs))
+            )
+        }) ?? []
+        return priorities.count == 1 ? priorities[0] : nil
+    }
+
     /// Sets the instances' own priority. Never touches their queries' stored
     /// priorities (the instance value only raises their effective priority).
     func setInstancePriority(instanceIDs: some Swift.Collection<Int64>, priority: Int) throws {
@@ -82,6 +98,52 @@ extension AppDatabase {
                 )
             }
         }
+    }
+
+    /// The stored priority every given query target shares, or nil when they
+    /// differ (or the selection is very large) — for submenu checkmarks.
+    func fetchSharedQueryPriority(targets: [QueryTarget]) -> Int? {
+        guard !targets.isEmpty, targets.count <= 500 else { return nil }
+        let priorities: Set<Int>? = try? dbQueue.read { db in
+            var priorities: Set<Int> = []
+            for target in targets {
+                let priority: Int?
+                switch target.kind {
+                case .standard:
+                    priority = try Int.fetchOne(
+                        db,
+                        sql: "SELECT priority FROM query WHERE instance_id = ? AND query_type_id = ?",
+                        arguments: [target.instanceID, target.queryTypeID]
+                    )
+                case .point:
+                    priority = try Int.fetchOne(
+                        db,
+                        sql: "SELECT priority FROM pointmap_query WHERE point_id = ? AND is_reverse = ?",
+                        arguments: [target.queryTypeID, target.isReverse ? 1 : 0]
+                    )
+                case .boundary:
+                    priority = try Int.fetchOne(
+                        db,
+                        sql: "SELECT priority FROM boundarymap_query WHERE attachment_id = ? AND is_reverse = ?",
+                        arguments: [target.queryTypeID, target.isReverse ? 1 : 0]
+                    )
+                case .person:
+                    priority = try Int.fetchOne(
+                        db,
+                        sql: """
+                            SELECT priority FROM person_query
+                            WHERE instance_id = ? AND kind = ? AND partnership_id IS ? AND office_id IS ?
+                            """,
+                        arguments: [target.instanceID, target.personKind?.rawValue, target.personPartnershipID, target.personOfficeID]
+                    )
+                }
+                if let priority { priorities.insert(priority) }
+                if priorities.count > 1 { break }
+            }
+            return priorities
+        }
+        guard let priorities, priorities.count == 1 else { return nil }
+        return priorities.first
     }
 
     /// Sets the stored priority of specific query targets (any kind; one
