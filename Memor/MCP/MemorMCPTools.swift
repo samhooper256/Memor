@@ -3182,7 +3182,7 @@ enum MemorMCPTools {
 
             Tool(
                 name: "list_stacks",
-                description: "List all stacks (saved query searches that the user studies). Set include_counts to also compute each stack's query counts by SRS color: blue (new), red (seen, due soon), green (answered correctly recently), magenta (interval >= 1 day); null counts mean the stack's search failed to parse. Computing counts can take tens of seconds on large databases — omit include_counts unless you need them.",
+                description: "List all stacks (saved query searches that the user studies). Set include_counts to also compute each stack's query counts by SRS color: blue (new), red (seen, due soon), green (answered correctly recently), magenta (interval >= 1 day), plus max_due_priority — the highest effective study priority (1–10; max of a query's own priority and its instance's) among the due blue/red/green queries, null when nothing is due; null counts mean the stack's search failed to parse. Computing counts can take tens of seconds on large databases — omit include_counts unless you need them.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object(["include_counts": boolValue])
@@ -3815,6 +3815,9 @@ private struct StackDTO: Encodable {
     let redQueryCount: Int?
     let greenQueryCount: Int?
     let magentaQueryCount: Int?
+    // Highest effective priority among the due (blue/red/green) queries;
+    // nil when nothing is due (or counts weren't requested).
+    let maxDuePriority: Int?
 
     init(_ s: Stack, counts: StackQueryCounts? = nil) {
         id = s.id
@@ -3826,6 +3829,7 @@ private struct StackDTO: Encodable {
         redQueryCount = counts?.redQueryCount
         greenQueryCount = counts?.greenQueryCount
         magentaQueryCount = counts?.magentaQueryCount
+        maxDuePriority = counts?.maxDuePriority
     }
 }
 

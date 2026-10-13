@@ -351,6 +351,11 @@ private struct StackRowView: View {
                     .controlSize(.small)
             } else if let queryCounts {
                 HStack(spacing: 12) {
+                    if let maxDuePriority = queryCounts.maxDuePriority {
+                        PriorityBadge(priority: maxDuePriority, font: .title3.monospacedDigit())
+                            .help("The highest priority among this stack's due queries — Study shows queries at this priority first.")
+                    }
+
                     Text("\(queryCounts.magentaQueryCount)")
                         .foregroundStyle(queryCounts.magentaQueryCount == 0 ? Color.secondary : Color(nsColor: .magenta))
 
@@ -568,6 +573,11 @@ private struct StackCardView: View {
 
             if let queryCounts {
                 HStack(spacing: 12) {
+                    if let maxDuePriority = queryCounts.maxDuePriority {
+                        PriorityBadge(priority: maxDuePriority, font: .title3.monospacedDigit())
+                            .help("The highest priority among this stack's due queries — Study shows queries at this priority first.")
+                    }
+
                     Text("\(queryCounts.magentaQueryCount)")
                         .foregroundStyle(queryCounts.magentaQueryCount == 0 ? Color.secondary : Color(nsColor: .magenta))
 

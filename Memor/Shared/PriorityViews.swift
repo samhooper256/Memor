@@ -21,6 +21,7 @@ import SwiftUI
 struct PriorityBadge: View {
     let priority: Int
     var effectivePriority: Int? = nil
+    var font: Font = .subheadline.monospacedDigit()
 
     private var raisedEffectivePriority: Int? {
         guard let effectivePriority, effectivePriority > priority else { return nil }
@@ -41,7 +42,7 @@ struct PriorityBadge: View {
                 Text("P\(raisedEffectivePriority)")
             }
         }
-        .font(.subheadline.monospacedDigit())
+        .font(font)
         .foregroundStyle(Self.color(for: shownPriority))
         .padding(.horizontal, 5)
         .padding(.vertical, 1)

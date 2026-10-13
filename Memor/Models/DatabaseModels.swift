@@ -357,6 +357,9 @@ nonisolated struct StackQueryCounts: Hashable {
     let redQueryCount: Int
     let greenQueryCount: Int
     let magentaQueryCount: Int
+    /// Highest effective priority among the DUE (blue/red/green) queries —
+    /// the set a Study session loads. nil when nothing is due.
+    var maxDuePriority: Int? = nil
 }
 
 // Everything the Stacks page shows after a refresh, computed in one database

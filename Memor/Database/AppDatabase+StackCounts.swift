@@ -114,13 +114,15 @@ extension AppDatabase {
         var red = 0
         var green = 0
         var magenta = 0
+        var maxDuePriority: Int?
 
         var stackQueryCounts: StackQueryCounts {
             StackQueryCounts(
                 blueQueryCount: blue,
                 redQueryCount: red,
                 greenQueryCount: green,
-                magentaQueryCount: magenta
+                magentaQueryCount: magenta,
+                maxDuePriority: maxDuePriority
             )
         }
     }
@@ -564,8 +566,10 @@ extension AppDatabase {
 
     /// Runs one statement (or a few, if SQLite limits force chunking) over
     /// `fromClause`, computing each row's color bucket once and a 0/1 match
-    /// flag per group, and adds the 4-per-group SUM results into `totals`.
-    /// `srsAlias` is the alias exposing `interval` and `last_answered_timestamp`.
+    /// flag per group, and adds the 4-per-group SUM results into `totals`
+    /// (plus each group's highest effective priority among due rows, buckets
+    /// 0–2). `srsAlias` is the alias exposing `interval`,
+    /// `last_answered_timestamp`, `priority`, and `instance_id`.
     nonisolated private func addBatchedCategoryCounts(
         db: Database,
         fromClause: String,
@@ -596,6 +600,7 @@ extension AppDatabase {
                 for bucket in 0...3 {
                     sumColumns.append("COALESCE(SUM(CASE WHEN m\(chunkIndex) AND bucket = \(bucket) THEN 1 ELSE 0 END), 0)")
                 }
+                sumColumns.append("MAX(CASE WHEN m\(chunkIndex) AND bucket BETWEEN 0 AND 2 THEN effective_priority END)")
                 arguments += group.arguments
             }
 
@@ -611,6 +616,7 @@ extension AppDatabase {
                             WHEN \(srsAlias).last_answered_timestamp + \(srsAlias).interval >= ? THEN 3
                             ELSE -1
                         END AS bucket,
+                        \(Self.effectivePrioritySQL(srsAlias: srsAlias)) AS effective_priority,
                         \(matchColumns.joined(separator: ",\n            "))
                     \(fromClause)
                 )
@@ -620,10 +626,14 @@ extension AppDatabase {
                 throw DatabaseError(message: "Failed to fetch batched stack query counts.")
             }
             for (chunkIndex, group) in chunk.enumerated() {
-                totals[group.groupIndex].blue += row[chunkIndex * 4]
-                totals[group.groupIndex].red += row[chunkIndex * 4 + 1]
-                totals[group.groupIndex].green += row[chunkIndex * 4 + 2]
-                totals[group.groupIndex].magenta += row[chunkIndex * 4 + 3]
+                let base = chunkIndex * 5
+                totals[group.groupIndex].blue += row[base]
+                totals[group.groupIndex].red += row[base + 1]
+                totals[group.groupIndex].green += row[base + 2]
+                totals[group.groupIndex].magenta += row[base + 3]
+                if let scanMax = row[base + 4] as Int? {
+                    totals[group.groupIndex].maxDuePriority = max(totals[group.groupIndex].maxDuePriority ?? scanMax, scanMax)
+                }
             }
 
             chunk = []
