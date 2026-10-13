@@ -91,6 +91,7 @@ struct PersonOfficesEditor: View {
                         if let sibling = draft.personOffices.first(where: { $0.officeID == officeID }) {
                             entry.isOfficeQueryEnabled = sibling.isOfficeQueryEnabled
                             entry.officeQueryInterval = sibling.officeQueryInterval
+                            entry.officeQueryPriority = sibling.officeQueryPriority
                         }
                         draft.personOffices.append(entry)
                         // Deferred a tick: the card's Began field doesn't exist

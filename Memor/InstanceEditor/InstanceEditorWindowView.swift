@@ -340,6 +340,15 @@ struct InstanceEditorWindowView: View {
                         }
                         .controlSize(.small)
                     }
+
+                    if draft.selectedTypeID != nil {
+                        Text("Priority:")
+                            .padding(.leading, 8)
+                        PriorityMenu(
+                            priority: $draft.instancePriority,
+                            help: "Instance priority (1–10): each of this instance's queries is studied at this priority or its own, whichever is higher. Click to change."
+                        )
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -568,7 +577,9 @@ struct InstanceEditorWindowView: View {
                             PointMapEntryRow(
                                 name: entry.name,
                                 forwardEnabled: pointMapForwardBinding(for: entry.ref),
-                                reverseEnabled: pointMapReverseBinding(for: entry.ref)
+                                reverseEnabled: pointMapReverseBinding(for: entry.ref),
+                                forwardPriority: pointMapPriorityBinding(for: entry.ref, isReverse: false),
+                                reversePriority: pointMapPriorityBinding(for: entry.ref, isReverse: true)
                             )
                             .tag(entry.ref)
                         }
@@ -583,6 +594,15 @@ struct InstanceEditorWindowView: View {
                             Menu("Disable Queries") {
                                 Button("Forward") { setPointMapEntriesEnabled(refs, forward: false, reverse: nil) }
                                 Button("Reverse") { setPointMapEntriesEnabled(refs, forward: nil, reverse: false) }
+                            }
+                            // Draft-only like enabling: written on save.
+                            Menu("Set Priority") {
+                                SetPrioritySubmenu(title: "Forward") { priority in
+                                    setPointMapEntriesPriority(refs, isReverse: false, priority: priority)
+                                }
+                                SetPrioritySubmenu(title: "Reverse") { priority in
+                                    setPointMapEntriesPriority(refs, isReverse: true, priority: priority)
+                                }
                             }
                             // Resetting writes SRS state directly to the saved points,
                             // so it's only meaningful once the instance exists (Edit mode).
@@ -946,7 +966,7 @@ struct InstanceEditorWindowView: View {
             initialForwardEnabled: true,
             initialReverseEnabled: false,
             isEdit: false
-        ) { name, lat, lng, forward, reverse, hint in
+        ) { name, lat, lng, forward, reverse, hint, forwardPriority, reversePriority in
             let entry = PointMapPointDraftEntry(
                 localID: UUID(),
                 name: name,
@@ -954,7 +974,9 @@ struct InstanceEditorWindowView: View {
                 longitude: lng,
                 forwardEnabled: forward,
                 reverseEnabled: reverse,
-                hint: hint
+                hint: hint,
+                forwardPriority: forwardPriority,
+                reversePriority: reversePriority
             )
             draft.pointMapNewPoints.append(entry)
         }
@@ -975,6 +997,8 @@ struct InstanceEditorWindowView: View {
                 initialReverseEnabled: point.reverseEnabled,
                 forwardInterval: point.forwardInterval,
                 reverseInterval: point.reverseInterval,
+                initialForwardPriority: point.forwardPriority,
+                initialReversePriority: point.reversePriority,
                 isEdit: true,
                 onResetForward: {
                     try? appDatabase.resetPointMapPointDueDate(pointID: id, isReverse: false)
@@ -988,7 +1012,7 @@ struct InstanceEditorWindowView: View {
                         draft.pointMapExistingPoints[idx].reverseInterval = 0
                     }
                 }
-            ) { name, lat, lng, forward, reverse, hint in
+            ) { name, lat, lng, forward, reverse, hint, forwardPriority, reversePriority in
                 guard let idx = draft.pointMapExistingPoints.firstIndex(where: { $0.id == id }) else { return }
                 let existing = draft.pointMapExistingPoints[idx]
                 draft.pointMapExistingPoints[idx] = PointMapPoint(
@@ -1001,8 +1025,8 @@ struct InstanceEditorWindowView: View {
                     reverseEnabled: reverse,
                     forwardInterval: existing.forwardInterval,
                     reverseInterval: existing.reverseInterval,
-                    forwardPriority: existing.forwardPriority,
-                    reversePriority: existing.reversePriority,
+                    forwardPriority: forwardPriority,
+                    reversePriority: reversePriority,
                     hint: hint
                 )
             }
@@ -1016,8 +1040,10 @@ struct InstanceEditorWindowView: View {
                 initialLongitude: String(entry.longitude),
                 initialForwardEnabled: entry.forwardEnabled,
                 initialReverseEnabled: entry.reverseEnabled,
+                initialForwardPriority: entry.forwardPriority,
+                initialReversePriority: entry.reversePriority,
                 isEdit: true
-            ) { name, lat, lng, forward, reverse, hint in
+            ) { name, lat, lng, forward, reverse, hint, forwardPriority, reversePriority in
                 guard let idx = draft.pointMapNewPoints.firstIndex(where: { $0.localID == localID }) else { return }
                 draft.pointMapNewPoints[idx] = PointMapPointDraftEntry(
                     localID: localID,
@@ -1026,7 +1052,9 @@ struct InstanceEditorWindowView: View {
                     longitude: lng,
                     forwardEnabled: forward,
                     reverseEnabled: reverse,
-                    hint: hint
+                    hint: hint,
+                    forwardPriority: forwardPriority,
+                    reversePriority: reversePriority
                 )
             }
         }
@@ -1108,6 +1136,47 @@ struct InstanceEditorWindowView: View {
         }
     }
 
+    // A point direction's drafted query priority (written on save).
+    private func pointMapPriorityBinding(for ref: PointMapEntryRef, isReverse: Bool) -> Binding<Int> {
+        Binding(
+            get: {
+                switch ref {
+                case .existing(let id):
+                    guard let point = draft.pointMapExistingPoints.first(where: { $0.id == id }) else { return QUERY_PRIORITY_DEFAULT }
+                    return isReverse ? point.reversePriority : point.forwardPriority
+                case .new(let localID):
+                    guard let entry = draft.pointMapNewPoints.first(where: { $0.localID == localID }) else { return QUERY_PRIORITY_DEFAULT }
+                    return isReverse ? entry.reversePriority : entry.forwardPriority
+                }
+            },
+            set: { setPointMapEntriesPriority([ref], isReverse: isReverse, priority: $0) }
+        )
+    }
+
+    // Bulk-sets one direction's drafted priority (the points list's "Set
+    // Priority" submenu). Applies whether or not the direction is enabled, so
+    // enabling it afterwards keeps the chosen priority.
+    private func setPointMapEntriesPriority(_ refs: Set<PointMapEntryRef>, isReverse: Bool, priority: Int) {
+        for ref in refs {
+            switch ref {
+            case .existing(let id):
+                guard let index = draft.pointMapExistingPoints.firstIndex(where: { $0.id == id }) else { continue }
+                if isReverse {
+                    draft.pointMapExistingPoints[index].reversePriority = priority
+                } else {
+                    draft.pointMapExistingPoints[index].forwardPriority = priority
+                }
+            case .new(let localID):
+                guard let index = draft.pointMapNewPoints.firstIndex(where: { $0.localID == localID }) else { continue }
+                if isReverse {
+                    draft.pointMapNewPoints[index].reversePriority = priority
+                } else {
+                    draft.pointMapNewPoints[index].forwardPriority = priority
+                }
+            }
+        }
+    }
+
     // Reset the due dates for one query direction across all selected saved points
     // (Edit mode only — new points have no persisted queries yet). Writes straight to
     // the DB and reports how many queries were actually reset via a green toast.
@@ -1186,7 +1255,9 @@ struct InstanceEditorWindowView: View {
                 longitude: entry.longitude,
                 forwardEnabled: entry.forwardEnabled,
                 reverseEnabled: entry.reverseEnabled,
-                hint: entry.hint
+                hint: entry.hint,
+                forwardPriority: entry.forwardPriority,
+                reversePriority: entry.reversePriority
             )
         }
         do {
@@ -1341,7 +1412,9 @@ struct InstanceEditorWindowView: View {
                                     applyBoundaryColorChange(boundaryID: entry.boundaryID, color: color)
                                 },
                                 forwardEnabled: boundaryMapForwardBinding(for: entry.ref),
-                                reverseEnabled: boundaryMapReverseBinding(for: entry.ref)
+                                reverseEnabled: boundaryMapReverseBinding(for: entry.ref),
+                                forwardPriority: boundaryMapPriorityBinding(for: entry.ref, isReverse: false),
+                                reversePriority: boundaryMapPriorityBinding(for: entry.ref, isReverse: true)
                             )
                             .tag(entry.ref)
                             .popover(item: boundaryMapRenameItem(for: entry.ref), arrowEdge: .bottom) { _ in
@@ -1377,6 +1450,15 @@ struct InstanceEditorWindowView: View {
                             Menu("Disable Queries") {
                                 Button("Forward") { setBoundaryMapEntriesEnabled(refs, forward: false, reverse: nil) }
                                 Button("Reverse") { setBoundaryMapEntriesEnabled(refs, forward: nil, reverse: false) }
+                            }
+                            // Draft-only like enabling: written on save.
+                            Menu("Set Priority") {
+                                SetPrioritySubmenu(title: "Forward") { priority in
+                                    setBoundaryMapEntriesPriority(refs, isReverse: false, priority: priority)
+                                }
+                                SetPrioritySubmenu(title: "Reverse") { priority in
+                                    setBoundaryMapEntriesPriority(refs, isReverse: true, priority: priority)
+                                }
                             }
                             // Resetting writes SRS state directly to the saved
                             // attachments, so it's only meaningful once the
@@ -1739,6 +1821,46 @@ struct InstanceEditorWindowView: View {
         }
     }
 
+    // A boundary direction's drafted query priority (written on save).
+    private func boundaryMapPriorityBinding(for ref: BoundaryMapEntryRef, isReverse: Bool) -> Binding<Int> {
+        Binding(
+            get: {
+                switch ref {
+                case .existing(let id):
+                    guard let attached = draft.boundaryMapExistingAttachments.first(where: { $0.id == id }) else { return QUERY_PRIORITY_DEFAULT }
+                    return isReverse ? attached.reversePriority : attached.forwardPriority
+                case .new(let localID):
+                    guard let entry = draft.boundaryMapNewAttachments.first(where: { $0.localID == localID }) else { return QUERY_PRIORITY_DEFAULT }
+                    return isReverse ? entry.reversePriority : entry.forwardPriority
+                }
+            },
+            set: { setBoundaryMapEntriesPriority([ref], isReverse: isReverse, priority: $0) }
+        )
+    }
+
+    // Bulk-sets one direction's drafted priority (the boundaries list's "Set
+    // Priority" submenu), enabled or not — mirrors the PointMap list.
+    private func setBoundaryMapEntriesPriority(_ refs: Set<BoundaryMapEntryRef>, isReverse: Bool, priority: Int) {
+        for ref in refs {
+            switch ref {
+            case .existing(let id):
+                guard let index = draft.boundaryMapExistingAttachments.firstIndex(where: { $0.id == id }) else { continue }
+                if isReverse {
+                    draft.boundaryMapExistingAttachments[index].reversePriority = priority
+                } else {
+                    draft.boundaryMapExistingAttachments[index].forwardPriority = priority
+                }
+            case .new(let localID):
+                guard let index = draft.boundaryMapNewAttachments.firstIndex(where: { $0.localID == localID }) else { continue }
+                if isReverse {
+                    draft.boundaryMapNewAttachments[index].reversePriority = priority
+                } else {
+                    draft.boundaryMapNewAttachments[index].forwardPriority = priority
+                }
+            }
+        }
+    }
+
     // Reset the due dates for one query direction across all selected saved
     // attachments (Edit mode only — new attachments have no persisted queries
     // yet). Writes straight to the DB and reports how many queries were
@@ -1970,6 +2092,14 @@ struct InstanceEditorWindowView: View {
         }
     }
 
+    // A user query type's drafted priority (written on save while checked).
+    private func queryPriorityBinding(for queryTypeID: Int64) -> Binding<Int> {
+        Binding(
+            get: { draft.queryPrioritiesByQueryTypeID[queryTypeID] ?? QUERY_PRIORITY_DEFAULT },
+            set: { draft.queryPrioritiesByQueryTypeID[queryTypeID] = $0 }
+        )
+    }
+
     private func setQueryTypeChecked(_ queryType: QueryType, isSelected: Bool) {
         if isSelected {
             draft.selectedQueryTypeIDs.insert(queryType.id)
@@ -2040,6 +2170,13 @@ struct InstanceEditorWindowView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Preview")
+
+                    if draft.selectedQueryTypeIDs.contains(queryType.id) {
+                        PriorityMenu(
+                            priority: queryPriorityBinding(for: queryType.id),
+                            effectivePriority: draft.instancePriority
+                        )
+                    }
 
                     if mode == .edit, let loadedInstanceID = draft.loadedInstanceID {
                         if let interval = draft.queryIntervalsByQueryTypeID[queryType.id] {
@@ -2363,6 +2500,10 @@ struct InstanceEditorWindowView: View {
             )
             draft.selectedCollectionIDs = try appDatabase.fetchCollectionIDs(forInstanceID: sourceInstanceID)
             draft.queryIntervalsByQueryTypeID = [:]
+            // Priorities are intent, not study progress: the duplicate keeps
+            // them (the SRS state above starts fresh).
+            draft.queryPrioritiesByQueryTypeID = try appDatabase.fetchQueryPriorities(forInstanceID: sourceInstanceID)
+            draft.instancePriority = try appDatabase.fetchInstancePriority(instanceID: sourceInstanceID)
             collectionSearchQuery = ""
             draft.maxIntervalText = ""
             draft.loadedTypeID = editorData.typeID
@@ -2413,6 +2554,7 @@ struct InstanceEditorWindowView: View {
             draft.loadedInstanceID = nil
             draft.queryTypes = []
             draft.selectedQueryTypeIDs = []
+            draft.queryPrioritiesByQueryTypeID = [:]
             draft.fieldValues = [:]
             allCollectionItems = []
             draft.selectedCollectionIDs = []
@@ -2443,6 +2585,9 @@ struct InstanceEditorWindowView: View {
                     forTypeID: typeID,
                     availableQueryTypeIDs: availableQueryTypeIDs
                 )) ?? Set(availableQueryTypeIDs)
+                // Query types are per type; the instance priority is not, so
+                // it carries across a type change.
+                draft.queryPrioritiesByQueryTypeID = [:]
                 draft.selectedCollectionIDs = []
                 collectionSearchQuery = ""
                 draft.maxIntervalText = ""
@@ -2514,6 +2659,8 @@ struct InstanceEditorWindowView: View {
                 draft.loadedTypeID = pointMapTypeID
                 draft.loadedInstanceID = instanceID
                 draft.selectedQueryTypeIDs = []
+                draft.queryPrioritiesByQueryTypeID = [:]
+                draft.instancePriority = try appDatabase.fetchInstancePriority(instanceID: instanceID)
                 draft.fieldValues = [:]
                 draft.selectedCollectionIDs = try appDatabase.fetchCollectionIDs(forInstanceID: instanceID)
                 draft.stickyFieldIDs = []
@@ -2541,6 +2688,8 @@ struct InstanceEditorWindowView: View {
                 draft.loadedTypeID = boundaryMapTypeID
                 draft.loadedInstanceID = instanceID
                 draft.selectedQueryTypeIDs = []
+                draft.queryPrioritiesByQueryTypeID = [:]
+                draft.instancePriority = try appDatabase.fetchInstancePriority(instanceID: instanceID)
                 draft.fieldValues = [:]
                 draft.selectedCollectionIDs = try appDatabase.fetchCollectionIDs(forInstanceID: instanceID)
                 draft.stickyFieldIDs = []
@@ -2575,6 +2724,8 @@ struct InstanceEditorWindowView: View {
             draft.stickyFieldIDs = try appDatabase.fetchStickyFieldIDs(forTypeID: editorData.typeID)
             draft.collapsedFieldIDs = try appDatabase.fetchCollapsedFieldIDs(forTypeID: editorData.typeID)
             draft.queryIntervalsByQueryTypeID = try appDatabase.fetchQueryIntervals(forInstanceID: instanceID)
+            draft.queryPrioritiesByQueryTypeID = try appDatabase.fetchQueryPriorities(forInstanceID: instanceID)
+            draft.instancePriority = try appDatabase.fetchInstancePriority(instanceID: instanceID)
             collectionSearchQuery = ""
             draft.maxIntervalText = editorData.maxInterval.map(String.init) ?? ""
             loadCollectionItems()
@@ -2593,10 +2744,24 @@ struct InstanceEditorWindowView: View {
             draft.stickyFieldIDs = []
             draft.collapsedFieldIDs = []
             draft.queryIntervalsByQueryTypeID = [:]
+            draft.queryPrioritiesByQueryTypeID = [:]
+            draft.instancePriority = QUERY_PRIORITY_DEFAULT
             focusController.reset(with: [])
             focusController.focusField(nil)
             showToast(message: "Failed to load instance.", style: .error)
         }
+    }
+
+    /// Writes the draft's priorities after a save: the checked user query
+    /// types' own priorities (the default for untouched ones) and the
+    /// instance's own priority. Map/Person built-in query priorities ride
+    /// their own save payloads.
+    private func saveDraftPriorities(instanceID: Int64) throws {
+        let queryPriorities = Dictionary(uniqueKeysWithValues: draft.selectedQueryTypeIDs.map { queryTypeID in
+            (queryTypeID, draft.queryPrioritiesByQueryTypeID[queryTypeID] ?? QUERY_PRIORITY_DEFAULT)
+        })
+        try appDatabase.setQueryPriorities(instanceID: instanceID, prioritiesByQueryTypeID: queryPriorities)
+        try appDatabase.setInstancePriority(instanceIDs: [instanceID], priority: draft.instancePriority)
     }
 
     @MainActor
@@ -2628,6 +2793,7 @@ struct InstanceEditorWindowView: View {
                     fieldValuesByFieldID: draft.fieldValues,
                     queryTypeIDs: draft.selectedQueryTypeIDs
                 )
+                try saveDraftPriorities(instanceID: instanceID)
                 if !draft.selectedCollectionIDs.isEmpty {
                     try appDatabase.setInstanceCollections(
                         instanceID: instanceID,
@@ -2660,6 +2826,7 @@ struct InstanceEditorWindowView: View {
                     fieldValuesByFieldID: draft.fieldValues,
                     queryTypeIDs: draft.selectedQueryTypeIDs
                 )
+                try saveDraftPriorities(instanceID: loadedInstanceID)
                 try appDatabase.setInstanceCollections(
                     instanceID: loadedInstanceID,
                     collectionIDs: draft.selectedCollectionIDs
@@ -2695,7 +2862,9 @@ struct InstanceEditorWindowView: View {
                 longitude: entry.longitude,
                 forwardEnabled: entry.forwardEnabled,
                 reverseEnabled: entry.reverseEnabled,
-                hint: entry.hint
+                hint: entry.hint,
+                forwardPriority: entry.forwardPriority,
+                reversePriority: entry.reversePriority
             )
         }
 
@@ -2714,6 +2883,7 @@ struct InstanceEditorWindowView: View {
                     points: drafts,
                     boundaryIDs: boundaryIDs
                 )
+                try saveDraftPriorities(instanceID: instanceID)
                 if !draft.selectedCollectionIDs.isEmpty {
                     try appDatabase.setInstanceCollections(
                         instanceID: instanceID,
@@ -2750,6 +2920,7 @@ struct InstanceEditorWindowView: View {
                     newPoints: drafts,
                     boundaryIDs: boundaryIDs
                 )
+                try saveDraftPriorities(instanceID: loadedInstanceID)
                 try appDatabase.setInstanceCollections(
                     instanceID: loadedInstanceID,
                     collectionIDs: draft.selectedCollectionIDs
@@ -2778,7 +2949,9 @@ struct InstanceEditorWindowView: View {
             AppDatabase.BoundaryMapBoundaryDraft(
                 boundaryID: draft.boundaryID,
                 forwardEnabled: draft.forwardEnabled,
-                reverseEnabled: draft.reverseEnabled
+                reverseEnabled: draft.reverseEnabled,
+                forwardPriority: draft.forwardPriority,
+                reversePriority: draft.reversePriority
             )
         }
 
@@ -2794,6 +2967,7 @@ struct InstanceEditorWindowView: View {
                     showAllBoundariesInQuestion: draft.boundaryMapShowAllBoundariesInQuestion,
                     boundaries: newBoundaries
                 )
+                try saveDraftPriorities(instanceID: instanceID)
                 if !draft.selectedCollectionIDs.isEmpty {
                     try appDatabase.setInstanceCollections(
                         instanceID: instanceID,
@@ -2830,6 +3004,7 @@ struct InstanceEditorWindowView: View {
                     existingAttachments: keptExistingAttachments,
                     newBoundaries: newBoundaries
                 )
+                try saveDraftPriorities(instanceID: loadedInstanceID)
                 try appDatabase.setInstanceCollections(
                     instanceID: loadedInstanceID,
                     collectionIDs: draft.selectedCollectionIDs
@@ -3261,6 +3436,7 @@ struct InstanceEditorWindowView: View {
                let info = try? appDatabase.fetchPersonBuiltinQueryInfos(instanceID: data.instanceID)
                    .first(where: { $0.kind == .childrenWith && $0.partnershipID == partnershipID }) {
                 entry.childrenQueryInterval = info.interval
+                entry.childrenQueryPriority = info.priority ?? QUERY_PRIORITY_DEFAULT
             }
             return entry
         }
@@ -3282,6 +3458,7 @@ struct InstanceEditorWindowView: View {
             if office.isQueryEnabled,
                let info = data.builtinQueries.first(where: { $0.kind == .office && $0.officeID == office.officeID }) {
                 entry.officeQueryInterval = info.interval
+                entry.officeQueryPriority = info.priority ?? QUERY_PRIORITY_DEFAULT
             }
             return entry
         }
@@ -3296,6 +3473,12 @@ struct InstanceEditorWindowView: View {
             uniqueKeysWithValues: data.builtinQueries.compactMap { info in
                 guard info.enabled, info.partnershipID == nil, info.kind != .office else { return nil }
                 return (info.kind, info.interval ?? 0)
+            }
+        )
+        draft.personQueryPrioritiesByKind = Dictionary(
+            uniqueKeysWithValues: data.builtinQueries.compactMap { info in
+                guard info.enabled, info.partnershipID == nil, info.kind != .office else { return nil }
+                return (info.kind, info.priority ?? QUERY_PRIORITY_DEFAULT)
             }
         )
         draft.personDisplayNamesByID = data.displayNamesByInstanceID
@@ -3314,8 +3497,12 @@ struct InstanceEditorWindowView: View {
                 fieldValuesByFieldID: draft.fieldValues,
                 queryTypeIDs: draft.selectedQueryTypeIDs,
                 relations: draft.buildPersonRelationsDraft(),
-                builtinEnabledKinds: draft.personEnabledQueryKinds
+                builtinEnabledKinds: draft.personEnabledQueryKinds,
+                builtinQueryPriorities: Dictionary(uniqueKeysWithValues: draft.personEnabledQueryKinds.map { kind in
+                    (kind, draft.personQueryPrioritiesByKind[kind] ?? QUERY_PRIORITY_DEFAULT)
+                })
             )
+            try saveDraftPriorities(instanceID: result.instanceID)
             if !draft.selectedCollectionIDs.isEmpty || mode == .edit {
                 try appDatabase.setInstanceCollections(
                     instanceID: result.instanceID,

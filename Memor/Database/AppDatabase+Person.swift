@@ -382,7 +382,7 @@ extension AppDatabase {
                 let row = try Row.fetchOne(
                     db,
                     sql: """
-                        SELECT interval, query_state, last_answered_timestamp
+                        SELECT interval, query_state, last_answered_timestamp, priority
                         FROM person_query
                         WHERE instance_id = ? AND kind = ? AND partnership_id IS NULL AND office_id IS NULL
                         """,
@@ -396,7 +396,8 @@ extension AppDatabase {
                     enabled: row != nil,
                     interval: row?["interval"],
                     queryState: (row?["query_state"] as Int?).flatMap(QueryState.init(rawValue:)),
-                    lastAnsweredTimestamp: row?["last_answered_timestamp"]
+                    lastAnsweredTimestamp: row?["last_answered_timestamp"],
+                    priority: row?["priority"]
                 ))
             }
             // One `.office` info per DISTINCT held office, in first-stint
@@ -407,7 +408,7 @@ extension AppDatabase {
                 let row = try Row.fetchOne(
                     db,
                     sql: """
-                        SELECT interval, query_state, last_answered_timestamp
+                        SELECT interval, query_state, last_answered_timestamp, priority
                         FROM person_query
                         WHERE instance_id = ? AND kind = 'office' AND office_id = ?
                         """,
@@ -421,7 +422,8 @@ extension AppDatabase {
                     enabled: row != nil,
                     interval: row?["interval"],
                     queryState: (row?["query_state"] as Int?).flatMap(QueryState.init(rawValue:)),
-                    lastAnsweredTimestamp: row?["last_answered_timestamp"]
+                    lastAnsweredTimestamp: row?["last_answered_timestamp"],
+                    priority: row?["priority"]
                 ))
             }
 
@@ -458,7 +460,8 @@ extension AppDatabase {
         fieldValuesByFieldID: [Int64: String],
         queryTypeIDs: Set<Int64>,
         relations: PersonRelationsDraft,
-        builtinEnabledKinds: Set<PersonQueryKind>
+        builtinEnabledKinds: Set<PersonQueryKind>,
+        builtinQueryPriorities: [PersonQueryKind: Int] = [:]
     ) throws -> PersonSaveResult {
         try dbQueue.write { db in
             let personTypeID = try Self.fetchPersonTypeID(db: db)
@@ -1379,13 +1382,24 @@ extension AppDatabase {
                 }
             }
 
-            // 6j. Built-in query enablement (rows = enabled).
+            // 6j. Built-in query enablement (rows = enabled), plus each
+            // enabled row's priority when the caller supplies one (absent =
+            // keep the stored value; a new row takes the column default).
             for kind in PersonQueryKind.standaloneKinds {
                 if builtinEnabledKinds.contains(kind) {
                     try db.execute(
                         sql: "INSERT OR IGNORE INTO person_query (instance_id, kind) VALUES (?, ?)",
                         arguments: [personID, kind.rawValue]
                     )
+                    if let priority = builtinQueryPriorities[kind] {
+                        try db.execute(
+                            sql: """
+                                UPDATE person_query SET priority = ?
+                                WHERE instance_id = ? AND kind = ? AND partnership_id IS NULL AND office_id IS NULL
+                                """,
+                            arguments: [clampedPriority(priority), personID, kind.rawValue]
+                        )
+                    }
                 } else {
                     try db.execute(
                         sql: """
@@ -1406,6 +1420,15 @@ extension AppDatabase {
                             """,
                         arguments: [personID, partnershipID]
                     )
+                    if let priority = draft.childrenQueryPriority {
+                        try db.execute(
+                            sql: """
+                                UPDATE person_query SET priority = ?
+                                WHERE instance_id = ? AND kind = 'children_with' AND partnership_id = ?
+                                """,
+                            arguments: [clampedPriority(priority), personID, partnershipID]
+                        )
+                    }
                 } else {
                     try db.execute(
                         sql: """
@@ -1429,6 +1452,12 @@ extension AppDatabase {
                             """,
                         arguments: [personID, officeID]
                     )
+                    if let priority = relations.offices.first(where: { $0.officeID == officeID && $0.queryPriority != nil })?.queryPriority {
+                        try db.execute(
+                            sql: "UPDATE person_query SET priority = ? WHERE instance_id = ? AND kind = 'office' AND office_id = ?",
+                            arguments: [clampedPriority(priority), personID, officeID]
+                        )
+                    }
                 } else {
                     try db.execute(
                         sql: "DELETE FROM person_query WHERE instance_id = ? AND kind = 'office' AND office_id = ?",

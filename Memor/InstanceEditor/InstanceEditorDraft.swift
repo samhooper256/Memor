@@ -37,6 +37,8 @@ struct PersonPartnerDraftEntry: Identifiable, Hashable {
     var isChildrenQueryEnabled = false
     /// Edit-mode SRS display for the "Children with" query (nil = never seen).
     var childrenQueryInterval: Int64?
+    /// The "Children with" query's own priority (written on save).
+    var childrenQueryPriority = QUERY_PRIORITY_DEFAULT
 }
 
 /// One office card in the Person editor — one card per STINT (a person may
@@ -47,9 +49,9 @@ struct PersonPartnerDraftEntry: Identifiable, Hashable {
 /// offices are created in the DB before entering a draft. Predecessors/
 /// successors are peer STINTS (resolved at pick time), unresolved peer
 /// instances (peer holds nothing yet — save AUTO-ADDS), or bare names.
-/// isOfficeQueryEnabled/officeQueryInterval describe the office's SHARED
-/// per-office query — the load path and checklist keep every card of one
-/// office in lockstep.
+/// isOfficeQueryEnabled/officeQueryInterval/officeQueryPriority describe the
+/// office's SHARED per-office query — the load path and checklist keep every
+/// card of one office in lockstep.
 struct PersonOfficeDraftEntry: Identifiable, Hashable {
     let id = UUID()
     var holdingID: Int64?
@@ -63,6 +65,7 @@ struct PersonOfficeDraftEntry: Identifiable, Hashable {
     var isOfficeQueryEnabled = false
     /// Edit-mode SRS display for the per-office query (nil = never seen).
     var officeQueryInterval: Int64?
+    var officeQueryPriority = QUERY_PRIORITY_DEFAULT
 }
 
 final class InstanceEditorDraft: ObservableObject, Identifiable {
@@ -92,6 +95,12 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
     @Published var queryTypes: [QueryType] = []
     @Published var selectedQueryTypeIDs: Set<Int64> = []
     @Published var queryIntervalsByQueryTypeID: [Int64: Int64] = [:]
+    /// Each user query type's own priority (absent = the default). Written on
+    /// save for the checked query types only.
+    @Published var queryPrioritiesByQueryTypeID: [Int64: Int] = [:]
+    /// The instance's own priority (written on save, every type). It only
+    /// RAISES its queries' effective priority — never written into them.
+    @Published var instancePriority: Int = QUERY_PRIORITY_DEFAULT
     @Published var fieldValues: [Int64: String] = [:]
     @Published var selectedCollectionIDs: Set<Int64> = []
     @Published var stickyFieldIDs: Set<Int64> = []
@@ -114,6 +123,8 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
     @Published var personEnabledQueryKinds: Set<PersonQueryKind> = []
     /// Edit-mode SRS display for the standalone kinds (nil interval = never seen).
     @Published var personQueryIntervalsByKind: [PersonQueryKind: Int64] = [:]
+    /// The standalone kinds' own priorities (absent = the default).
+    @Published var personQueryPrioritiesByKind: [PersonQueryKind: Int] = [:]
     /// Display names + sexes for every instance referenced by the slots (chips,
     /// same-sex child blocking). Grows as the picker adds people.
     @Published var personDisplayNamesByID: [Int64: String] = [:]
@@ -150,6 +161,7 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
         personOffices = []
         personEnabledQueryKinds = []
         personQueryIntervalsByKind = [:]
+        personQueryPrioritiesByKind = [:]
         personDisplayNamesByID = [:]
         personSexesByID = [:]
         personTimePeriodsByID = [:]
@@ -171,7 +183,8 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
                     startText: entry.startText,
                     endText: entry.endText,
                     children: entry.children.map { PersonChildDraft(rowID: $0.rowID, child: $0.child) },
-                    isChildrenQueryEnabled: entry.isChildrenQueryEnabled
+                    isChildrenQueryEnabled: entry.isChildrenQueryEnabled,
+                    childrenQueryPriority: entry.childrenQueryPriority
                 )
             },
             ungroupedChildren: personUngroupedChildren.map {
@@ -186,7 +199,8 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
                     note: entry.noteText,
                     predecessors: entry.predecessors,
                     successors: entry.successors,
-                    isQueryEnabled: entry.isOfficeQueryEnabled
+                    isQueryEnabled: entry.isOfficeQueryEnabled,
+                    queryPriority: entry.officeQueryPriority
                 )
             }
         )
@@ -294,6 +308,7 @@ final class InstanceEditorDraft: ObservableObject, Identifiable {
     var isPristine: Bool {
         guard !isDirty else { return false }
         return selectedCollectionIDs.isEmpty
+            && instancePriority == QUERY_PRIORITY_DEFAULT
             && !hasAnyPersonRelationshipData
             && maxIntervalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && pointMapTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

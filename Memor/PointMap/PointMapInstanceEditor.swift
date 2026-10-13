@@ -20,6 +20,8 @@ struct PointMapPointDraftEntry: Identifiable, Hashable {
     var forwardEnabled: Bool = true
     var reverseEnabled: Bool = false
     var hint: String = ""
+    var forwardPriority: Int = QUERY_PRIORITY_DEFAULT
+    var reversePriority: Int = QUERY_PRIORITY_DEFAULT
 
     var id: UUID { localID }
 }
@@ -66,10 +68,12 @@ final class AddPointPopupController: ObservableObject {
         initialReverseEnabled: Bool = false,
         forwardInterval: Int64? = nil,
         reverseInterval: Int64? = nil,
+        initialForwardPriority: Int = QUERY_PRIORITY_DEFAULT,
+        initialReversePriority: Int = QUERY_PRIORITY_DEFAULT,
         isEdit: Bool = false,
         onResetForward: (() -> Void)? = nil,
         onResetReverse: (() -> Void)? = nil,
-        onSubmit: @escaping (String, Double, Double, Bool, Bool, String) -> Void
+        onSubmit: @escaping (String, Double, Double, Bool, Bool, String, Int, Int) -> Void
     ) {
         guard let window else { return }
         close()
@@ -83,9 +87,11 @@ final class AddPointPopupController: ObservableObject {
             initialReverseEnabled: initialReverseEnabled,
             forwardInterval: forwardInterval,
             reverseInterval: reverseInterval,
+            initialForwardPriority: initialForwardPriority,
+            initialReversePriority: initialReversePriority,
             isEdit: isEdit,
-            onSubmit: { [weak self] name, lat, lng, forward, reverse, hint in
-                onSubmit(name, lat, lng, forward, reverse, hint)
+            onSubmit: { [weak self] name, lat, lng, forward, reverse, hint, forwardPriority, reversePriority in
+                onSubmit(name, lat, lng, forward, reverse, hint, forwardPriority, reversePriority)
                 self?.close()
             },
             onResetForward: onResetForward,
@@ -153,10 +159,12 @@ final class AddPointPopupState: NSObject, ObservableObject, NSWindowDelegate {
     // and reset button are hidden in that case.
     @Published var forwardInterval: Int64?
     @Published var reverseInterval: Int64?
+    @Published var forwardPriority: Int
+    @Published var reversePriority: Int
     @Published var errorMessage: String?
 
     let isEdit: Bool
-    let onSubmit: (String, Double, Double, Bool, Bool, String) -> Void
+    let onSubmit: (String, Double, Double, Bool, Bool, String, Int, Int) -> Void
     let onResetForward: (() -> Void)?
     let onResetReverse: (() -> Void)?
     let onClose: () -> Void
@@ -172,8 +180,10 @@ final class AddPointPopupState: NSObject, ObservableObject, NSWindowDelegate {
         initialReverseEnabled: Bool,
         forwardInterval: Int64?,
         reverseInterval: Int64?,
+        initialForwardPriority: Int,
+        initialReversePriority: Int,
         isEdit: Bool,
-        onSubmit: @escaping (String, Double, Double, Bool, Bool, String) -> Void,
+        onSubmit: @escaping (String, Double, Double, Bool, Bool, String, Int, Int) -> Void,
         onResetForward: (() -> Void)?,
         onResetReverse: (() -> Void)?,
         onClose: @escaping () -> Void
@@ -186,6 +196,8 @@ final class AddPointPopupState: NSObject, ObservableObject, NSWindowDelegate {
         self.reverseEnabled = initialReverseEnabled
         self.forwardInterval = forwardInterval
         self.reverseInterval = reverseInterval
+        self.forwardPriority = initialForwardPriority
+        self.reversePriority = initialReversePriority
         self.isEdit = isEdit
         self.onSubmit = onSubmit
         self.onResetForward = onResetForward
@@ -210,7 +222,7 @@ final class AddPointPopupState: NSObject, ObservableObject, NSWindowDelegate {
             errorMessage = "Invalid longitude."
             return
         }
-        onSubmit(trimmedName, lat, lng, forwardEnabled, reverseEnabled, hint)
+        onSubmit(trimmedName, lat, lng, forwardEnabled, reverseEnabled, hint, forwardPriority, reversePriority)
     }
 
     func resetForward() {
@@ -507,6 +519,8 @@ struct PointMapEntryRow: View {
     let name: String
     @Binding var forwardEnabled: Bool
     @Binding var reverseEnabled: Bool
+    @Binding var forwardPriority: Int
+    @Binding var reversePriority: Int
 
     var body: some View {
         HStack(spacing: 6) {
@@ -515,7 +529,15 @@ struct PointMapEntryRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .lineLimit(1)
 
+            // Only raised priorities show here, keeping default rows clean;
+            // the list's Set Priority menu (and the point popup) set any value.
+            if forwardEnabled, forwardPriority > QUERY_PRIORITY_DEFAULT {
+                PriorityMenu(priority: $forwardPriority, help: "Forward query priority (1–10). Click to change.")
+            }
             ArrowCheckbox(isOn: $forwardEnabled, glyph: "\u{2192}", help: "Forward query (guess the name)")
+            if reverseEnabled, reversePriority > QUERY_PRIORITY_DEFAULT {
+                PriorityMenu(priority: $reversePriority, help: "Reverse query priority (1–10). Click to change.")
+            }
             ArrowCheckbox(isOn: $reverseEnabled, glyph: "\u{2190}", help: "Reverse query (click the location)")
         }
         .padding(.vertical, 2)
@@ -616,12 +638,14 @@ private struct AddPointPopupView: View {
             queryRow(
                 label: "Forward",
                 isOn: $state.forwardEnabled,
+                priority: $state.forwardPriority,
                 interval: state.forwardInterval,
                 onReset: state.resetForward
             )
             queryRow(
                 label: "Reverse",
                 isOn: $state.reverseEnabled,
+                priority: $state.reversePriority,
                 interval: state.reverseInterval,
                 onReset: state.resetReverse
             )
@@ -668,19 +692,24 @@ private struct AddPointPopupView: View {
         }
     }
 
-    // One row: a Forward/Reverse checkbox, plus (when checked and the point has
-    // stored study state) its current interval and a reset button — mirroring the
-    // Object-type instance editor's per-query display.
+    // One row: a Forward/Reverse checkbox, plus (when checked) its priority and
+    // (when the point has stored study state) its current interval and a reset
+    // button — mirroring the Object-type instance editor's per-query display.
     @ViewBuilder
     private func queryRow(
         label: String,
         isOn: Binding<Bool>,
+        priority: Binding<Int>,
         interval: Int64?,
         onReset: @escaping () -> Void
     ) -> some View {
         HStack(spacing: 8) {
             Toggle(label, isOn: isOn)
                 .toggleStyle(.checkbox)
+
+            if isOn.wrappedValue {
+                PriorityMenu(priority: priority)
+            }
 
             if isOn.wrappedValue, let interval {
                 if interval == 0 {

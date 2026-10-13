@@ -55,6 +55,7 @@ struct PersonQueryChecklist: View {
         let showsEmptyWarning: Bool
         let isEnabled: Bool
         let interval: Int64?
+        let priority: Int
     }
 
     private var relationshipRows: [ChecklistRow] {
@@ -75,7 +76,8 @@ struct PersonQueryChecklist: View {
                         title: "Children with \(partnerLabel(partner))",
                         showsEmptyWarning: partner.isChildrenQueryEnabled && partner.children.isEmpty,
                         isEnabled: partner.isChildrenQueryEnabled,
-                        interval: partner.childrenQueryInterval
+                        interval: partner.childrenQueryInterval,
+                        priority: partner.childrenQueryPriority
                     ))
                 }
             }
@@ -88,7 +90,8 @@ struct PersonQueryChecklist: View {
                 title: kind.displayName,
                 showsEmptyWarning: enabled && answerWouldBeEmpty(kind),
                 isEnabled: enabled,
-                interval: draft.personQueryIntervalsByKind[kind]
+                interval: draft.personQueryIntervalsByKind[kind],
+                priority: draft.personQueryPrioritiesByKind[kind] ?? QUERY_PRIORITY_DEFAULT
             ))
         }
         return rows
@@ -109,7 +112,8 @@ struct PersonQueryChecklist: View {
                 title: office.officeName,
                 showsEmptyWarning: false,
                 isEnabled: office.isOfficeQueryEnabled,
-                interval: office.officeQueryInterval
+                interval: office.officeQueryInterval,
+                priority: office.officeQueryPriority
             ))
         }
         let allOfficesEnabled = draft.personEnabledQueryKinds.contains(.allOffices)
@@ -121,7 +125,8 @@ struct PersonQueryChecklist: View {
             title: PersonQueryKind.allOffices.displayName,
             showsEmptyWarning: allOfficesEnabled && answerWouldBeEmpty(.allOffices),
             isEnabled: allOfficesEnabled,
-            interval: draft.personQueryIntervalsByKind[.allOffices]
+            interval: draft.personQueryIntervalsByKind[.allOffices],
+            priority: draft.personQueryPrioritiesByKind[.allOffices] ?? QUERY_PRIORITY_DEFAULT
         ))
         return rows
     }
@@ -190,6 +195,16 @@ struct PersonQueryChecklist: View {
                 .help("Preview")
             }
 
+            if row.isEnabled {
+                PriorityMenu(
+                    priority: Binding(
+                        get: { row.priority },
+                        set: { setPriority($0, row: row) }
+                    ),
+                    effectivePriority: draft.instancePriority
+                )
+            }
+
             if mode == .edit, row.isEnabled {
                 if let interval = row.interval, interval != 0 {
                     Text(formatStudyInterval(interval))
@@ -210,6 +225,21 @@ struct PersonQueryChecklist: View {
                         .foregroundStyle(Color.blue)
                 }
             }
+        }
+    }
+
+    private func setPriority(_ priority: Int, row: ChecklistRow) {
+        if let officeEntryID = row.officeEntryID {
+            guard let entry = draft.personOffices.first(where: { $0.id == officeEntryID }) else { return }
+            // Shared per-office query: every card of the office moves together.
+            for index in draft.personOffices.indices where draft.personOffices[index].officeID == entry.officeID {
+                draft.personOffices[index].officeQueryPriority = priority
+            }
+        } else if let partnerEntryID = row.partnerEntryID {
+            guard let index = draft.personPartners.firstIndex(where: { $0.id == partnerEntryID }) else { return }
+            draft.personPartners[index].childrenQueryPriority = priority
+        } else {
+            draft.personQueryPrioritiesByKind[row.kind] = priority
         }
     }
 

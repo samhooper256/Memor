@@ -215,7 +215,7 @@ extension AppDatabase {
             let row = try Row.fetchOne(
                 db,
                 sql: """
-                    SELECT interval, query_state, last_answered_timestamp
+                    SELECT interval, query_state, last_answered_timestamp, priority
                     FROM person_query
                     WHERE instance_id = ? AND kind = ? AND partnership_id IS ? AND office_id IS ?
                     """,
@@ -229,7 +229,8 @@ extension AppDatabase {
                 enabled: row != nil,
                 interval: row?["interval"],
                 queryState: (row?["query_state"] as Int?).flatMap(QueryState.init(rawValue:)),
-                lastAnsweredTimestamp: row?["last_answered_timestamp"]
+                lastAnsweredTimestamp: row?["last_answered_timestamp"],
+                priority: row?["priority"]
             ))
         }
 

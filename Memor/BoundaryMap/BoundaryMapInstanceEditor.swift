@@ -20,6 +20,8 @@ struct BoundaryMapAttachmentDraft: Identifiable, Hashable {
     var name: String
     var forwardEnabled: Bool = true
     var reverseEnabled: Bool = false
+    var forwardPriority: Int = QUERY_PRIORITY_DEFAULT
+    var reversePriority: Int = QUERY_PRIORITY_DEFAULT
 
     var id: UUID { localID }
 }
@@ -56,6 +58,8 @@ struct BoundaryMapEntryRow: View {
     let onSetColor: (BoundaryColor) -> Void
     @Binding var forwardEnabled: Bool
     @Binding var reverseEnabled: Bool
+    @Binding var forwardPriority: Int
+    @Binding var reversePriority: Int
 
     @State private var isColorPopoverPresented = false
 
@@ -80,7 +84,15 @@ struct BoundaryMapEntryRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .lineLimit(1)
 
+            // Only raised priorities show here, keeping default rows clean;
+            // the list's Set Priority menu sets any value.
+            if forwardEnabled, forwardPriority > QUERY_PRIORITY_DEFAULT {
+                PriorityMenu(priority: $forwardPriority, help: "Forward query priority (1–10). Click to change.")
+            }
             ArrowCheckbox(isOn: $forwardEnabled, glyph: "\u{2192}", help: "Forward query (guess the name)")
+            if reverseEnabled, reversePriority > QUERY_PRIORITY_DEFAULT {
+                PriorityMenu(priority: $reversePriority, help: "Reverse query priority (1–10). Click to change.")
+            }
             ArrowCheckbox(isOn: $reverseEnabled, glyph: "\u{2190}", help: "Reverse query (click the location)")
         }
         .padding(.vertical, 2)

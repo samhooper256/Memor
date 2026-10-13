@@ -104,6 +104,9 @@ nonisolated struct PersonPartnerDraft: Hashable {
     var children: [PersonChildDraft] = []
     /// Whether this person's "Children with {partner}" built-in query is enabled.
     var isChildrenQueryEnabled: Bool = false
+    /// That query's stored priority to write on save (nil = leave as is; a
+    /// newly enabled query then takes the default).
+    var childrenQueryPriority: Int? = nil
 }
 
 /// One predecessor/successor entry on an office stint. Instance peers bind to
@@ -157,6 +160,10 @@ nonisolated struct PersonOfficeDraft: Hashable {
     /// stamp the same value on every stint of an office, and the save treats
     /// the office's query as enabled iff ANY of its stint drafts says so.
     var isQueryEnabled: Bool = false
+    /// The per-office query's stored priority to write on save (nil = leave
+    /// as is). Shared across stints like enablement: the save writes the
+    /// first non-nil value among the office's stint drafts.
+    var queryPriority: Int? = nil
 }
 
 /// The full slot state of one Person, as edited (and as fetched).
@@ -224,6 +231,8 @@ nonisolated struct PersonBuiltinQueryInfo: Hashable {
     let interval: Int64?
     let queryState: QueryState?
     let lastAnsweredTimestamp: Int64?
+    /// The query's own stored priority (nil when disabled).
+    var priority: Int? = nil
 }
 
 /// Everything the Person instance editor needs to load one instance.
