@@ -205,6 +205,8 @@ struct AppDatabase {
         let questionHTML: String
         let answerHTML: String
         let typeCSS: String
+        // Effective priority; projected only by the Study bucket loader.
+        let priority: Int?
     }
 
     private final class GlobalQueryHTMLCache {
@@ -5689,7 +5691,8 @@ struct AppDatabase {
             answerHTML: queryRow.answerHTML,
             typeCSS: queryRow.typeCSS,
             fieldValuesByName: fieldValuesByName,
-            booleanFieldNames: booleanFieldNames
+            booleanFieldNames: booleanFieldNames,
+            priority: queryRow.priority ?? QUERY_PRIORITY_DEFAULT
         )
     }
 
@@ -5726,7 +5729,8 @@ struct AppDatabase {
                     query_type.name AS queryTypeName,
                     query_type.question_html AS questionHTML,
                     query_type.answer_html AS answerHTML,
-                    "type".css AS typeCSS
+                    "type".css AS typeCSS,
+                    \(Self.effectivePrioritySQL(srsAlias: "query")) AS priority
                 FROM \(tableName) AS \(tableAlias)
                 JOIN query
                     ON query.instance_id = \(tableAlias).id
@@ -5796,6 +5800,7 @@ struct AppDatabase {
         let defaultZoom: Double
         let showAllPointsInQuestion: Bool
         let pointSize: PointMapPointSize
+        let priority: Int?
     }
 
     // A derived table that expands each pointmap_point into up to two rows — one
@@ -5809,7 +5814,8 @@ struct AppDatabase {
             SELECT p.id AS id, p.instance_id AS instance_id, p.name AS name,
                    p.latitude AS latitude, p.longitude AS longitude,
                    q.interval AS interval, q.last_answered_timestamp AS last_answered_timestamp,
-                   q.query_state AS query_state, q.is_reverse AS is_reverse
+                   q.query_state AS query_state, q.is_reverse AS is_reverse,
+                   q.priority AS priority
             FROM pointmap_query AS q
             JOIN pointmap_point AS p ON p.id = q.point_id
         )
@@ -5819,7 +5825,8 @@ struct AppDatabase {
         (
             SELECT a.id AS id, a.instance_id AS instance_id, a.boundary_id AS boundary_id,
                    q.interval AS interval, q.last_answered_timestamp AS last_answered_timestamp,
-                   q.query_state AS query_state, q.is_reverse AS is_reverse
+                   q.query_state AS query_state, q.is_reverse AS is_reverse,
+                   q.priority AS priority
             FROM boundarymap_query AS q
             JOIN boundarymap_attachment AS a ON a.id = q.attachment_id
         )
@@ -6078,7 +6085,8 @@ struct AppDatabase {
                     pi.default_center_lng AS defaultCenterLng,
                     pi.default_zoom AS defaultZoom,
                     pi.show_all_points_in_question AS showAllPointsInQuestion,
-                    COALESCE(pi.point_size, 'medium') AS pointSize
+                    COALESCE(pi.point_size, 'medium') AS pointSize,
+                    \(Self.effectivePrioritySQL(srsAlias: "pp")) AS priority
                 FROM \(Self.pointMapDirectionalFrom) AS pp
                 JOIN pointmap_instance AS pi
                     ON pi.instance_id = pp.instance_id
@@ -6168,7 +6176,8 @@ struct AppDatabase {
                 fieldValuesByName: [:],
                 kind: .pointMap,
                 pointMapPayload: payload,
-                isReverse: row.isReverse
+                isReverse: row.isReverse,
+                priority: row.priority ?? QUERY_PRIORITY_DEFAULT
             )
         }
     }
@@ -6297,7 +6306,8 @@ struct AppDatabase {
                     pi.default_center_lng AS defaultCenterLng,
                     pi.default_zoom AS defaultZoom,
                     pi.show_all_points_in_question AS showAllPointsInQuestion,
-                    COALESCE(pi.point_size, 'medium') AS pointSize
+                    COALESCE(pi.point_size, 'medium') AS pointSize,
+                    \(Self.effectivePrioritySQL(srsAlias: "pp")) AS priority
                 FROM \(Self.pointMapDirectionalFrom) AS pp
                 JOIN pointmap_instance AS pi
                     ON pi.instance_id = pp.instance_id
@@ -6360,7 +6370,8 @@ struct AppDatabase {
             fieldValuesByName: [:],
             kind: .pointMap,
             pointMapPayload: payload,
-            isReverse: row.isReverse
+            isReverse: row.isReverse,
+            priority: row.priority ?? QUERY_PRIORITY_DEFAULT
         )
     }
 
@@ -6380,6 +6391,7 @@ struct AppDatabase {
         let defaultCenterLng: Double
         let defaultZoom: Double
         let showAllBoundariesInQuestion: Bool
+        let priority: Int?
     }
 
     private struct BoundaryMapInstanceSearchRow: FetchableRecord, Decodable {
@@ -6764,7 +6776,8 @@ struct AppDatabase {
                     bi.default_center_lat AS defaultCenterLat,
                     bi.default_center_lng AS defaultCenterLng,
                     bi.default_zoom AS defaultZoom,
-                    bi.show_all_boundaries_in_question AS showAllBoundariesInQuestion
+                    bi.show_all_boundaries_in_question AS showAllBoundariesInQuestion,
+                    \(Self.effectivePrioritySQL(srsAlias: "bq")) AS priority
                 FROM \(Self.boundaryMapDirectionalFrom) AS bq
                 JOIN boundarymap_instance AS bi
                     ON bi.instance_id = bq.instance_id
@@ -6837,7 +6850,8 @@ struct AppDatabase {
                 fieldValuesByName: [:],
                 kind: .boundaryMap,
                 boundaryMapPayload: payload,
-                isReverse: row.isReverse
+                isReverse: row.isReverse,
+                priority: row.priority ?? QUERY_PRIORITY_DEFAULT
             )
         }
     }
@@ -6964,7 +6978,8 @@ struct AppDatabase {
                     bi.default_center_lat AS defaultCenterLat,
                     bi.default_center_lng AS defaultCenterLng,
                     bi.default_zoom AS defaultZoom,
-                    bi.show_all_boundaries_in_question AS showAllBoundariesInQuestion
+                    bi.show_all_boundaries_in_question AS showAllBoundariesInQuestion,
+                    \(Self.effectivePrioritySQL(srsAlias: "bq")) AS priority
                 FROM \(Self.boundaryMapDirectionalFrom) AS bq
                 JOIN boundarymap_instance AS bi
                     ON bi.instance_id = bq.instance_id
@@ -7008,7 +7023,8 @@ struct AppDatabase {
             fieldValuesByName: [:],
             kind: .boundaryMap,
             boundaryMapPayload: payload,
-            isReverse: row.isReverse
+            isReverse: row.isReverse,
+            priority: row.priority ?? QUERY_PRIORITY_DEFAULT
         )
     }
 

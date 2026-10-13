@@ -166,6 +166,13 @@ struct StudyModeView: View {
         ]
     }
 
+    /// The highest effective priority among the session's due queries (every
+    /// query in the blue/red/green pools — the same set the Stacks tab's
+    /// priority figure covers). nil once the pools are empty.
+    private var topDuePriority: Int? {
+        (blueQueries + redQueries + greenQueries).map(\.priority).max()
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             Group {
@@ -190,7 +197,7 @@ struct StudyModeView: View {
                     .padding(24)
                 } else if let currentQuery {
                     VStack(spacing: 0) {
-                        StudyQueryHeaderBar(query: currentQuery)
+                        StudyQueryHeaderBar(query: currentQuery, topDuePriority: topDuePriority)
                         queryContent(for: currentQuery)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -714,25 +721,22 @@ struct StudyModeView: View {
         let selectionTimestamp = nowTimestamp ?? Int64(Date().timeIntervalSince1970)
 
         // A peeked query (glimpsed, then ⌘Z'd away) preempts normal selection,
-        // even over overdue reds. One-shot: consumed whether or not it is
-        // still in the pools (live refreshes drop queries deleted or disabled
-        // mid-session, in which case selection just proceeds normally).
+        // even over overdue reds — but never over a higher priority: it is
+        // honored only while no selectable query outranks it. One-shot:
+        // consumed whether or not it is still in the pools (live refreshes
+        // drop queries deleted or disabled mid-session, in which case
+        // selection just proceeds normally).
         let peekedQuery = peekedNextQueryID.flatMap { peekedID in
             (redQueries + blueQueries + greenQueries).first { $0.id == peekedID }
         }
         peekedNextQueryID = nil
 
         let nextQuery: StudyQuery?
-        if let peekedQuery {
+        if let peekedQuery,
+           peekedQuery.priority >= (selectableQueries(nowTimestamp: selectionTimestamp).topPriority ?? peekedQuery.priority) {
             nextQuery = peekedQuery
-        } else if let overdueRedQuery = selectOverdueRedQuery(nowTimestamp: selectionTimestamp) {
-            nextQuery = overdueRedQuery
-        } else if let blueOrGreenQuery = selectRandomBlueOrGreenQuery() {
-            nextQuery = blueOrGreenQuery
         } else {
-            let previousID = currentQuery?.id
-            let preferredRed = redQueries.filter { $0.id != previousID }
-            nextQuery = preferredRed.randomElement() ?? redQueries.randomElement()
+            nextQuery = selectNextQuery(nowTimestamp: selectionTimestamp)
         }
 
         guard let nextQuery else {
@@ -896,11 +900,47 @@ struct StudyModeView: View {
         return intervals
     }
 
-    private func selectOverdueRedQuery(nowTimestamp: Int64) -> StudyQuery? {
-        let overdueQueries = redQueries.filter { query in
-            guard let lastAnsweredTimestamp = query.lastAnsweredTimestamp else { return false }
-            return lastAnsweredTimestamp + query.interval < nowTimestamp
+    private static func isOverdue(_ query: StudyQuery, nowTimestamp: Int64) -> Bool {
+        guard let lastAnsweredTimestamp = query.lastAnsweredTimestamp else { return false }
+        return lastAnsweredTimestamp + query.interval < nowTimestamp
+    }
+
+    /// The queries Study may show right now: overdue reds plus every blue and
+    /// green — or, when none of those exist, every red (the fallback that
+    /// keeps a session of only not-yet-due reds moving). `topPriority` is the
+    /// highest effective priority among them (nil when there are none).
+    private func selectableQueries(nowTimestamp: Int64) -> (overdueReds: [StudyQuery], blues: [StudyQuery], greens: [StudyQuery], fallbackReds: [StudyQuery], topPriority: Int?) {
+        let overdueReds = redQueries.filter { Self.isOverdue($0, nowTimestamp: nowTimestamp) }
+        let fallbackReds = (overdueReds.isEmpty && blueQueries.isEmpty && greenQueries.isEmpty) ? redQueries : []
+        let topPriority = (overdueReds + blueQueries + greenQueries + fallbackReds).map(\.priority).max()
+        return (overdueReds, blueQueries, greenQueries, fallbackReds, topPriority)
+    }
+
+    /// Priority first: only the selectable queries at the highest effective
+    /// priority compete. Within that tier the classic order applies — the
+    /// most-overdue red (random among ties), else a uniformly random blue or
+    /// green, else (fallback) a random red, preferring one other than the
+    /// query just shown.
+    private func selectNextQuery(nowTimestamp: Int64) -> StudyQuery? {
+        let selectable = selectableQueries(nowTimestamp: nowTimestamp)
+        guard let topPriority = selectable.topPriority else { return nil }
+        func inTopTier(_ queries: [StudyQuery]) -> [StudyQuery] {
+            queries.filter { $0.priority == topPriority }
         }
+
+        if let overdueRedQuery = selectMostOverdueQuery(from: inTopTier(selectable.overdueReds)) {
+            return overdueRedQuery
+        }
+        if let blueOrGreenQuery = (inTopTier(selectable.blues) + inTopTier(selectable.greens)).randomElement() {
+            return blueOrGreenQuery
+        }
+        let fallbackReds = inTopTier(selectable.fallbackReds)
+        let previousID = currentQuery?.id
+        let preferredRed = fallbackReds.filter { $0.id != previousID }
+        return preferredRed.randomElement() ?? fallbackReds.randomElement()
+    }
+
+    private func selectMostOverdueQuery(from overdueQueries: [StudyQuery]) -> StudyQuery? {
         guard let minimumDueTimestamp = overdueQueries.compactMap({ query in
             query.lastAnsweredTimestamp.map { $0 + query.interval }
         }).min() else {
@@ -912,21 +952,6 @@ struct StudyModeView: View {
             return lastAnsweredTimestamp + query.interval == minimumDueTimestamp
         }
         return tiedQueries.randomElement()
-    }
-
-    private func selectRandomBlueOrGreenQuery() -> StudyQuery? {
-        let totalEligibleCount = blueQueries.count + greenQueries.count
-        guard totalEligibleCount > 0 else { return nil }
-
-        if blueQueries.isEmpty {
-            return greenQueries.randomElement()
-        }
-        if greenQueries.isEmpty {
-            return blueQueries.randomElement()
-        }
-
-        let chooseGreen = Int.random(in: 0..<totalEligibleCount) < greenQueries.count
-        return chooseGreen ? greenQueries.randomElement() : blueQueries.randomElement()
     }
 
     private func updateStudyPools(
@@ -953,6 +978,7 @@ struct StudyModeView: View {
 
 private struct StudyQueryHeaderBar: View {
     let query: StudyQuery?
+    let topDuePriority: Int?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -977,6 +1003,15 @@ private struct StudyQueryHeaderBar: View {
             }
 
             Spacer(minLength: 0)
+
+            if let topDuePriority {
+                HStack(spacing: 6) {
+                    Text("Top due priority:")
+                        .foregroundStyle(.secondary)
+                    PriorityBadge(priority: topDuePriority)
+                }
+                .help("The highest priority among this session's due queries. Study always shows a query at this priority first.")
+            }
         }
         .font(.subheadline)
         .padding(.horizontal, 24)

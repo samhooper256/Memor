@@ -508,6 +508,9 @@ struct StudyQuery: Identifiable, Hashable {
     var personQueryKind: PersonQueryKind? = nil
     var personPartnershipID: Int64? = nil
     var personOfficeID: Int64? = nil
+    // EFFECTIVE study priority: max(the query's own priority, its instance's).
+    // Set by the Study bucket loaders; previews leave the default.
+    var priority: Int = QUERY_PRIORITY_DEFAULT
 
     var id: String {
         if let personQueryKind {
@@ -543,14 +546,16 @@ struct StudyQuery: Identifiable, Hashable {
             isReverse: isReverse,
             personQueryKind: personQueryKind,
             personPartnershipID: personPartnershipID,
-            personOfficeID: personOfficeID
+            personOfficeID: personOfficeID,
+            priority: priority
         )
     }
 
     /// Copy with updated SRS fields after a study response. Carries every other
     /// field so pool re-insertion can't silently drop newer optional fields
     /// (a memberwise copy once dropped personQueryKind, converting a Person
-    /// card into a broken standard card; personOfficeID is equally load-bearing).
+    /// card into a broken standard card; personOfficeID is equally load-bearing,
+    /// and a dropped priority would silently demote the query in selection).
     func withStudyOutcome(
         interval: Int64,
         lastAnsweredTimestamp: Int64?,
@@ -576,7 +581,8 @@ struct StudyQuery: Identifiable, Hashable {
             isReverse: isReverse,
             personQueryKind: personQueryKind,
             personPartnershipID: personPartnershipID,
-            personOfficeID: personOfficeID
+            personOfficeID: personOfficeID,
+            priority: priority
         )
     }
 }

@@ -355,6 +355,7 @@ extension AppDatabase {
         let lastAnsweredTimestamp: Int64?
         let queryState: Int
         let displayValue: String
+        let priority: Int
     }
 
     private nonisolated func fetchPersonQueryScanRows(
@@ -390,7 +391,8 @@ extension AppDatabase {
                     pq.interval AS interval,
                     pq.last_answered_timestamp AS lastAnsweredTimestamp,
                     pq.query_state AS queryState,
-                    COALESCE(instance_table."field\(typeInfo.displayFieldIndex)", '') AS displayValue
+                    COALESCE(instance_table."field\(typeInfo.displayFieldIndex)", '') AS displayValue,
+                    \(Self.effectivePrioritySQL(srsAlias: "pq")) AS priority
                 FROM \(Self.personQueryJoinFrom(personTypeID: typeInfo.typeID))
                 WHERE \(searchSQL)
                 ORDER BY displayValue COLLATE NOCASE, pq.instance_id, pq.kind, pq.partnership_id, pq.office_id
@@ -453,7 +455,8 @@ extension AppDatabase {
                 officeID: row.officeID,
                 interval: row.interval,
                 lastAnsweredTimestamp: row.lastAnsweredTimestamp,
-                queryState: QueryState(rawValue: row.queryState) ?? .zero
+                queryState: QueryState(rawValue: row.queryState) ?? .zero,
+                priority: row.priority
             )
         }
     }
@@ -674,7 +677,8 @@ extension AppDatabase {
         officeID: Int64? = nil,
         interval: Int64,
         lastAnsweredTimestamp: Int64?,
-        queryState: QueryState
+        queryState: QueryState,
+        priority: Int = QUERY_PRIORITY_DEFAULT
     ) throws -> StudyQuery {
         let personTypeID = try fetchPersonTypeID(db: db)
 
@@ -737,7 +741,8 @@ extension AppDatabase {
             booleanFieldNames: booleanFieldNames,
             personQueryKind: kind,
             personPartnershipID: partnershipID,
-            personOfficeID: officeID
+            personOfficeID: officeID,
+            priority: priority
         )
     }
 
