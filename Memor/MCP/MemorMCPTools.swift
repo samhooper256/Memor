@@ -1435,6 +1435,8 @@ enum MemorMCPTools {
             reverseEnabled: reverseEnabled ?? old.reverseEnabled,
             forwardInterval: old.forwardInterval,
             reverseInterval: old.reverseInterval,
+            forwardPriority: old.forwardPriority,
+            reversePriority: old.reversePriority,
             hint: hint ?? old.hint
         )
         try appDatabase.updatePointMapInstance(

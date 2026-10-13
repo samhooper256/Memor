@@ -63,7 +63,8 @@ extension AppDatabase {
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS instance_id_type_id (
                     instance_id INTEGER PRIMARY KEY,
-                    type_id INTEGER REFERENCES "type"(id)
+                    type_id INTEGER REFERENCES "type"(id),
+                    priority INTEGER NOT NULL DEFAULT 1 CHECK (priority BETWEEN 1 AND 10)
                 ) STRICT
                 """)
 
@@ -87,6 +88,7 @@ extension AppDatabase {
                     last_answered_timestamp INTEGER DEFAULT NULL,
                     interval INTEGER NOT NULL DEFAULT 0,
                     max_interval INTEGER DEFAULT NULL,
+                    priority INTEGER NOT NULL DEFAULT 1 CHECK (priority BETWEEN 1 AND 10),
                     PRIMARY KEY (instance_id, query_type_id)
                 ) STRICT
                 """)
@@ -204,6 +206,7 @@ extension AppDatabase {
                     interval INTEGER NOT NULL DEFAULT 0,
                     last_answered_timestamp INTEGER DEFAULT NULL,
                     query_state INTEGER NOT NULL DEFAULT 0,
+                    priority INTEGER NOT NULL DEFAULT 1 CHECK (priority BETWEEN 1 AND 10),
                     UNIQUE(point_id, is_reverse)
                 ) STRICT
                 """)
@@ -292,6 +295,7 @@ extension AppDatabase {
                     interval INTEGER NOT NULL DEFAULT 0,
                     last_answered_timestamp INTEGER DEFAULT NULL,
                     query_state INTEGER NOT NULL DEFAULT 0,
+                    priority INTEGER NOT NULL DEFAULT 1 CHECK (priority BETWEEN 1 AND 10),
                     UNIQUE(attachment_id, is_reverse)
                 ) STRICT
                 """)
@@ -653,7 +657,8 @@ extension AppDatabase {
                         REFERENCES office(id) ON DELETE CASCADE,
                     interval INTEGER NOT NULL DEFAULT 0,
                     last_answered_timestamp INTEGER DEFAULT NULL,
-                    query_state INTEGER NOT NULL DEFAULT 0
+                    query_state INTEGER NOT NULL DEFAULT 0,
+                    priority INTEGER NOT NULL DEFAULT 1 CHECK (priority BETWEEN 1 AND 10)
                 ) STRICT
                 """)
             // SQLite UNIQUE treats NULLs as distinct, so a single
@@ -683,6 +688,13 @@ extension AppDatabase {
             try db.execute(sql: """
                 CREATE INDEX IF NOT EXISTS idx_person_query_office ON person_query(office_id)
                 """)
+
+            // Study priority (1–10, default 1; added October 2026): one column
+            // on the instance row and one on each of the four query tables.
+            // Self-applies to older databases — every existing row lands on 1.
+            for table in ["instance_id_type_id", "query", "pointmap_query", "boundarymap_query", "person_query"] {
+                try addPriorityColumnIfMissing(db: db, table: table)
+            }
 
             // Seed the built-in PointMap type (idempotent)
             let existingPointMapTypeID = try Int64.fetchOne(
@@ -828,6 +840,18 @@ extension AppDatabase {
             // exists, so this is effectively one-shot per database.
             try seedBuiltinCountryBoundaries(in: db)
         }
+    }
+
+    /// Adds the `priority` column to `table` unless it already exists. Table
+    /// names are code constants, safe to interpolate.
+    private static func addPriorityColumnIfMissing(db: Database, table: String) throws {
+        let columns = try Row.fetchAll(db, sql: "PRAGMA table_info(\(table))")
+            .map { $0["name"] as String }
+        guard !columns.contains("priority") else { return }
+        try db.execute(sql: """
+            ALTER TABLE \(table)
+            ADD COLUMN priority INTEGER NOT NULL DEFAULT 1 CHECK (priority BETWEEN 1 AND 10)
+            """)
     }
 
     // Seeds the built-in Person type (idempotent, PointMap pattern): the type

@@ -4003,7 +4003,7 @@ struct AppDatabase {
                     if let srsRow = try Row.fetchOne(
                         db,
                         sql: """
-                            SELECT query_state, last_answered_timestamp, interval, max_interval
+                            SELECT query_state, last_answered_timestamp, interval, max_interval, priority
                             FROM query
                             WHERE instance_id = ? AND query_type_id = ?
                             """,
@@ -4021,8 +4021,8 @@ struct AppDatabase {
                         try db.execute(
                             sql: """
                                 INSERT INTO query
-                                    (instance_id, query_type_id, query_state, last_answered_timestamp, interval, max_interval)
-                                VALUES (?, ?, ?, ?, ?, ?)
+                                    (instance_id, query_type_id, query_state, last_answered_timestamp, interval, max_interval, priority)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
                                 """,
                             arguments: [
                                 instanceID,
@@ -4031,6 +4031,7 @@ struct AppDatabase {
                                 srsRow["last_answered_timestamp"] as Int64?,
                                 srsRow["interval"] as Int64,
                                 srsRow["max_interval"] as Int64?,
+                                srsRow["priority"] as Int64? ?? Int64(QUERY_PRIORITY_DEFAULT),
                             ]
                         )
                     } else {
@@ -4061,12 +4062,16 @@ struct AppDatabase {
         var forwardEnabled: Bool = true
         var reverseEnabled: Bool = false
         var hint: String = ""
+        var forwardPriority: Int = QUERY_PRIORITY_DEFAULT
+        var reversePriority: Int = QUERY_PRIORITY_DEFAULT
     }
 
     struct BoundaryMapBoundaryDraft: Hashable {
         var boundaryID: Int64
         var forwardEnabled: Bool = true
         var reverseEnabled: Bool = false
+        var forwardPriority: Int = QUERY_PRIORITY_DEFAULT
+        var reversePriority: Int = QUERY_PRIORITY_DEFAULT
     }
 
     func fetchPointMapTypeID() throws -> Int64 {
@@ -4128,8 +4133,8 @@ struct AppDatabase {
                     arguments: [instanceID, point.name, point.hint, point.latitude, point.longitude]
                 )
                 let pointID = db.lastInsertedRowID
-                try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: pointID, isReverse: false, enabled: point.forwardEnabled)
-                try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: pointID, isReverse: true, enabled: point.reverseEnabled)
+                try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: pointID, isReverse: false, enabled: point.forwardEnabled, priority: point.forwardPriority)
+                try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: pointID, isReverse: true, enabled: point.reverseEnabled, priority: point.reversePriority)
             }
 
             try Self.setBoundaries(db: db, instanceID: instanceID, boundaryIDs: boundaryIDs)
@@ -4231,8 +4236,8 @@ struct AppDatabase {
                         """,
                     arguments: [point.name, point.hint, point.latitude, point.longitude, point.id]
                 )
-                try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: point.id, isReverse: false, enabled: point.forwardEnabled)
-                try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: point.id, isReverse: true, enabled: point.reverseEnabled)
+                try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: point.id, isReverse: false, enabled: point.forwardEnabled, priority: point.forwardPriority)
+                try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: point.id, isReverse: true, enabled: point.reverseEnabled, priority: point.reversePriority)
             }
 
             // Insert brand-new points
@@ -4245,8 +4250,8 @@ struct AppDatabase {
                     arguments: [instanceID, point.name, point.hint, point.latitude, point.longitude]
                 )
                 let pointID = db.lastInsertedRowID
-                try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: pointID, isReverse: false, enabled: point.forwardEnabled)
-                try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: pointID, isReverse: true, enabled: point.reverseEnabled)
+                try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: pointID, isReverse: false, enabled: point.forwardEnabled, priority: point.forwardPriority)
+                try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: pointID, isReverse: true, enabled: point.reverseEnabled, priority: point.reversePriority)
             }
 
             try Self.setBoundaries(db: db, instanceID: instanceID, boundaryIDs: boundaryIDs)
@@ -4283,7 +4288,9 @@ struct AppDatabase {
                 sql: """
                     SELECT p.id AS id, p.name AS name, p.hint AS hint, p.latitude AS latitude, p.longitude AS longitude,
                            (qf.id IS NOT NULL) AS forward_enabled, (qr.id IS NOT NULL) AS reverse_enabled,
-                           COALESCE(qf.interval, 0) AS interval, COALESCE(qr.interval, 0) AS reverse_interval
+                           COALESCE(qf.interval, 0) AS interval, COALESCE(qr.interval, 0) AS reverse_interval,
+                           COALESCE(qf.priority, \(QUERY_PRIORITY_DEFAULT)) AS forward_priority,
+                           COALESCE(qr.priority, \(QUERY_PRIORITY_DEFAULT)) AS reverse_priority
                     FROM pointmap_point AS p
                     LEFT JOIN pointmap_query AS qf ON qf.point_id = p.id AND qf.is_reverse = 0
                     LEFT JOIN pointmap_query AS qr ON qr.point_id = p.id AND qr.is_reverse = 1
@@ -4303,6 +4310,8 @@ struct AppDatabase {
                     reverseEnabled: ((row["reverse_enabled"] as Int64?) ?? 0) != 0,
                     forwardInterval: (row["interval"] as Int64?) ?? 0,
                     reverseInterval: (row["reverse_interval"] as Int64?) ?? 0,
+                    forwardPriority: (row["forward_priority"] as Int?) ?? QUERY_PRIORITY_DEFAULT,
+                    reversePriority: (row["reverse_priority"] as Int?) ?? QUERY_PRIORITY_DEFAULT,
                     hint: row["hint"] as String? ?? ""
                 )
             }
@@ -4378,8 +4387,8 @@ struct AppDatabase {
                         """,
                     arguments: [toInstanceID, point.name, point.hint, point.latitude, point.longitude, point.id]
                 )
-                try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: point.id, isReverse: false, enabled: point.forwardEnabled)
-                try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: point.id, isReverse: true, enabled: point.reverseEnabled)
+                try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: point.id, isReverse: false, enabled: point.forwardEnabled, priority: point.forwardPriority)
+                try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: point.id, isReverse: true, enabled: point.reverseEnabled, priority: point.reversePriority)
             }
 
             for point in newPoints {
@@ -4391,8 +4400,8 @@ struct AppDatabase {
                     arguments: [toInstanceID, point.name, point.hint, point.latitude, point.longitude]
                 )
                 let pointID = db.lastInsertedRowID
-                try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: pointID, isReverse: false, enabled: point.forwardEnabled)
-                try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: pointID, isReverse: true, enabled: point.reverseEnabled)
+                try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: pointID, isReverse: false, enabled: point.forwardEnabled, priority: point.forwardPriority)
+                try Self.setMapQueryEnabled(db: db, table: "pointmap_query", parentColumn: "point_id", parentID: pointID, isReverse: true, enabled: point.reverseEnabled, priority: point.reversePriority)
             }
         }
     }
@@ -4401,19 +4410,28 @@ struct AppDatabase {
     // (parent, direction) row if missing (OR IGNORE preserves progress on a row that
     // already exists); disabling deletes it, discarding that direction's SRS
     // progress. Table/column names are code constants, safe to interpolate.
+    // A non-nil `priority` is written to the enabled row (new or kept); nil
+    // leaves a kept row's stored priority alone (new rows take the default).
     static func setMapQueryEnabled(
         db: Database,
         table: String,
         parentColumn: String,
         parentID: Int64,
         isReverse: Bool,
-        enabled: Bool
+        enabled: Bool,
+        priority: Int? = nil
     ) throws {
         if enabled {
             try db.execute(
                 sql: "INSERT OR IGNORE INTO \(table) (\(parentColumn), is_reverse) VALUES (?, ?)",
                 arguments: [parentID, isReverse ? 1 : 0]
             )
+            if let priority {
+                try db.execute(
+                    sql: "UPDATE \(table) SET priority = ? WHERE \(parentColumn) = ? AND is_reverse = ?",
+                    arguments: [clampedPriority(priority), parentID, isReverse ? 1 : 0]
+                )
+            }
         } else {
             try db.execute(
                 sql: "DELETE FROM \(table) WHERE \(parentColumn) = ? AND is_reverse = ?",
@@ -4631,8 +4649,8 @@ struct AppDatabase {
                     arguments: [instanceID, boundary.boundaryID]
                 )
                 let attachmentID = db.lastInsertedRowID
-                try Self.setMapQueryEnabled(db: db, table: "boundarymap_query", parentColumn: "attachment_id", parentID: attachmentID, isReverse: false, enabled: boundary.forwardEnabled)
-                try Self.setMapQueryEnabled(db: db, table: "boundarymap_query", parentColumn: "attachment_id", parentID: attachmentID, isReverse: true, enabled: boundary.reverseEnabled)
+                try Self.setMapQueryEnabled(db: db, table: "boundarymap_query", parentColumn: "attachment_id", parentID: attachmentID, isReverse: false, enabled: boundary.forwardEnabled, priority: boundary.forwardPriority)
+                try Self.setMapQueryEnabled(db: db, table: "boundarymap_query", parentColumn: "attachment_id", parentID: attachmentID, isReverse: true, enabled: boundary.reverseEnabled, priority: boundary.reversePriority)
             }
 
             return instanceID
@@ -4685,8 +4703,8 @@ struct AppDatabase {
             // query row, disabling deletes it (discarding that direction's progress);
             // a direction left enabled keeps its progress.
             for attachment in existingAttachments {
-                try Self.setMapQueryEnabled(db: db, table: "boundarymap_query", parentColumn: "attachment_id", parentID: attachment.id, isReverse: false, enabled: attachment.forwardEnabled)
-                try Self.setMapQueryEnabled(db: db, table: "boundarymap_query", parentColumn: "attachment_id", parentID: attachment.id, isReverse: true, enabled: attachment.reverseEnabled)
+                try Self.setMapQueryEnabled(db: db, table: "boundarymap_query", parentColumn: "attachment_id", parentID: attachment.id, isReverse: false, enabled: attachment.forwardEnabled, priority: attachment.forwardPriority)
+                try Self.setMapQueryEnabled(db: db, table: "boundarymap_query", parentColumn: "attachment_id", parentID: attachment.id, isReverse: true, enabled: attachment.reverseEnabled, priority: attachment.reversePriority)
             }
 
             for boundary in newBoundaries {
@@ -4698,8 +4716,8 @@ struct AppDatabase {
                     arguments: [instanceID, boundary.boundaryID]
                 )
                 let attachmentID = db.lastInsertedRowID
-                try Self.setMapQueryEnabled(db: db, table: "boundarymap_query", parentColumn: "attachment_id", parentID: attachmentID, isReverse: false, enabled: boundary.forwardEnabled)
-                try Self.setMapQueryEnabled(db: db, table: "boundarymap_query", parentColumn: "attachment_id", parentID: attachmentID, isReverse: true, enabled: boundary.reverseEnabled)
+                try Self.setMapQueryEnabled(db: db, table: "boundarymap_query", parentColumn: "attachment_id", parentID: attachmentID, isReverse: false, enabled: boundary.forwardEnabled, priority: boundary.forwardPriority)
+                try Self.setMapQueryEnabled(db: db, table: "boundarymap_query", parentColumn: "attachment_id", parentID: attachmentID, isReverse: true, enabled: boundary.reverseEnabled, priority: boundary.reversePriority)
             }
         }
     }
@@ -4732,7 +4750,9 @@ struct AppDatabase {
                 db,
                 sql: """
                     SELECT a.id AS id, a.boundary_id AS boundaryID, b.name AS name,
-                           (qf.id IS NOT NULL) AS forwardEnabled, (qr.id IS NOT NULL) AS reverseEnabled
+                           (qf.id IS NOT NULL) AS forwardEnabled, (qr.id IS NOT NULL) AS reverseEnabled,
+                           COALESCE(qf.priority, \(QUERY_PRIORITY_DEFAULT)) AS forwardPriority,
+                           COALESCE(qr.priority, \(QUERY_PRIORITY_DEFAULT)) AS reversePriority
                     FROM boundarymap_attachment AS a
                     JOIN boundary AS b ON b.id = a.boundary_id
                     LEFT JOIN boundarymap_query AS qf ON qf.attachment_id = a.id AND qf.is_reverse = 0
@@ -4749,7 +4769,9 @@ struct AppDatabase {
                     boundaryID: row["boundaryID"] as Int64? ?? 0,
                     name: row["name"] as String? ?? "",
                     forwardEnabled: ((row["forwardEnabled"] as Int64?) ?? 1) != 0,
-                    reverseEnabled: ((row["reverseEnabled"] as Int64?) ?? 0) != 0
+                    reverseEnabled: ((row["reverseEnabled"] as Int64?) ?? 0) != 0,
+                    forwardPriority: (row["forwardPriority"] as Int?) ?? QUERY_PRIORITY_DEFAULT,
+                    reversePriority: (row["reversePriority"] as Int?) ?? QUERY_PRIORITY_DEFAULT
                 )
             }
 

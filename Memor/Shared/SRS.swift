@@ -11,6 +11,18 @@ nonisolated let QUERY_STARTER_DELAY_AGAIN = 60
 nonisolated let QUERY_STARTER_DELAY_HARD = 360
 nonisolated let QUERY_STARTER_DELAY_GOOD = 600
 
+/// Study priority bounds. Instances and queries each store their own priority
+/// (default 1); a query's EFFECTIVE priority is the larger of its own and its
+/// instance's, and Study always picks from the highest effective priority
+/// among the selectable queries.
+nonisolated let QUERY_PRIORITY_MIN = 1
+nonisolated let QUERY_PRIORITY_MAX = 10
+nonisolated let QUERY_PRIORITY_DEFAULT = 1
+
+nonisolated func clampedPriority(_ priority: Int) -> Int {
+    min(max(priority, QUERY_PRIORITY_MIN), QUERY_PRIORITY_MAX)
+}
+
 enum QueryState: Int, Sendable, Hashable {
     case zero = 0
     case one = 1

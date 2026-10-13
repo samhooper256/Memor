@@ -1001,6 +1001,8 @@ struct InstanceEditorWindowView: View {
                     reverseEnabled: reverse,
                     forwardInterval: existing.forwardInterval,
                     reverseInterval: existing.reverseInterval,
+                    forwardPriority: existing.forwardPriority,
+                    reversePriority: existing.reversePriority,
                     hint: hint
                 )
             }

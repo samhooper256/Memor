@@ -75,6 +75,9 @@ struct PointMapPoint: Identifiable, Hashable {
     var reverseEnabled: Bool = false
     var forwardInterval: Int64 = 0
     var reverseInterval: Int64 = 0
+    // Each direction's stored query priority (meaningful only while enabled).
+    var forwardPriority: Int = QUERY_PRIORITY_DEFAULT
+    var reversePriority: Int = QUERY_PRIORITY_DEFAULT
     // Pre-reveal hint shown for Forward point queries in Study mode (default blank).
     var hint: String = ""
 }
@@ -110,6 +113,9 @@ struct BoundaryMapAttachedBoundary: Identifiable, Hashable {
     var name: String
     var forwardEnabled: Bool = true
     var reverseEnabled: Bool = false
+    // Each direction's stored query priority (meaningful only while enabled).
+    var forwardPriority: Int = QUERY_PRIORITY_DEFAULT
+    var reversePriority: Int = QUERY_PRIORITY_DEFAULT
 }
 
 struct BoundaryMapInstanceWithBoundaries: Hashable {
