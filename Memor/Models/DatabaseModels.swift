@@ -590,11 +590,6 @@ struct StudyQuery: Identifiable, Hashable {
     }
 }
 
-enum StudySelectionResult: Hashable {
-    case query(StudyQuery)
-    case completed
-}
-
 struct StudyQueryBuckets: Hashable {
     let blueQueries: [StudyQuery]
     let redQueries: [StudyQuery]
