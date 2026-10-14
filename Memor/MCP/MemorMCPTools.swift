@@ -266,7 +266,17 @@ enum MemorMCPTools {
             return try jsonResult(getCollection(collectionID: collectionID, appDatabase: appDatabase))
         case "create_collection":
             let name = try arguments.requireString("name")
-            return try jsonResult(createCollection(name: name, appDatabase: appDatabase))
+            return try jsonResult(createCollection(
+                name: name,
+                defaultPriority: try arguments.optionalInt64("default_priority"),
+                appDatabase: appDatabase
+            ))
+        case "set_collection_default_priority":
+            return try jsonResult(setCollectionDefaultPriorityTool(
+                collectionID: try arguments.requireInt64("collection_id"),
+                priority: try arguments.requireInt64("priority"),
+                appDatabase: appDatabase
+            ))
         case "delete_collection":
             let collectionID = try arguments.requireInt64("collection_id")
             return try jsonResult(deleteCollection(collectionID: collectionID, appDatabase: appDatabase))
@@ -1824,7 +1834,7 @@ enum MemorMCPTools {
     // MARK: - Collection tools
 
     private static func listCollections(appDatabase: AppDatabase) throws -> [CollectionDTO] {
-        try appDatabase.fetchCollections().map(CollectionDTO.init)
+        try appDatabase.fetchCollections().map { CollectionDTO($0) }
     }
 
     private static func getCollection(collectionID: Int64, appDatabase: AppDatabase) throws -> CollectionDetailDTO {
@@ -1839,10 +1849,29 @@ enum MemorMCPTools {
         )
     }
 
-    private static func createCollection(name: String, appDatabase: AppDatabase) throws -> CollectionDTO {
+    private static func createCollection(name: String, defaultPriority: Int64?, appDatabase: AppDatabase) throws -> CollectionDTO {
+        // Validate before creating so a bad priority leaves nothing behind.
+        let priority = try defaultPriority.map(validatedPriority)
         let collection = try appDatabase.createCollection(name: name)
+        if let priority {
+            try appDatabase.setCollectionDefaultPriority(collectionID: collection.id, priority: priority)
+        }
         postDatabaseChange()
-        return CollectionDTO(collection)
+        return CollectionDTO(collection, defaultPriority: priority ?? collection.defaultPriority)
+    }
+
+    private static func setCollectionDefaultPriorityTool(
+        collectionID: Int64,
+        priority rawPriority: Int64,
+        appDatabase: AppDatabase
+    ) throws -> OkDTO {
+        let priority = try validatedPriority(rawPriority)
+        guard try appDatabase.fetchCollections().contains(where: { $0.id == collectionID }) else {
+            throw MemorMCPToolError(message: "No collection with id \(collectionID).")
+        }
+        try appDatabase.setCollectionDefaultPriority(collectionID: collectionID, priority: priority)
+        postDatabaseChange()
+        return OkDTO()
     }
 
     private static func deleteCollection(collectionID: Int64, appDatabase: AppDatabase) throws -> OkDTO {
@@ -3159,11 +3188,26 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "create_collection",
-                description: "Create a new collection with the given name.",
+                description: "Create a new collection with the given name. Optional default_priority (1–10, default 1): adding an instance to the collection later raises that instance's study priority to this value when it is lower (see set_collection_default_priority).",
                 inputSchema: .object([
                     "type": .string("object"),
-                    "properties": .object(["name": stringValue]),
+                    "properties": .object([
+                        "name": stringValue,
+                        "default_priority": int64Number
+                    ]),
                     "required": .array([.string("name")])
+                ])
+            ),
+            Tool(
+                name: "set_collection_default_priority",
+                description: "Set a collection's default priority (1–10; existing collections start at 1). Whenever an instance is ADDED to the collection afterwards (add_instance_to_collection, add_instances_to_collection, or the app's UI), the instance's own study priority is raised to this value if it is lower — never lowered. Changing the default does NOT retroactively change the collection's current members; use set_instance_priority with search `col:Name` for that.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "collection_id": int64Number,
+                        "priority": int64Number
+                    ]),
+                    "required": .array([.string("collection_id"), .string("priority")])
                 ])
             ),
             Tool(
@@ -3189,7 +3233,7 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "add_instance_to_collection",
-                description: "Add an instance to a collection (idempotent).",
+                description: "Add an instance to a collection (idempotent). A NEW membership raises the instance's study priority to the collection's default_priority when that is higher; re-adding an existing member changes nothing.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -3201,7 +3245,7 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "add_instances_to_collection",
-                description: "Add many instances (identified by ID) to a single collection. Idempotent for already-present instances.",
+                description: "Add many instances (identified by ID) to a single collection. Idempotent for already-present instances. Each NEW member's study priority is raised to the collection's default_priority when that is higher.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -3961,13 +4005,16 @@ private struct CollectionDTO: Encodable {
     let description: String
     let visibleBeforeAnswer: Bool
     let instanceCount: Int
+    // Joining the collection raises an instance's priority to this (1–10).
+    let defaultPriority: Int
 
-    init(_ c: Collection) {
+    init(_ c: Collection, defaultPriority: Int? = nil) {
         id = c.id
         name = c.name
         description = c.description
         visibleBeforeAnswer = c.visibleBeforeAnswer
         instanceCount = c.instanceCount
+        self.defaultPriority = defaultPriority ?? c.defaultPriority
     }
 }
 

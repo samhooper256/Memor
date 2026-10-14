@@ -56,7 +56,8 @@ extension AppDatabase {
                     id INTEGER PRIMARY KEY,
                     name TEXT,
                     description TEXT,
-                    visible_before_answer INTEGER NOT NULL DEFAULT 1
+                    visible_before_answer INTEGER NOT NULL DEFAULT 1,
+                    default_priority INTEGER NOT NULL DEFAULT 1 CHECK (default_priority BETWEEN 1 AND 10)
                 ) STRICT
                 """)
 
@@ -693,8 +694,12 @@ extension AppDatabase {
             // on the instance row and one on each of the four query tables.
             // Self-applies to older databases — every existing row lands on 1.
             for table in ["instance_id_type_id", "query", "pointmap_query", "boundarymap_query", "person_query"] {
-                try addPriorityColumnIfMissing(db: db, table: table)
+                try addPriorityColumnIfMissing(db: db, table: table, column: "priority")
             }
+            // A collection's default priority: joining the collection raises
+            // an instance's priority to it (never lowers). Every existing
+            // collection lands on 1, which raises nothing.
+            try addPriorityColumnIfMissing(db: db, table: "collection", column: "default_priority")
 
             // Seed the built-in PointMap type (idempotent)
             let existingPointMapTypeID = try Int64.fetchOne(
@@ -842,15 +847,15 @@ extension AppDatabase {
         }
     }
 
-    /// Adds the `priority` column to `table` unless it already exists. Table
-    /// names are code constants, safe to interpolate.
-    private static func addPriorityColumnIfMissing(db: Database, table: String) throws {
+    /// Adds a 1–10 priority column (default 1) to `table` unless it already
+    /// exists. Table/column names are code constants, safe to interpolate.
+    private static func addPriorityColumnIfMissing(db: Database, table: String, column: String) throws {
         let columns = try Row.fetchAll(db, sql: "PRAGMA table_info(\(table))")
             .map { $0["name"] as String }
-        guard !columns.contains("priority") else { return }
+        guard !columns.contains(column) else { return }
         try db.execute(sql: """
             ALTER TABLE \(table)
-            ADD COLUMN priority INTEGER NOT NULL DEFAULT 1 CHECK (priority BETWEEN 1 AND 10)
+            ADD COLUMN \(column) INTEGER NOT NULL DEFAULT 1 CHECK (\(column) BETWEEN 1 AND 10)
             """)
     }
 

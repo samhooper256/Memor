@@ -97,6 +97,49 @@ extension AppDatabase {
         return try setInstancePriority(instanceIDs: instanceIDs, priority: priority)
     }
 
+    // MARK: - Collection default priority
+
+    /// Raises the instance's own priority to the collection's default
+    /// priority when the default is higher; never lowers it. Call right after
+    /// inserting a NEW membership row — re-asserting an existing membership
+    /// must not re-raise a priority the user has since lowered.
+    nonisolated static func raiseInstancePriorityToCollectionDefault(
+        db: Database,
+        instanceID: Int64,
+        collectionID: Int64
+    ) throws {
+        try db.execute(
+            sql: """
+                UPDATE instance_id_type_id
+                SET priority = (SELECT default_priority FROM collection WHERE id = ?)
+                WHERE instance_id = ?
+                    AND priority < (SELECT default_priority FROM collection WHERE id = ?)
+                """,
+            arguments: [collectionID, instanceID, collectionID]
+        )
+    }
+
+    func fetchCollectionDefaultPriority(collectionID: Int64) throws -> Int {
+        try dbQueue.read { db in
+            try Int.fetchOne(
+                db,
+                sql: "SELECT default_priority FROM collection WHERE id = ?",
+                arguments: [collectionID]
+            ) ?? QUERY_PRIORITY_DEFAULT
+        }
+    }
+
+    /// Sets a collection's default priority. Applies to FUTURE additions only;
+    /// current members keep their priorities.
+    func setCollectionDefaultPriority(collectionID: Int64, priority: Int) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE collection SET default_priority = ? WHERE id = ?",
+                arguments: [clampedPriority(priority), collectionID]
+            )
+        }
+    }
+
     // MARK: - Query priority
 
     /// Stored priority of each enabled standard (`query` table) query on the

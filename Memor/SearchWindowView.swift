@@ -895,6 +895,9 @@ struct SearchWindowView: View {
             if isMember {
                 try appDatabase.addInstance(instanceID, toCollectionID: collection.id)
                 instanceIDsInCollection.insert(instanceID)
+                // Joining may raise the instance's priority to the
+                // collection's default — Study and Stacks must refresh.
+                NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
             } else {
                 try appDatabase.removeInstance(instanceID, fromCollectionID: collection.id)
                 instanceIDsInCollection.remove(instanceID)

@@ -527,11 +527,12 @@ struct AppDatabase {
                         collection.name,
                         COALESCE(collection.description, '') AS description,
                         collection.visible_before_answer AS visibleBeforeAnswer,
-                        COUNT(instance_id_collection_id.instance_id) AS instanceCount
+                        COUNT(instance_id_collection_id.instance_id) AS instanceCount,
+                        collection.default_priority AS defaultPriority
                     FROM collection
                     LEFT JOIN instance_id_collection_id
                         ON instance_id_collection_id.collection_id = collection.id
-                    GROUP BY collection.id, collection.name, collection.description, collection.visible_before_answer
+                    GROUP BY collection.id, collection.name, collection.description, collection.visible_before_answer, collection.default_priority
                     ORDER BY collection.name COLLATE NOCASE, collection.id
                     """
             )
@@ -936,7 +937,14 @@ struct AppDatabase {
                 arguments: [name]
             )
 
-            return Collection(id: db.lastInsertedRowID, name: name, description: "", visibleBeforeAnswer: true, instanceCount: 0)
+            return Collection(
+                id: db.lastInsertedRowID,
+                name: name,
+                description: "",
+                visibleBeforeAnswer: true,
+                instanceCount: 0,
+                defaultPriority: QUERY_PRIORITY_DEFAULT
+            )
         }
     }
 
@@ -1099,21 +1107,11 @@ struct AppDatabase {
         }
     }
 
+    /// Adds an existing instance to a collection (no-op when already a
+    /// member). A NEW membership raises the instance's priority to the
+    /// collection's default priority when that is higher.
     func addInstance(_ instanceID: Int64, toCollectionID collectionID: Int64) throws {
-        try dbQueue.write { db in
-            try db.execute(
-                sql: """
-                    INSERT INTO instance_id_collection_id (instance_id, collection_id)
-                    SELECT ?, ?
-                    WHERE NOT EXISTS (
-                        SELECT 1
-                        FROM instance_id_collection_id
-                        WHERE instance_id = ? AND collection_id = ?
-                    )
-                    """,
-                arguments: [instanceID, collectionID, instanceID, collectionID]
-            )
-        }
+        try addInstances([instanceID], toCollectionID: collectionID)
     }
 
     func removeInstance(_ instanceID: Int64, fromCollectionID collectionID: Int64) throws {
@@ -1130,7 +1128,8 @@ struct AppDatabase {
 
     // Batch variants (one transaction for a whole Search selection). Instances
     // already in the collection are skipped — the join table has no unique
-    // constraint, so membership is guarded per insert like addInstance's.
+    // constraint, so membership is guarded per insert — and only the NEW
+    // memberships get the collection-default-priority raise.
     func addInstances(_ instanceIDs: [Int64], toCollectionID collectionID: Int64) throws {
         guard !instanceIDs.isEmpty else { return }
         try dbQueue.write { db in
@@ -1147,6 +1146,11 @@ struct AppDatabase {
                         """,
                     arguments: [instanceID, collectionID, instanceID, collectionID]
                 )
+                if db.changesCount > 0 {
+                    try Self.raiseInstancePriorityToCollectionDefault(
+                        db: db, instanceID: instanceID, collectionID: collectionID
+                    )
+                }
             }
         }
     }
@@ -1209,6 +1213,11 @@ struct AppDatabase {
         }
     }
 
+    /// Replaces the instance's memberships wholesale. Deliberately applies NO
+    /// collection default priority: its only caller is the instance editor,
+    /// which raises its DRAFT priority the moment a collection is checked (so
+    /// the user sees — and may still override — the result) and writes that
+    /// draft priority itself. Other add paths use addInstance(s), which raise.
     func setInstanceCollections(instanceID: Int64, collectionIDs: Set<Int64>) throws {
         try dbQueue.write { db in
             try db.execute(

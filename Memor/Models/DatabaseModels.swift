@@ -198,6 +198,9 @@ struct Collection: Identifiable, FetchableRecord, Decodable, Hashable {
     let description: String
     let visibleBeforeAnswer: Bool
     let instanceCount: Int
+    /// Joining this collection raises an instance's priority to this value
+    /// (never lowers it).
+    let defaultPriority: Int
 }
 
 struct CollectionChecklistItem: Identifiable, Hashable {

@@ -369,6 +369,7 @@ private struct CollectionDetailPageView: View {
     @State private var description: String = ""
     @State private var descriptionSaveTask: Task<Void, Never>?
     @State private var visibleBeforeAnswer: Bool = true
+    @State private var defaultPriority: Int = QUERY_PRIORITY_DEFAULT
     @State private var isRenamePopoverPresented = false
     @State private var renamedCollectionName: String = ""
     @State private var displayedName: String
@@ -507,6 +508,17 @@ private struct CollectionDetailPageView: View {
                         try? appDatabase.updateCollectionVisibleBeforeAnswer(id: collection.id, visibleBeforeAnswer: newValue)
                     }
 
+                HStack(spacing: 6) {
+                    Text("Default Priority:")
+                    PriorityMenu(
+                        priority: $defaultPriority,
+                        help: "Default priority (1–10): an instance added to this collection has its priority raised to this value if it is lower. Current members are unaffected. Click to change."
+                    )
+                }
+                .onChange(of: defaultPriority) { _, newValue in
+                    try? appDatabase.setCollectionDefaultPriority(collectionID: collection.id, priority: newValue)
+                }
+
                 Button("Add Instances") {
                     searchWindowState.requestOpenForCollection(collection)
                     openWindow(id: "search")
@@ -596,6 +608,9 @@ private struct CollectionDetailPageView: View {
         .task {
             description = collection.description
             visibleBeforeAnswer = collection.visibleBeforeAnswer
+            // Fresh read: the list's Collection snapshot can predate an MCP edit.
+            defaultPriority = (try? appDatabase.fetchCollectionDefaultPriority(collectionID: collection.id))
+                ?? collection.defaultPriority
             await loadInstances()
         }
         .onChange(of: searchWindowState.latestCollectionMembershipChange) { _, change in

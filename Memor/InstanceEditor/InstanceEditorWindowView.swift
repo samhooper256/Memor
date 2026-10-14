@@ -2246,8 +2246,27 @@ struct InstanceEditorWindowView: View {
         if draft.selectedCollectionIDs.contains(id) {
             draft.selectedCollectionIDs.remove(id)
         } else {
-            draft.selectedCollectionIDs.insert(id)
+            checkCollection(id)
         }
+    }
+
+    /// Checks a collection for the draft — every checking path goes through
+    /// here. Joining raises the draft's instance priority to the collection's
+    /// default priority when that is higher; unchecking never touches it.
+    /// (Saving writes the draft priority; setInstanceCollections applies no
+    /// raise of its own, so a priority lowered after checking stays lowered.)
+    private func checkCollection(_ collectionID: Int64) {
+        guard draft.selectedCollectionIDs.insert(collectionID).inserted else { return }
+        // Read fresh, not from allCollectionItems: the Add window outlives
+        // edits made on the Collections page.
+        guard let defaultPriority = try? appDatabase.fetchCollectionDefaultPriority(collectionID: collectionID),
+              defaultPriority > draft.instancePriority else { return }
+        draft.instancePriority = defaultPriority
+        let name = allCollectionItems.first(where: { $0.id == collectionID })?.name ?? "collection"
+        showToast(
+            message: "Priority raised to \(defaultPriority) (\u{201C}\(name)\u{201D} default).",
+            style: .success
+        )
     }
 
     private var collectionChecklistSection: some View {
@@ -2309,7 +2328,7 @@ struct InstanceEditorWindowView: View {
                                     isHighlighted: item.id == highlightedCollectionID,
                                     onToggleCheck: { isChecked in
                                         if isChecked {
-                                            draft.selectedCollectionIDs.insert(item.id)
+                                            checkCollection(item.id)
                                         } else {
                                             draft.selectedCollectionIDs.remove(item.id)
                                         }
@@ -2415,7 +2434,7 @@ struct InstanceEditorWindowView: View {
             isNewCollectionPopoverPresented = false
             collectionSearchQuery = ""
             loadCollectionItems()
-            draft.selectedCollectionIDs.insert(collection.id)
+            checkCollection(collection.id)
             NotificationCenter.default.post(name: .memorDidChangeDatabase, object: nil)
         } catch {
             showToast(message: "Failed to add collection.", style: .error)
