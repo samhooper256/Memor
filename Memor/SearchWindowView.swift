@@ -964,38 +964,11 @@ struct SearchWindowView: View {
     /// direction from the row's `isReverse`. When `ids` is nil, targets every
     /// displayed result.
     private func collectQueryTargets(selecting ids: Set<String>?) -> [QueryTarget] {
-        var targets: [QueryTarget] = []
-        for section in querySections {
-            let sectionKind: QueryTargetKind
-            switch section.typeName {
-            case POINTMAP_TYPE_NAME: sectionKind = .point
-            case BOUNDARYMAP_TYPE_NAME: sectionKind = .boundary
-            default: sectionKind = .standard
-            }
-            for query in section.queries where ids == nil || ids!.contains(query.id) {
-                // The Person section mixes standard (user-defined) rows with
-                // built-in rows, so the kind is per row.
-                if let personKind = query.personKind {
-                    targets.append(QueryTarget(
-                        instanceID: query.instanceID,
-                        queryTypeID: 0,
-                        isReverse: false,
-                        kind: .person,
-                        personKind: personKind,
-                        personPartnershipID: query.personPartnershipID,
-                        personOfficeID: query.personOfficeID
-                    ))
-                } else {
-                    targets.append(QueryTarget(
-                        instanceID: query.instanceID,
-                        queryTypeID: query.queryTypeID,
-                        isReverse: query.isReverse,
-                        kind: sectionKind
-                    ))
-                }
-            }
+        querySections.flatMap { section in
+            section.queries
+                .filter { ids == nil || ids!.contains($0.id) }
+                .map { $0.queryTarget(sectionTypeName: section.typeName) }
         }
-        return targets
     }
 
     @MainActor

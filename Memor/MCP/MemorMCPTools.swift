@@ -307,6 +307,20 @@ enum MemorMCPTools {
                 queryItems: try arguments.requireObjectArray("queries"),
                 appDatabase: appDatabase
             ))
+        case "set_query_priority":
+            return try jsonResult(setQueryPriorityTool(
+                priority: try arguments.requireInt64("priority"),
+                search: try arguments.optionalString("search"),
+                queryItems: try arguments.optionalObjectArray("queries"),
+                appDatabase: appDatabase
+            ))
+        case "set_instance_priority":
+            return try jsonResult(setInstancePriorityTool(
+                priority: try arguments.requireInt64("priority"),
+                search: try arguments.optionalString("search"),
+                instanceIDs: try arguments.optionalInt64Array("instance_ids"),
+                appDatabase: appDatabase
+            ))
         case "set_max_interval":
             return try jsonResult(setMaxIntervalTool(
                 instanceID: try arguments.requireInt64("instance_id"),
@@ -734,10 +748,14 @@ enum MemorMCPTools {
 
     private static func getInstanceResult(instanceID: Int64, appDatabase: AppDatabase) throws -> CallTool.Result {
         if let pointMap = try appDatabase.fetchPointMapInstance(instanceID: instanceID) {
-            return try jsonResult(PointMapInstanceDTO(pointMap))
+            var dto = PointMapInstanceDTO(pointMap)
+            dto.priority = try appDatabase.fetchInstancePriority(instanceID: instanceID)
+            return try jsonResult(dto)
         }
         if let boundaryMap = try appDatabase.fetchBoundaryMapInstance(instanceID: instanceID) {
-            return try jsonResult(BoundaryMapInstanceDTO(boundaryMap))
+            var dto = BoundaryMapInstanceDTO(boundaryMap)
+            dto.priority = try appDatabase.fetchInstancePriority(instanceID: instanceID)
+            return try jsonResult(dto)
         }
         return try jsonResult(getInstance(instanceID: instanceID, appDatabase: appDatabase))
     }
@@ -760,15 +778,20 @@ enum MemorMCPTools {
         let srsInfoByQueryTypeID = Dictionary(
             uniqueKeysWithValues: try appDatabase.fetchQuerySRSInfo(forInstanceID: instanceID).map { ($0.queryTypeID, $0) }
         )
+        let instancePriority = try appDatabase.fetchInstancePriority(instanceID: instanceID)
+        let queryPriorities = try appDatabase.fetchQueryPriorities(forInstanceID: instanceID)
         let queries = queryTypes.map { queryType in
             let srs = srsInfoByQueryTypeID[queryType.id]
+            let ownPriority = queryPriorities[queryType.id]
             return InstanceQueryInfoDTO(
                 queryTypeID: queryType.id,
                 name: queryType.name,
                 enabled: data.enabledQueryTypeIDs.contains(queryType.id),
                 interval: srs?.interval,
                 queryState: srs?.queryState.rawValue,
-                lastAnsweredTimestamp: srs?.lastAnsweredTimestamp
+                lastAnsweredTimestamp: srs?.lastAnsweredTimestamp,
+                priority: ownPriority,
+                effectivePriority: ownPriority.map { max($0, instancePriority) }
             )
         }
 
@@ -782,13 +805,14 @@ enum MemorMCPTools {
                 officeNames: personData.officeNamesByID
             )
             builtinQueries = try appDatabase.fetchPersonBuiltinQueryInfos(instanceID: instanceID)
-                .map(PersonBuiltinQueryDTO.init)
+                .map { PersonBuiltinQueryDTO($0, instancePriority: instancePriority) }
         }
 
         return InstanceDetailDTO(
             instanceID: data.instanceID,
             typeID: data.typeID,
             typeName: type.name,
+            priority: instancePriority,
             maxInterval: data.maxInterval,
             fields: fieldRows,
             enabledQueryTypeIds: Array(data.enabledQueryTypeIDs).sorted(),
@@ -2211,6 +2235,121 @@ enum MemorMCPTools {
         return OkDTO()
     }
 
+    private static func validatedPriority(_ raw: Int64) throws -> Int {
+        guard raw >= Int64(QUERY_PRIORITY_MIN), raw <= Int64(QUERY_PRIORITY_MAX) else {
+            throw MemorMCPToolError(message: "`priority` must be an integer from \(QUERY_PRIORITY_MIN) to \(QUERY_PRIORITY_MAX).")
+        }
+        return Int(raw)
+    }
+
+    private static func setQueryPriorityTool(
+        priority rawPriority: Int64,
+        search: String?,
+        queryItems: [[String: Value]]?,
+        appDatabase: AppDatabase
+    ) throws -> PriorityUpdateResultDTO {
+        let priority = try validatedPriority(rawPriority)
+        let updatedCount: Int
+        switch (search, queryItems) {
+        case (let search?, nil):
+            updatedCount = try appDatabase.setQueryPriority(querySearch: search, priority: priority)
+        case (nil, let items?):
+            guard !items.isEmpty else {
+                throw MemorMCPToolError(message: "`queries` must contain at least one item.")
+            }
+            // Map-ness per instance, cached: a map item's query_type_id is a
+            // point/attachment id and may target one direction or both.
+            var mapKindByInstanceID: [Int64: QueryTargetKind?] = [:]
+            func mapKind(of instanceID: Int64) throws -> QueryTargetKind? {
+                if let cached = mapKindByInstanceID[instanceID] { return cached }
+                let kind: QueryTargetKind?
+                if try appDatabase.fetchPointMapInstanceTitle(instanceID: instanceID) != nil {
+                    kind = .point
+                } else if try appDatabase.fetchBoundaryMapInstanceTitle(instanceID: instanceID) != nil {
+                    kind = .boundary
+                } else {
+                    kind = nil
+                }
+                mapKindByInstanceID[instanceID] = kind
+                return kind
+            }
+            var targets: [QueryTarget] = []
+            for (index, item) in items.enumerated() {
+                let label = "queries[\(index)]"
+                do {
+                    let instanceID = try item.requireInt64("instance_id")
+                    if let kindRaw = try item.optionalString("person_kind") {
+                        guard let kind = PersonQueryKind(rawValue: kindRaw) else {
+                            let valid = PersonQueryKind.allCases.map(\.rawValue).joined(separator: ", ")
+                            throw MemorMCPToolError(message: "unknown person_kind `\(kindRaw)`. Valid kinds: \(valid).")
+                        }
+                        let partnershipID = try item.optionalInt64("partnership_id")
+                        let officeID = try item.optionalInt64("office_id")
+                        try validatePersonKindShape(kind: kind, partnershipID: partnershipID, officeID: officeID, label: label)
+                        targets.append(QueryTarget(
+                            instanceID: instanceID,
+                            queryTypeID: 0,
+                            isReverse: false,
+                            kind: .person,
+                            personKind: kind,
+                            personPartnershipID: partnershipID,
+                            personOfficeID: officeID
+                        ))
+                    } else {
+                        let queryTypeID = try item.requireInt64("query_type_id")
+                        let isReverse = try item.optionalBool("is_reverse")
+                        if let kind = try mapKind(of: instanceID) {
+                            for direction in isReverse.map({ [$0] }) ?? [false, true] {
+                                targets.append(QueryTarget(instanceID: instanceID, queryTypeID: queryTypeID, isReverse: direction, kind: kind))
+                            }
+                        } else {
+                            if isReverse == true {
+                                throw MemorMCPToolError(message: "is_reverse applies only to PointMap/BoundaryMap queries.")
+                            }
+                            targets.append(QueryTarget(instanceID: instanceID, queryTypeID: queryTypeID, isReverse: false, kind: .standard))
+                        }
+                    }
+                } catch let error as MemorMCPToolError {
+                    throw MemorMCPToolError(message: "\(label): \(error.message)")
+                }
+            }
+            updatedCount = try appDatabase.setQueryPriority(targets: targets, priority: priority)
+        default:
+            throw MemorMCPToolError(message: "Provide exactly one of `search` or `queries`.")
+        }
+        postDatabaseChange()
+        return PriorityUpdateResultDTO(priority: priority, updatedCount: updatedCount)
+    }
+
+    private static func setInstancePriorityTool(
+        priority rawPriority: Int64,
+        search: String?,
+        instanceIDs: [Int64]?,
+        appDatabase: AppDatabase
+    ) throws -> PriorityUpdateResultDTO {
+        let priority = try validatedPriority(rawPriority)
+        let updatedCount: Int
+        switch (search, instanceIDs) {
+        case (let search?, nil):
+            updatedCount = try appDatabase.setInstancePriority(instanceSearch: search, priority: priority)
+        case (nil, let instanceIDs?):
+            guard !instanceIDs.isEmpty else {
+                throw MemorMCPToolError(message: "`instance_ids` must contain at least one id.")
+            }
+            // All-or-nothing: an unknown id fails the call before any write.
+            let missing = Set(instanceIDs).subtracting(try appDatabase.existingInstanceIDs(among: instanceIDs))
+            guard missing.isEmpty else {
+                let list = missing.sorted().map(String.init).joined(separator: ", ")
+                throw MemorMCPToolError(message: "No instance with id \(list). Nothing was changed.")
+            }
+            updatedCount = try appDatabase.setInstancePriority(instanceIDs: Set(instanceIDs), priority: priority)
+        default:
+            throw MemorMCPToolError(message: "Provide exactly one of `search` or `instance_ids`.")
+        }
+        postDatabaseChange()
+        return PriorityUpdateResultDTO(priority: priority, updatedCount: updatedCount)
+    }
+
     private static func setMaxIntervalTool(
         instanceID: Int64,
         maxInterval: Int64?,
@@ -2560,7 +2699,7 @@ enum MemorMCPTools {
             ),
             Tool(
                 name: "get_instance",
-                description: "Get an instance's full details: type, field values, per-query-type status (enabled, SRS interval in seconds, state, last answered), and max_interval. Person instances additionally return `relations` (mother/father/adoptive slots, ordered partnerships with is_married/start/end/children, ungrouped children; entries are {instance_id, display_value} or {name} for bare names) and `builtin_queries` (each built-in relationship query's kind, partnership_id, enablement, and SRS state). For PointMap/BoundaryMap instances, returns the map payload instead (kind, title, map settings, and points/attached boundaries with per-direction enabled flags).",
+                description: "Get an instance's full details: type, the instance's own study `priority` (1–10), field values, per-query-type status (enabled, SRS interval in seconds, state, last answered, the query's own `priority`, and `effective_priority` = max of its own and the instance's — what Study ranks by), and max_interval. Person instances additionally return `relations` (mother/father/adoptive slots, ordered partnerships with is_married/start/end/children, ungrouped children; entries are {instance_id, display_value} or {name} for bare names) and `builtin_queries` (each built-in relationship query's kind, partnership_id, enablement, SRS state, priority, and effective_priority). For PointMap/BoundaryMap instances, returns the map payload instead (kind, title, the instance `priority`, map settings, and points/attached boundaries with per-direction enabled flags and per-direction priorities). Change priorities with set_query_priority / set_instance_priority.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object(["instance_id": int64Number]),
@@ -3160,6 +3299,46 @@ enum MemorMCPTools {
                 ])
             ),
             Tool(
+                name: "set_query_priority",
+                description: "Set the study priority (integer 1–10; 1 is the default, 10 the highest) of queries. Study always shows a query with the highest EFFECTIVE priority among the ones it could show next, where a query's effective priority is the higher of its own priority and its instance's priority (see set_instance_priority). This sets the queries' OWN priority only and never changes any instance's priority. Provide exactly one of: `search` (a query-search expression — the same language as search_queries and Stack searches, so a Stack's search text targets exactly that Stack's queries; matches every query kind, including Person built-ins and map Forward/Reverse queries) or `queries` (an array of items). Each item is {instance_id, query_type_id, is_reverse?} — for PointMap/BoundaryMap instances query_type_id is a point/attachment ID and is_reverse picks one direction (omit it to set both) — or {instance_id, person_kind, partnership_id?, office_id?} for a Person's built-in queries (partnership_id required exactly for children_with; office_id required exactly for office). Disabled queries have no stored priority and are skipped. Returns updated_count.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "priority": int64Number,
+                        "search": stringValue,
+                        "queries": .object([
+                            "type": .string("array"),
+                            "items": .object([
+                                "type": .string("object"),
+                                "properties": .object([
+                                    "instance_id": int64Number,
+                                    "query_type_id": int64Number,
+                                    "is_reverse": boolValue,
+                                    "person_kind": stringValue,
+                                    "partnership_id": int64Number,
+                                    "office_id": int64Number
+                                ]),
+                                "required": .array([.string("instance_id")])
+                            ])
+                        ])
+                    ]),
+                    "required": .array([.string("priority")])
+                ])
+            ),
+            Tool(
+                name: "set_instance_priority",
+                description: "Set the study priority (integer 1–10; 1 is the default, 10 the highest) of instances. Every query of an instance is studied at the higher of its own priority and its instance's priority, so raising an instance raises all of its queries at once — but this never writes the queries' own priorities (lowering the instance again restores them). Works for every type, including Person and map instances. Provide exactly one of: `search` (an instance-search expression — the same language as search_instances) or `instance_ids`. Unknown instance ids fail the call with nothing changed. Returns updated_count.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "priority": int64Number,
+                        "search": stringValue,
+                        "instance_ids": int64Array
+                    ]),
+                    "required": .array([.string("priority")])
+                ])
+            ),
+            Tool(
                 name: "render_query",
                 description: "Render a flashcard exactly as the user will see it. For Object-type queries, returns the final question_html and answer_html with field values substituted, the global template applied, and CSS inlined. For a Person's built-in queries, pass person_kind (plus partnership_id for children_with, or office_id for office) instead of query_type_id — the result is HTML like a standard query, with the answer computed from the current relationships/office holdings (a per-office answer is the fixed predecessors/person/successors layout, one row per stint when the person held the office multiple times; all_offices lists every stint via the office question template). For PointMap/BoundaryMap instances, pass a point/attachment ID as query_type_id and the result describes the map card (highlighted point or boundary) instead of HTML. Omit query_type_id to render the instance's first query.",
                 inputSchema: .object([
@@ -3230,6 +3409,12 @@ enum MemorMCPTools {
 
 private struct OkDTO: Encodable {
     let ok = true
+}
+
+private struct PriorityUpdateResultDTO: Encodable {
+    let ok = true
+    let priority: Int
+    let updatedCount: Int
 }
 
 private struct ChangeTypeResultDTO: Encodable {
@@ -3454,12 +3639,18 @@ private struct InstanceQueryInfoDTO: Encodable {
     let interval: Int64?
     let queryState: Int?
     let lastAnsweredTimestamp: Int64?
+    // The query's own priority and the one Study uses (max of own and the
+    // instance's); nil when the query is disabled.
+    let priority: Int?
+    let effectivePriority: Int?
 }
 
 private struct InstanceDetailDTO: Encodable {
     let instanceID: Int64
     let typeID: Int64
     let typeName: String
+    // The instance's own study priority (1–10).
+    let priority: Int
     let maxInterval: Int64?
     let fields: [InstanceFieldValueDTO]
     // Named `Ids` (not `IDs`) so snake-case encoding yields enabled_query_type_ids.
@@ -3613,8 +3804,11 @@ private struct PersonBuiltinQueryDTO: Encodable {
     let interval: Int64?
     let queryState: Int?
     let lastAnsweredTimestamp: Int64?
+    // Own and effective (max with the instance's) priority; nil when disabled.
+    let priority: Int?
+    let effectivePriority: Int?
 
-    init(_ info: PersonBuiltinQueryInfo) {
+    init(_ info: PersonBuiltinQueryInfo, instancePriority: Int) {
         kind = info.kind.rawValue
         partnershipId = info.partnershipID
         officeId = info.officeID
@@ -3623,6 +3817,8 @@ private struct PersonBuiltinQueryDTO: Encodable {
         interval = info.interval
         queryState = info.queryState?.rawValue
         lastAnsweredTimestamp = info.lastAnsweredTimestamp
+        priority = info.priority
+        effectivePriority = info.priority.map { max($0, instancePriority) }
     }
 }
 
@@ -3649,6 +3845,9 @@ private struct PointMapPointDTO: Encodable {
     let reverseEnabled: Bool
     let forwardInterval: Int64
     let reverseInterval: Int64
+    // Each direction's own priority; nil while that direction is disabled.
+    let forwardPriority: Int?
+    let reversePriority: Int?
 
     init(_ point: PointMapPoint) {
         id = point.id
@@ -3660,6 +3859,8 @@ private struct PointMapPointDTO: Encodable {
         reverseEnabled = point.reverseEnabled
         forwardInterval = point.forwardInterval
         reverseInterval = point.reverseInterval
+        forwardPriority = point.forwardEnabled ? point.forwardPriority : nil
+        reversePriority = point.reverseEnabled ? point.reversePriority : nil
     }
 }
 
@@ -3676,6 +3877,8 @@ private struct PointMapInstanceDTO: Encodable {
     // Named `Ids` (not `IDs`) so snake-case encoding yields boundary_ids.
     let boundaryIds: [Int64]
     let points: [PointMapPointDTO]
+    // The instance's own study priority (set by get_instance).
+    var priority: Int?
 
     init(_ instance: PointMapInstanceWithPoints) {
         instanceID = instance.instance.instanceID
@@ -3697,6 +3900,9 @@ private struct BoundaryAttachmentDTO: Encodable {
     let name: String
     let forwardEnabled: Bool
     let reverseEnabled: Bool
+    // Each direction's own priority; nil while that direction is disabled.
+    let forwardPriority: Int?
+    let reversePriority: Int?
 
     init(_ attachment: BoundaryMapAttachedBoundary) {
         attachmentID = attachment.id
@@ -3704,6 +3910,8 @@ private struct BoundaryAttachmentDTO: Encodable {
         name = attachment.name
         forwardEnabled = attachment.forwardEnabled
         reverseEnabled = attachment.reverseEnabled
+        forwardPriority = attachment.forwardEnabled ? attachment.forwardPriority : nil
+        reversePriority = attachment.reverseEnabled ? attachment.reversePriority : nil
     }
 }
 
@@ -3717,6 +3925,8 @@ private struct BoundaryMapInstanceDTO: Encodable {
     let defaultZoom: Double
     let showAllBoundariesInQuestion: Bool
     let attachments: [BoundaryAttachmentDTO]
+    // The instance's own study priority (set by get_instance).
+    var priority: Int?
 
     init(_ instance: BoundaryMapInstanceWithBoundaries) {
         instanceID = instance.instance.instanceID

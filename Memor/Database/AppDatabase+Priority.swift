@@ -54,17 +54,47 @@ extension AppDatabase {
 
     /// Sets the instances' own priority. Never touches their queries' stored
     /// priorities (the instance value only raises their effective priority).
-    func setInstancePriority(instanceIDs: some Swift.Collection<Int64>, priority: Int) throws {
-        guard !instanceIDs.isEmpty else { return }
+    /// Returns how many instance rows exist among `instanceIDs` (unknown ids
+    /// are skipped).
+    @discardableResult
+    func setInstancePriority(instanceIDs: some Swift.Collection<Int64>, priority: Int) throws -> Int {
+        guard !instanceIDs.isEmpty else { return 0 }
         let priority = clampedPriority(priority)
-        try dbQueue.write { db in
+        return try dbQueue.write { db in
+            var updatedCount = 0
             for instanceID in instanceIDs {
                 try db.execute(
                     sql: "UPDATE instance_id_type_id SET priority = ? WHERE instance_id = ?",
                     arguments: [priority, instanceID]
                 )
+                updatedCount += db.changesCount
             }
+            return updatedCount
         }
+    }
+
+    /// The ids among `instanceIDs` that name existing instances.
+    func existingInstanceIDs(among instanceIDs: some Swift.Collection<Int64>) throws -> Set<Int64> {
+        try dbQueue.read { db in
+            var existing: Set<Int64> = []
+            for instanceID in Set(instanceIDs) where try Int.fetchOne(
+                db,
+                sql: "SELECT 1 FROM instance_id_type_id WHERE instance_id = ?",
+                arguments: [instanceID]
+            ) != nil {
+                existing.insert(instanceID)
+            }
+            return existing
+        }
+    }
+
+    /// Sets the own priority of every instance matching an INSTANCE-search
+    /// expression (the Search window's Instances mode language). Returns the
+    /// number of instances updated.
+    @discardableResult
+    func setInstancePriority(instanceSearch: String, priority: Int) throws -> Int {
+        let instanceIDs = try searchInstances(query: instanceSearch).flatMap { $0.instances.map(\.id) }
+        return try setInstancePriority(instanceIDs: instanceIDs, priority: priority)
     }
 
     // MARK: - Query priority
@@ -146,12 +176,36 @@ extension AppDatabase {
         return priorities.first
     }
 
+    /// The reset/disable/priority target for each result row of a
+    /// query search. The table comes from the row's section (PointMap /
+    /// BoundaryMap sections hold map queries) or, in the Person section, the
+    /// row's own built-in kind.
+    nonisolated static func queryTargets(from sections: [QuerySearchSection]) -> [QueryTarget] {
+        sections.flatMap { section in
+            section.queries.map { query in
+                query.queryTarget(sectionTypeName: section.typeName)
+            }
+        }
+    }
+
+    /// Sets the stored priority of every query matching a QUERY-search
+    /// expression — the Stacks language, so a stack's search text targets
+    /// exactly that stack's queries. Returns the number of queries updated.
+    @discardableResult
+    func setQueryPriority(querySearch: String, priority: Int) throws -> Int {
+        try setQueryPriority(targets: Self.queryTargets(from: searchQueries(query: querySearch)), priority: priority)
+    }
+
     /// Sets the stored priority of specific query targets (any kind; one
     /// direction for map queries). Never touches instance priorities.
-    func setQueryPriority(targets: [QueryTarget], priority: Int) throws {
-        guard !targets.isEmpty else { return }
+    /// Returns how many query rows were updated (targets without a row —
+    /// disabled queries — are skipped).
+    @discardableResult
+    func setQueryPriority(targets: [QueryTarget], priority: Int) throws -> Int {
+        guard !targets.isEmpty else { return 0 }
         let priority = clampedPriority(priority)
-        try dbQueue.write { db in
+        return try dbQueue.write { db in
+            var updatedCount = 0
             for target in targets {
                 switch target.kind {
                 case .standard:
@@ -189,7 +243,36 @@ extension AppDatabase {
                         arguments: [priority, target.instanceID, personKind.rawValue, target.personPartnershipID, target.personOfficeID]
                     )
                 }
+                updatedCount += db.changesCount
             }
+            return updatedCount
         }
+    }
+}
+
+extension QuerySearchResult {
+    /// This row's query target; `sectionTypeName` is the name of the search
+    /// section holding it (map sections hold point/boundary queries).
+    nonisolated func queryTarget(sectionTypeName: String) -> QueryTarget {
+        // The Person section mixes standard (user-defined) rows with built-in
+        // rows, so the kind is per row.
+        if let personKind {
+            return QueryTarget(
+                instanceID: instanceID,
+                queryTypeID: 0,
+                isReverse: false,
+                kind: .person,
+                personKind: personKind,
+                personPartnershipID: personPartnershipID,
+                personOfficeID: personOfficeID
+            )
+        }
+        let kind: QueryTargetKind
+        switch sectionTypeName {
+        case POINTMAP_TYPE_NAME: kind = .point
+        case BOUNDARYMAP_TYPE_NAME: kind = .boundary
+        default: kind = .standard
+        }
+        return QueryTarget(instanceID: instanceID, queryTypeID: queryTypeID, isReverse: isReverse, kind: kind)
     }
 }
