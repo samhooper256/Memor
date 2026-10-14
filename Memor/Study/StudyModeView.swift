@@ -168,9 +168,12 @@ struct StudyModeView: View {
 
     /// The highest effective priority among the session's due queries (every
     /// query in the blue/red/green pools — the same set the Stacks tab's
-    /// priority figure covers). nil once the pools are empty.
-    private var topDuePriority: Int? {
-        (blueQueries + redQueries + greenQueries).map(\.priority).max()
+    /// priority figure covers) and how many due queries sit at it. nil once
+    /// the pools are empty.
+    private var topDuePriority: (priority: Int, count: Int)? {
+        let priorities = (blueQueries + redQueries + greenQueries).map(\.priority)
+        guard let top = priorities.max() else { return nil }
+        return (top, priorities.count(where: { $0 == top }))
     }
 
     var body: some View {
@@ -978,7 +981,7 @@ struct StudyModeView: View {
 
 private struct StudyQueryHeaderBar: View {
     let query: StudyQuery?
-    let topDuePriority: Int?
+    let topDuePriority: (priority: Int, count: Int)?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -1008,9 +1011,12 @@ private struct StudyQueryHeaderBar: View {
                 HStack(spacing: 6) {
                     Text("Top due priority:")
                         .foregroundStyle(.secondary)
-                    PriorityBadge(priority: topDuePriority)
+                    PriorityBadge(priority: topDuePriority.priority)
+                    Text("(\(topDuePriority.count))")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
                 }
-                .help("The highest priority among this session's due queries. Study always shows a query at this priority first.")
+                .help("The highest priority among this session's due queries, and (in parentheses) how many due queries have that priority. Study always shows a query at this priority first.")
             }
         }
         .font(.subheadline)
