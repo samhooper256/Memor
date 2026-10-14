@@ -30,9 +30,9 @@
 
 - Study mode opens in the main app window when the user clicks a stack from the Stacks list.
 - While Study mode is active, the top-level tab bar is hidden and a bottom button bar is shown instead.
-- Study mode chooses the next query from the selected stack using the stack's saved `search` string and the spaced-repetition state in the `query` table.
-- It first probabilistically chooses between a new query (`interval = 0`) and a seen query (`interval != 0`) based on the proportion of new queries in the stack.
-- If it chooses a seen query, it shows the due query with the lowest `last_answered_timestamp + interval`; if none are due yet, Study mode shows the completion message.
+- Study mode loads the stack's due queries (matched by the stack's saved `search` string) into blue (new), red (seen, interval ≤ 10 min), and green (seen, due before tomorrow) pools, then picks each next query from them.
+- Every instance and every query has its own study priority (1–10, default 1). A query's effective priority is the higher of its own and its instance's; editing an instance's priority never writes its queries' priorities.
+- The selectable queries are the overdue reds plus every blue and green (or, when there are none of those, every red). Study always picks one with the highest effective priority among them; within that priority it shows the most overdue red, else a uniformly random blue or green, else a random red (preferring one other than the query just shown). When the pools are empty, Study mode shows the completion message.
 - The user reveals the answer with Space or the `Reveal Answer` button.
 - After revealing the answer, the user grades the query with `Again`, `Hard`, `Good`, or `Easy`, which updates `was_last_answer_correct`, `last_answered_timestamp`, and `interval`.
 - Pressing Escape exits Study mode at any time. If the answer has been revealed but not graded yet, no study-state fields are changed.
