@@ -347,9 +347,12 @@ struct StudyModeView: View {
             .frame(maxWidth: .infinity)
             .frame(height: Self.responseBarHeight)
             .background(.bar)
-            // An overlay, not an HStack member: the reveal/rating controls
-            // stay perfectly centered while the streak sits at the bar's
-            // trailing edge.
+            // Overlays, not HStack members: the reveal/rating controls stay
+            // perfectly centered while the current query's priority and the
+            // streak sit at the bar's leading and trailing edges.
+            .overlay(alignment: .leading) {
+                currentPriorityLabel
+            }
             .overlay(alignment: .trailing) {
                 streakLabel
             }
@@ -531,6 +534,20 @@ struct StudyModeView: View {
             StreakBadgeView(streak: streak)
                 .padding(.trailing, 12)
                 .accessibilityLabel("Streak: \(streak)")
+        }
+    }
+
+    /// The current query's EFFECTIVE priority at the leading edge of the
+    /// response bar, mirroring the streak badge: same edge inset and a frame
+    /// as wide as the badge, so the two sit symmetrically about the controls.
+    @ViewBuilder
+    private var currentPriorityLabel: some View {
+        if let currentQuery, !isCompleted {
+            PriorityBadge(priority: currentQuery.priority, font: .headline.monospacedDigit())
+                .frame(width: StreakBadgeView.sideLength)
+                .padding(.leading, 12)
+                .help("This query's priority: the higher of its own priority and its instance's.")
+                .accessibilityLabel("Priority: \(currentQuery.priority)")
         }
     }
 
