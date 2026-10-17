@@ -152,19 +152,29 @@ struct BoundaryPickerPopoverView: View {
     let appDatabase: AppDatabase
     let onManage: () -> Void
 
+    private static let listHeight: CGFloat = 260
+
     @State private var isUploadPresented = false
     @State private var errorMessage: String?
     @State private var successMessage: String?
-    /// Row SELECTION (the highlight a click toggles), distinct from the
-    /// checkboxes (`state.selectedIDs`, what's on the map). Transient: it
-    /// clears when the popover closes.
-    @State private var rowSelection: Set<Int64> = []
+    /// Row SELECTION (the Finder-style highlight: click, ⌘-click, shift-click
+    /// range), distinct from the checkboxes (`state.selectedIDs`, what's on
+    /// the map). Transient: it clears when the popover closes.
+    @State private var rowSelection = FinderRowSelection<Int64>()
 
     /// The selected rows the context menu acts on — only those the current
     /// search shows, so a selection hidden by a narrower search is never
     /// changed unseen.
     private var visibleRowSelection: Set<Int64> {
-        rowSelection.intersection(state.filteredOptions.map(\.id))
+        rowSelection.selection.intersection(state.filteredOptions.map(\.id))
+    }
+
+    private func clickRow(_ id: Int64) {
+        // The tap gesture fires on mouse-up, while that event is current.
+        let modifiers = NSApp.currentEvent?.modifierFlags ?? NSEvent.modifierFlags
+        // Display order: groupedFiltered() only partitions filteredOptions
+        // into consecutive runs, so this IS the on-screen order.
+        rowSelection.click(id, order: state.filteredOptions.map(\.id), modifiers: modifiers)
     }
 
     var body: some View {
@@ -200,13 +210,7 @@ struct BoundaryPickerPopoverView: View {
                                     isChecked: state.selectedIDs.contains(item.id),
                                     isRowSelected: rowSelection.contains(item.id),
                                     onToggle: { state.toggle(item.id) },
-                                    onToggleRowSelection: {
-                                        if rowSelection.contains(item.id) {
-                                            rowSelection.remove(item.id)
-                                        } else {
-                                            rowSelection.insert(item.id)
-                                        }
-                                    }
+                                    onClickRow: { clickRow(item.id) }
                                 )
                                 .contextMenu {
                                     // Selected rows only; an empty menu never shows.
@@ -219,8 +223,14 @@ struct BoundaryPickerPopoverView: View {
                     }
                 }
                 .padding(.bottom, 4)
+                // Fill the scroll area so the empty space below the rows is
+                // clickable: clicking anywhere but a row deselects all, as in
+                // Finder (rows' own tap gestures win over this one).
+                .frame(maxWidth: .infinity, minHeight: Self.listHeight, alignment: .topLeading)
+                .contentShape(Rectangle())
+                .onTapGesture { rowSelection.clear() }
             }
-            .frame(height: 260)
+            .frame(height: Self.listHeight)
             .background(Color(nsColor: .controlBackgroundColor))
 
             if let errorMessage {
@@ -325,7 +335,7 @@ private struct BoundaryPickerRow: View {
     let isChecked: Bool
     let isRowSelected: Bool
     let onToggle: () -> Void
-    let onToggleRowSelection: () -> Void
+    let onClickRow: () -> Void
 
     @State private var isHovered = false
 
@@ -351,7 +361,7 @@ private struct BoundaryPickerRow: View {
         .padding(.vertical, 2)
         .background(rowBackground)
         .contentShape(Rectangle())
-        .onTapGesture(perform: onToggleRowSelection)
+        .onTapGesture(perform: onClickRow)
         .onHover { hovering in
             isHovered = hovering
         }

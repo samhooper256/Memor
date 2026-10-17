@@ -53,7 +53,7 @@ Memor/
   PointMap/
     PointMapInstanceEditor.swift    PointMap editor state, sort modes, entry refs, add-point popup, entry row, right-click menu
     PointMapQueryView.swift         PointMap query rendering + MapPointMarker
-    BoundaryPicker.swift            Boundary picker popover (PointMap overlays + BoundaryMap attachments; clicking a row outside its checkbox toggles a multi-row selection whose right-click menu Enables/Disables — checks/unchecks — the selected rows the current search shows, in one `setChecked` write) + BoundaryUploader (file read/validate → new set or append to an existing set)
+    BoundaryPicker.swift            Boundary picker popover (PointMap overlays + BoundaryMap attachments; clicking a row outside its checkbox selects it Finder-style (`FinderRowSelection`: click / ⌘-click / shift-click range; empty space deselects), and a selected row's right-click menu Enables/Disables — checks/unchecks — the selected rows the current search shows, in one `setChecked` write) + BoundaryUploader (file read/validate → new set or append to an existing set)
   BoundaryMap/
     BoundaryMapInstanceEditor.swift BoundaryMap attachment draft, sort modes, entry refs, list entry row (color circle + →/← checkboxes), point-in-polygon hit test. The editor's list context menu (in InstanceEditorWindowView) has a one-row "Rename…" that writes the boundary's app-wide name through immediately (like color) and patches the draft copies
     BoundaryMapQueryView.swift      BoundaryMap query rendering (revealed forward queries: hovering any boundary shows its name in a `MapTooltipLabel` below the cursor)
@@ -67,6 +67,7 @@ Memor/
     SRS.swift                       Starter delays, interval formatting, color/bucket helpers
     BoundaryColorViews.swift        Per-boundary border color UI: color mappings, indicator circle, "Color:" picker popover, right-click catcher
     FlowLayout.swift                Wrapping chip layout (used by the Person editor)
+    FinderRowSelection.swift        Pure Finder/NSTableView-style click selection model (click selects one, ⌘-click toggles, shift-click spans anchor…row over the pre-anchor selection, `clear()` for empty-space clicks) for hand-built row lists that can't use List(selection:)
     PriorityViews.swift             Study-priority UI: `PriorityBadge` ("P3", orange above the default, "P1 → P5" when the instance raises it), `PriorityMenu` (click-to-change; a Menu, not a popover, so it also works in the borderless Add/Edit Point panel), `SetPrioritySubmenu` for context menus
     ToastView.swift                 ToastMessage, ToastStyle, ToastView (used by InstanceEditor)
     RenamePopover.swift             App-standard "Rename X" popover (name field, in-place error, Cancel/Rename); present via a row-scoped `.popover(item:)` — used by Manage Boundaries and the BoundaryMap editor list. Each open popover enrolls in `RenamePopoverSubmitRegistry` so a window-level ⌘Return handler can commit it first (the instance editor's: rename saved, then the instance saved + window closed; a rejected name stays up and the submit waits) — the window's key monitor sees the chord before the popover's field editor, as with Escape
