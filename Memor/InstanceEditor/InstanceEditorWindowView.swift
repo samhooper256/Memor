@@ -1704,7 +1704,12 @@ struct InstanceEditorWindowView: View {
             }
         }
 
-        for boundaryID in added {
+        // Picker order, not Set order: a bulk Enable appends its new
+        // attachments in the order the picker lists them.
+        let pickerOrder = draft.boundaryMapPickerState.options.map(\.id)
+        let orderedAdded = pickerOrder.filter(added.contains)
+            + added.subtracting(pickerOrder).sorted()
+        for boundaryID in orderedAdded {
             if let attachmentID = existingIDs[boundaryID] {
                 // User re-toggled an existing attachment back on — un-stage its deletion.
                 draft.boundaryMapDeletedExistingIDs.remove(attachmentID)

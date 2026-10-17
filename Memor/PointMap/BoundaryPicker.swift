@@ -129,6 +129,12 @@ final class BoundaryPickerState: ObservableObject {
         }
     }
 
+    /// Checks or unchecks several boundaries in ONE write, so observers see a
+    /// single old→new diff.
+    func setChecked(_ ids: Set<Int64>, _ checked: Bool) {
+        selectedIDs = checked ? selectedIDs.union(ids) : selectedIDs.subtracting(ids)
+    }
+
     var filteredOptions: [BoundaryWithSet] {
         let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         if query.isEmpty { return options }
@@ -149,6 +155,17 @@ struct BoundaryPickerPopoverView: View {
     @State private var isUploadPresented = false
     @State private var errorMessage: String?
     @State private var successMessage: String?
+    /// Row SELECTION (the highlight a click toggles), distinct from the
+    /// checkboxes (`state.selectedIDs`, what's on the map). Transient: it
+    /// clears when the popover closes.
+    @State private var rowSelection: Set<Int64> = []
+
+    /// The selected rows the context menu acts on — only those the current
+    /// search shows, so a selection hidden by a narrower search is never
+    /// changed unseen.
+    private var visibleRowSelection: Set<Int64> {
+        rowSelection.intersection(state.filteredOptions.map(\.id))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -181,8 +198,22 @@ struct BoundaryPickerPopoverView: View {
                                 BoundaryPickerRow(
                                     item: item,
                                     isChecked: state.selectedIDs.contains(item.id),
-                                    onToggle: { state.toggle(item.id) }
+                                    isRowSelected: rowSelection.contains(item.id),
+                                    onToggle: { state.toggle(item.id) },
+                                    onToggleRowSelection: {
+                                        if rowSelection.contains(item.id) {
+                                            rowSelection.remove(item.id)
+                                        } else {
+                                            rowSelection.insert(item.id)
+                                        }
+                                    }
                                 )
+                                .contextMenu {
+                                    // Selected rows only; an empty menu never shows.
+                                    if rowSelection.contains(item.id) {
+                                        rowSelectionMenuItems
+                                    }
+                                }
                             }
                         }
                     }
@@ -247,6 +278,18 @@ struct BoundaryPickerPopoverView: View {
         }
     }
 
+    @ViewBuilder
+    private var rowSelectionMenuItems: some View {
+        let ids = visibleRowSelection
+        let suffix = ids.count > 1 ? " (\(ids.count) rows)" : ""
+        Button("Enable\(suffix)") {
+            state.setChecked(ids, true)
+        }
+        Button("Disable\(suffix)") {
+            state.setChecked(ids, false)
+        }
+    }
+
     private struct Group {
         let setID: Int64
         let setName: String
@@ -280,12 +323,17 @@ struct BoundaryPickerPopoverView: View {
 private struct BoundaryPickerRow: View {
     let item: BoundaryWithSet
     let isChecked: Bool
+    let isRowSelected: Bool
     let onToggle: () -> Void
+    let onToggleRowSelection: () -> Void
 
     @State private var isHovered = false
 
     var body: some View {
         HStack(spacing: 6) {
+            // The name is a separate Text, not the Toggle's label: a checkbox
+            // label is part of the control, and clicking the name must select
+            // the row rather than check the box.
             Toggle(
                 item.boundary.name,
                 isOn: Binding(
@@ -294,16 +342,24 @@ private struct BoundaryPickerRow: View {
                 )
             )
             .toggleStyle(.checkbox)
-            .lineLimit(1)
+            .labelsHidden()
+            Text(item.boundary.name)
+                .lineLimit(1)
             Spacer()
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 2)
-        .background(isHovered ? Color.accentColor.opacity(0.1) : Color.clear)
+        .background(rowBackground)
         .contentShape(Rectangle())
+        .onTapGesture(perform: onToggleRowSelection)
         .onHover { hovering in
             isHovered = hovering
         }
+    }
+
+    private var rowBackground: Color {
+        if isRowSelected { return Color.accentColor.opacity(isHovered ? 0.35 : 0.28) }
+        return isHovered ? Color.accentColor.opacity(0.1) : Color.clear
     }
 }
 
