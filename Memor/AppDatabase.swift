@@ -49,7 +49,9 @@ struct AppDatabase {
     }
 
     nonisolated indirect enum SearchExpression: Hashable {
-        case literal(String)
+        // `caseSensitive` comes from the Search window's "Case sensitive"
+        // checkbox; every other caller (Stacks, ⌘K, MCP) parses insensitive.
+        case literal(String, caseSensitive: Bool = false)
         case collection(String)
         case collectionID(Int64)
         case type(String)
@@ -1451,8 +1453,10 @@ struct AppDatabase {
         }
     }
 
-    func searchInstances(query: String) throws -> [InstanceSearchSection] {
-        let parsedQuery = try parseInstanceSearchQuery(query)
+    // `caseSensitive` (here and in searchQueries/searchMapElements) only
+    // affects literal text components; it is the Search window's checkbox.
+    func searchInstances(query: String, caseSensitive: Bool = false) throws -> [InstanceSearchSection] {
+        let parsedQuery = try parseInstanceSearchQuery(query, caseSensitive: caseSensitive)
 
         return try dbQueue.read { db in
             try validateCollectionSearchComponents(
@@ -1598,8 +1602,8 @@ struct AppDatabase {
         }
     }
 
-    func searchQueries(query: String) throws -> [QuerySearchSection] {
-        let parsedQuery = try parseQuerySearchQuery(query)
+    func searchQueries(query: String, caseSensitive: Bool = false) throws -> [QuerySearchSection] {
+        let parsedQuery = try parseQuerySearchQuery(query, caseSensitive: caseSensitive)
 
         return try dbQueue.read { db in
             try validateCollectionSearchComponents(
@@ -1690,8 +1694,8 @@ struct AppDatabase {
     /// themselves, not their per-direction queries). Uses the restricted
     /// map-element search language (quotes, parentheses, OR/NOT, `literal:`,
     /// plain strings only).
-    func searchMapElements(query: String) throws -> [MapElementSearchSection] {
-        let parsedQuery = try parseMapElementSearchQuery(query)
+    func searchMapElements(query: String, caseSensitive: Bool = false) throws -> [MapElementSearchSection] {
+        let parsedQuery = try parseMapElementSearchQuery(query, caseSensitive: caseSensitive)
 
         return try dbQueue.read { db in
             var sections: [MapElementSearchSection] = []
@@ -5435,23 +5439,11 @@ struct AppDatabase {
         includePointName: Bool
     ) -> (sql: String, arguments: StatementArguments) {
         switch expression {
-        case .literal(let literal):
-            let escaped = Self.escapeSQLiteLikePattern(literal)
-            let pattern = "%\(escaped)%"
-            var arguments = StatementArguments()
-            if includePointName {
-                arguments += [pattern, pattern]
-                return (
-                    "(COALESCE(\(pointAlias).name, '') LIKE ? ESCAPE '\\' OR COALESCE(\(instanceAlias).title, '') LIKE ? ESCAPE '\\')",
-                    arguments
-                )
-            } else {
-                arguments += [pattern]
-                return (
-                    "(COALESCE(\(instanceAlias).title, '') LIKE ? ESCAPE '\\')",
-                    arguments
-                )
-            }
+        case .literal(let literal, let caseSensitive):
+            let columns = includePointName
+                ? ["\(pointAlias).name", "\(instanceAlias).title"]
+                : ["\(instanceAlias).title"]
+            return Self.literalMatchCondition(columns: columns, literal: literal, caseSensitive: caseSensitive)
         case .type(let searchedTypeName):
             var arguments = StatementArguments()
             arguments += [POINTMAP_TYPE_NAME, searchedTypeName]
@@ -5843,23 +5835,11 @@ struct AppDatabase {
         includeBoundaryName: Bool
     ) -> (sql: String, arguments: StatementArguments) {
         switch expression {
-        case .literal(let literal):
-            let escaped = Self.escapeSQLiteLikePattern(literal)
-            let pattern = "%\(escaped)%"
-            var arguments = StatementArguments()
-            if includeBoundaryName {
-                arguments += [pattern, pattern]
-                return (
-                    "(COALESCE(\(boundaryAlias).name, '') LIKE ? ESCAPE '\\' OR COALESCE(\(instanceAlias).title, '') LIKE ? ESCAPE '\\')",
-                    arguments
-                )
-            } else {
-                arguments += [pattern]
-                return (
-                    "(COALESCE(\(instanceAlias).title, '') LIKE ? ESCAPE '\\')",
-                    arguments
-                )
-            }
+        case .literal(let literal, let caseSensitive):
+            let columns = includeBoundaryName
+                ? ["\(boundaryAlias).name", "\(instanceAlias).title"]
+                : ["\(instanceAlias).title"]
+            return Self.literalMatchCondition(columns: columns, literal: literal, caseSensitive: caseSensitive)
         case .type(let searchedTypeName):
             var arguments = StatementArguments()
             arguments += [BOUNDARYMAP_TYPE_NAME, searchedTypeName]
@@ -6318,20 +6298,22 @@ struct AppDatabase {
         )
     }
 
-    private func parseInstanceSearchQuery(_ query: String) throws -> InstanceSearchQuery {
+    private func parseInstanceSearchQuery(_ query: String, caseSensitive: Bool = false) throws -> InstanceSearchQuery {
         let tokens = try tokenizeSearchQueryComponents(query)
-        return InstanceSearchQuery(expression: try parseSearchExpression(tokens, allowsNoQueries: true, allowsNew: false))
+        return InstanceSearchQuery(expression: try parseSearchExpression(
+            tokens, allowsNoQueries: true, allowsNew: false, caseSensitive: caseSensitive))
     }
 
-    nonisolated func parseQuerySearchQuery(_ query: String) throws -> QuerySearchQuery {
+    nonisolated func parseQuerySearchQuery(_ query: String, caseSensitive: Bool = false) throws -> QuerySearchQuery {
         let tokens = try tokenizeSearchQueryComponents(query)
-        return QuerySearchQuery(expression: try parseSearchExpression(tokens, allowsNoQueries: false, allowsNew: true))
+        return QuerySearchQuery(expression: try parseSearchExpression(
+            tokens, allowsNoQueries: false, allowsNew: true, caseSensitive: caseSensitive))
     }
 
-    private func parseMapElementSearchQuery(_ query: String) throws -> MapElementSearchQuery {
+    private func parseMapElementSearchQuery(_ query: String, caseSensitive: Bool = false) throws -> MapElementSearchQuery {
         let tokens = try tokenizeSearchQueryComponents(query)
         return MapElementSearchQuery(expression: try parseSearchExpression(
-            tokens, allowsNoQueries: false, allowsNew: false, allowsTypeCollectionId: false))
+            tokens, allowsNoQueries: false, allowsNew: false, allowsTypeCollectionId: false, caseSensitive: caseSensitive))
     }
 
     nonisolated private func tokenizeSearchQueryComponents(_ query: String) throws -> [String] {
@@ -6373,12 +6355,13 @@ struct AppDatabase {
         return tokens
     }
 
-    nonisolated private func parseSearchExpression(_ tokens: [String], allowsNoQueries: Bool, allowsNew: Bool, allowsTypeCollectionId: Bool = true) throws -> SearchExpression? {
+    nonisolated private func parseSearchExpression(_ tokens: [String], allowsNoQueries: Bool, allowsNew: Bool, allowsTypeCollectionId: Bool = true, caseSensitive: Bool = false) throws -> SearchExpression? {
         struct Parser {
             let tokens: [String]
             let allowsNoQueries: Bool
             let allowsNew: Bool
             let allowsTypeCollectionId: Bool
+            let caseSensitive: Bool
             var index = 0
 
             mutating func parseExpression() throws -> SearchExpression? {
@@ -6461,7 +6444,7 @@ struct AppDatabase {
                     guard !literal.isEmpty else {
                         throw DatabaseError(message: "The literal: component requires text after the colon.")
                     }
-                    return .literal(literal)
+                    return .literal(literal, caseSensitive: caseSensitive)
                 } else if token.hasPrefix("collection:") {
                     guard allowsTypeCollectionId else {
                         throw DatabaseError(message: "The collection: component cannot be used when searching points and boundaries.")
@@ -6513,7 +6496,7 @@ struct AppDatabase {
                     }
                     return .office(officeName)
                 } else if !token.contains(":") {
-                    return .literal(token)
+                    return .literal(token, caseSensitive: caseSensitive)
                 } else {
                     throw DatabaseError(message: "Unsupported search component: \(token)")
                 }
@@ -6583,7 +6566,7 @@ struct AppDatabase {
             }
         }
 
-        var parser = Parser(tokens: tokens, allowsNoQueries: allowsNoQueries, allowsNew: allowsNew, allowsTypeCollectionId: allowsTypeCollectionId)
+        var parser = Parser(tokens: tokens, allowsNoQueries: allowsNoQueries, allowsNew: allowsNew, allowsTypeCollectionId: allowsTypeCollectionId, caseSensitive: caseSensitive)
         let expression = try parser.parseExpression()
         guard parser.index == tokens.count else {
             throw DatabaseError(message: "Search query has an unmatched parenthesis.")
@@ -6665,17 +6648,12 @@ struct AppDatabase {
         context: SearchConditionContext
     ) -> (sql: String, arguments: StatementArguments) {
         switch expression {
-        case .literal(let literal):
-            var arguments = StatementArguments()
-            let fieldConditions = fieldIndices.map { fieldIndex in
-                "COALESCE(\(tableAlias).\"field\(fieldIndex)\", '') LIKE ? ESCAPE '\\'"
-            }
-            let escapedLiteral = Self.escapeSQLiteLikePattern(literal)
-            let searchPattern = "%\(escapedLiteral)%"
-            for _ in fieldIndices {
-                arguments += [searchPattern]
-            }
-            return ("(\(fieldConditions.joined(separator: " OR ")))", arguments)
+        case .literal(let literal, let caseSensitive):
+            return Self.literalMatchCondition(
+                columns: fieldIndices.map { "\(tableAlias).\"field\($0)\"" },
+                literal: literal,
+                caseSensitive: caseSensitive
+            )
 
         case .collection(let collectionName):
             var arguments = StatementArguments()
@@ -6936,6 +6914,36 @@ struct AppDatabase {
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "%", with: "\\%")
             .replacingOccurrences(of: "_", with: "\\_")
+    }
+
+    /// One `literal` component's substring test against `column` (an SQL
+    /// expression). Insensitive uses LIKE (SQLite folds ASCII case only);
+    /// sensitive uses `instr`, an exact byte-wise substring match that needs
+    /// no pattern escaping.
+    nonisolated private static func literalMatchCondition(
+        column: String,
+        literal: String,
+        caseSensitive: Bool
+    ) -> (sql: String, arguments: StatementArguments) {
+        if caseSensitive {
+            return ("instr(COALESCE(\(column), ''), ?) > 0", [literal])
+        }
+        return ("COALESCE(\(column), '') LIKE ? ESCAPE '\\'", ["%\(escapeSQLiteLikePattern(literal))%"])
+    }
+
+    /// ORs `literalMatchCondition` over several columns, parenthesized.
+    nonisolated private static func literalMatchCondition(
+        columns: [String],
+        literal: String,
+        caseSensitive: Bool
+    ) -> (sql: String, arguments: StatementArguments) {
+        var arguments = StatementArguments()
+        let conditions = columns.map { column in
+            let condition = literalMatchCondition(column: column, literal: literal, caseSensitive: caseSensitive)
+            arguments += condition.arguments
+            return condition.sql
+        }
+        return ("(\(conditions.joined(separator: " OR ")))", arguments)
     }
 
     nonisolated static func collectionNames(in expression: SearchExpression?) -> [String] {

@@ -164,6 +164,7 @@ Components:
 - Components can use `or(...)` for OR logic
 - Double quotes for spaces inside components: `"literal:hi there"`
 - Empty query matches all
+- The Search window's "Case sensitive" checkbox (all three modes; UserDefaults `com.sam.Memor.searchCaseSensitive`, default off; toggling re-runs the box's current text) makes literal text components (`literal:` and plain strings) match case-sensitively via `instr` instead of `LIKE` — `SearchExpression.literal(_, caseSensitive:)`, threaded as a defaulted `caseSensitive:` param through `searchInstances`/`searchQueries`/`searchMapElements` → the parse functions. Names in `type:`/`col:`/`qt:`/`office:` stay case-insensitive. Every other caller (Stacks, Quick Study, ⌘K, MCP) is always insensitive, so with the box checked a Queries-mode result list can differ from the Stack/Quick Study built from the same text.
 - Three help windows (`InstanceSearchHelpWindowView` / `QuerySearchHelpWindowView` / `MapElementSearchHelpWindowView`, opened from the `?` button beside the search box) document each mode's components; the `?` opens the one matching the current mode.
 
 ## Spaced Repetition

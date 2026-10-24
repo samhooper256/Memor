@@ -107,6 +107,8 @@ struct SearchWindowView: View {
 
     @State private var searchQuery = ""
     @State private var debouncedSearchQuery = ""
+    // Applies to literal text in every mode; persisted across launches.
+    @AppStorage("com.sam.Memor.searchCaseSensitive") private var isCaseSensitive = false
     @State private var errorMessage: String?
     @State private var debounceTask: Task<Void, Never>?
     @State private var searchFocusRequest = UUID()
@@ -457,6 +459,15 @@ struct SearchWindowView: View {
 
                 HelpWindowButton(windowID: helpWindowID, tooltip: "Show search syntax help")
             }
+
+            Toggle("Case sensitive", isOn: $isCaseSensitive)
+                .toggleStyle(.checkbox)
+                .onChange(of: isCaseSensitive) { _, _ in
+                    // Re-run what is in the box now, skipping any pending debounce.
+                    debounceTask?.cancel()
+                    debouncedSearchQuery = searchQuery
+                    Task { await runSearch(for: searchQuery) }
+                }
 
             if let collection = collectionInAddMode {
                 Text("Adding instances to \(collection.name)")
@@ -856,11 +867,11 @@ struct SearchWindowView: View {
         do {
             switch windowState.mode {
             case .instances:
-                instanceSections = try appDatabase.searchInstances(query: query)
+                instanceSections = try appDatabase.searchInstances(query: query, caseSensitive: isCaseSensitive)
             case .queries:
-                querySections = try appDatabase.searchQueries(query: query)
+                querySections = try appDatabase.searchQueries(query: query, caseSensitive: isCaseSensitive)
             case .pointsAndBoundaries:
-                mapElementSections = try appDatabase.searchMapElements(query: query)
+                mapElementSections = try appDatabase.searchMapElements(query: query, caseSensitive: isCaseSensitive)
             }
             errorMessage = nil
         } catch {
