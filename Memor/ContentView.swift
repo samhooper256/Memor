@@ -141,6 +141,7 @@ struct ContentView: View {
                 openWindow(id: "search")
             }
         }
+        .navigationTitle(windowTitle)
         .onChange(of: quickStudyState.pendingSearch) { _, newValue in
             guard let searchText = newValue else { return }
             quickStudyState.pendingSearch = nil
@@ -154,6 +155,13 @@ struct ContentView: View {
             try? await Task.sleep(for: .milliseconds(300))
             WebViewPrewarmer.prewarm()
         }
+    }
+
+    // "Memor: <Stack Name>" while studying; Quick Study sessions run on a
+    // nameless synthetic stack.
+    private var windowTitle: String {
+        guard let activeStudyStack else { return "Memor" }
+        return "Memor: \(isActiveStudyQuickStudy ? "Quick Study" : activeStudyStack.name)"
     }
 
     private var tabBar: some View {
