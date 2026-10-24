@@ -258,12 +258,20 @@ struct CollectionChecklistRow: View {
             }
 
             Toggle(
-                item.name,
                 isOn: Binding(
                     get: { isChecked },
                     set: { onToggleCheck($0) }
                 )
-            )
+            ) {
+                HStack(spacing: 6) {
+                    Text(item.name)
+                    // A long name truncates before the ID does.
+                    Text("\(item.id)")
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                }
+            }
             .toggleStyle(.checkbox)
             .lineLimit(1)
         }
