@@ -712,7 +712,7 @@ struct StudyModeView: View {
             let allQueries = buckets.blueQueries + buckets.redQueries + buckets.greenQueries
             if let previousID = currentQuery?.id,
                let refreshed = allQueries.first(where: { $0.id == previousID }) {
-                currentQuery = refreshed
+                currentQuery = try appDatabase.resolvingMapGeometry(for: refreshed)
                 projectedIntervalsByRating = makeProjectedIntervals(for: refreshed)
                 if refreshed.kind == .pointMap || refreshed.kind == .boundaryMap {
                     renderedQuestionHTML = ""
@@ -772,7 +772,8 @@ struct StudyModeView: View {
         }
 
         do {
-            currentQuery = nextQuery
+            // Pool map queries carry no geometry; fill it for this one only.
+            currentQuery = try appDatabase.resolvingMapGeometry(for: nextQuery)
             projectedIntervalsByRating = makeProjectedIntervals(for: nextQuery)
             if nextQuery.kind == .pointMap || nextQuery.kind == .boundaryMap {
                 renderedQuestionHTML = ""

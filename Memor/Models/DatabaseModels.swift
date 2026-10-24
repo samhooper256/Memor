@@ -397,6 +397,10 @@ struct PointMapStudyPayload: Hashable {
     let defaultZoom: Double
     let showAllPointsInQuestion: Bool
     var showHighlight: Bool = true
+    // Overlay boundaries. Study pools carry this EMPTY (parsing every due
+    // instance's geometry up front was the session-start stall);
+    // `AppDatabase.resolvingMapGeometry` fills it for the query about to be
+    // shown. Previews fill it eagerly.
     var boundaries: [BoundaryGeometry] = []
     var isReverse: Bool = false
     // The answer point's hint, shown before reveal on Forward queries (default blank).
@@ -410,7 +414,10 @@ struct BoundaryMapStudyPayload: Hashable {
     let boundaryID: Int64
     let boundaryName: String
     let instanceTitle: String
-    let geometries: [BoundaryGeometry]
+    // Every attached boundary's geometry. Study pools carry this EMPTY;
+    // `AppDatabase.resolvingMapGeometry` fills it for the query about to be
+    // shown (see PointMapStudyPayload.boundaries). Previews fill it eagerly.
+    var geometries: [BoundaryGeometry]
     /// Boundaries with at least one enabled query (forward or reverse). Only
     /// these are clickable candidates during a reverse question — query-less
     /// boundaries behave like empty map (no hover tint, clicks pan).
@@ -590,6 +597,24 @@ struct StudyQuery: Identifiable, Hashable {
             personOfficeID: personOfficeID,
             priority: priority
         )
+    }
+
+    /// Copy with the PointMap payload's overlay boundaries filled in (Study
+    /// pools carry them empty — see `AppDatabase.resolvingMapGeometry`).
+    /// Every other field is carried over; a query without that payload is
+    /// returned unchanged.
+    func withPointMapBoundaries(_ boundaries: [BoundaryGeometry]) -> StudyQuery {
+        var copy = self
+        copy.pointMapPayload?.boundaries = boundaries
+        return copy
+    }
+
+    /// Copy with the BoundaryMap payload's attached geometries filled in
+    /// (the BoundaryMap counterpart of `withPointMapBoundaries`).
+    func withBoundaryMapGeometries(_ geometries: [BoundaryGeometry]) -> StudyQuery {
+        var copy = self
+        copy.boundaryMapPayload?.geometries = geometries
+        return copy
     }
 }
 

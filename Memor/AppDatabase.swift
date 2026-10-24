@@ -2159,6 +2159,9 @@ struct AppDatabase {
         }
     }
 
+    /// Loads a Study session's blue/red/green pools. Map queries come back
+    /// WITHOUT geometry (payload `boundaries`/`geometries` empty) — call
+    /// `resolvingMapGeometry(for:)` on the query about to be shown.
     func fetchStudyQueryBuckets(forStackSearch stackSearch: String) throws -> StudyQueryBuckets {
         let parsedQuery = try parseQuerySearchQuery(stackSearch)
         let startOfTomorrowTimestamp = TimeZoneSettings.shared.startOfTomorrowTimestamp()
@@ -2221,17 +2224,20 @@ struct AppDatabase {
                 additionalArguments: [startOfTomorrowTimestamp]
             )
 
+            var mapLoadCache = MapStudyLoadCache()
             blueQueries += try fetchPointMapStudyQueries(
                 db: db,
                 parsedQuery: parsedQuery,
                 whereSQL: "pp.interval = 0",
-                additionalArguments: StatementArguments()
+                additionalArguments: StatementArguments(),
+                loadCache: &mapLoadCache
             )
             redQueries += try fetchPointMapStudyQueries(
                 db: db,
                 parsedQuery: parsedQuery,
                 whereSQL: "pp.interval != 0 AND pp.interval <= \(QUERY_STARTER_DELAY_GOOD)",
-                additionalArguments: StatementArguments()
+                additionalArguments: StatementArguments(),
+                loadCache: &mapLoadCache
             )
             greenQueries += try fetchPointMapStudyQueries(
                 db: db,
@@ -2240,20 +2246,23 @@ struct AppDatabase {
                     pp.interval > \(QUERY_STARTER_DELAY_GOOD)
                     AND pp.last_answered_timestamp + pp.interval < ?
                     """,
-                additionalArguments: [startOfTomorrowTimestamp]
+                additionalArguments: [startOfTomorrowTimestamp],
+                loadCache: &mapLoadCache
             )
 
             blueQueries += try fetchBoundaryMapStudyQueries(
                 db: db,
                 parsedQuery: parsedQuery,
                 whereSQL: "bq.interval = 0",
-                additionalArguments: StatementArguments()
+                additionalArguments: StatementArguments(),
+                loadCache: &mapLoadCache
             )
             redQueries += try fetchBoundaryMapStudyQueries(
                 db: db,
                 parsedQuery: parsedQuery,
                 whereSQL: "bq.interval != 0 AND bq.interval <= \(QUERY_STARTER_DELAY_GOOD)",
-                additionalArguments: StatementArguments()
+                additionalArguments: StatementArguments(),
+                loadCache: &mapLoadCache
             )
             greenQueries += try fetchBoundaryMapStudyQueries(
                 db: db,
@@ -2262,7 +2271,8 @@ struct AppDatabase {
                     bq.interval > \(QUERY_STARTER_DELAY_GOOD)
                     AND bq.last_answered_timestamp + bq.interval < ?
                     """,
-                additionalArguments: [startOfTomorrowTimestamp]
+                additionalArguments: [startOfTomorrowTimestamp],
+                loadCache: &mapLoadCache
             )
 
             return StudyQueryBuckets(
@@ -2270,6 +2280,29 @@ struct AppDatabase {
                 redQueries: redQueries,
                 greenQueries: greenQueries
             )
+        }
+    }
+
+    /// Fills a pool map query's geometry (overlays for PointMap, attachments
+    /// for BoundaryMap) from the per-launch parsed-geometry cache, so the
+    /// parse — half a second for a BoundaryMap instance attaching dozens of
+    /// countries — is paid when that instance is first shown, once per launch,
+    /// instead of for every due instance at session start. Standard queries
+    /// pass through unchanged.
+    func resolvingMapGeometry(for query: StudyQuery) throws -> StudyQuery {
+        switch query.kind {
+        case .standard:
+            return query
+        case .pointMap:
+            let boundaries = try dbQueue.read { db in
+                try Self.fetchBoundaryGeometries(db: db, instanceID: query.instanceID)
+            }
+            return query.withPointMapBoundaries(boundaries)
+        case .boundaryMap:
+            let geometries = try dbQueue.read { db in
+                try Self.fetchBoundaryMapAttachedGeometries(db: db, instanceID: query.instanceID)
+            }
+            return query.withBoundaryMapGeometries(geometries)
         }
     }
 
@@ -5669,11 +5702,23 @@ struct AppDatabase {
         )
     }
 
+    // One Study load's per-instance lookups, shared by the three bucket calls
+    // of fetchStudyQueryBuckets so each is done once per load, not per bucket.
+    private struct MapStudyLoadCache {
+        var pointsByInstanceID: [Int64: [PointMapPoint]]?
+        var queryableIDsByInstanceID: [Int64: Set<Int64>] = [:]
+    }
+
+    // Overlay geometry is NOT loaded here: pool payloads carry `boundaries`
+    // empty and resolvingMapGeometry fills it for the query being shown
+    // (parsing every due instance's overlays up front was the session-start
+    // stall on a large stack).
     private func fetchPointMapStudyQueries(
         db: Database,
         parsedQuery: QuerySearchQuery,
         whereSQL: String,
-        additionalArguments: StatementArguments
+        additionalArguments: StatementArguments,
+        loadCache: inout MapStudyLoadCache
     ) throws -> [StudyQuery] {
         let rows = try fetchPointMapStudyRows(
             db: db,
@@ -5682,43 +5727,37 @@ struct AppDatabase {
             additionalArguments: additionalArguments
         )
 
-        // Group points per instance to build payloads
-        var pointsByInstanceID: [Int64: [PointMapPoint]] = [:]
-        let allPointRows = try Row.fetchAll(
-            db,
-            sql: """
-                SELECT id, instance_id, name, hint, latitude, longitude
-                FROM pointmap_point
-                WHERE instance_id IN (
-                    SELECT DISTINCT instance_id FROM pointmap_point
-                )
-                ORDER BY instance_id, id
-                """
-        )
-        for row in allPointRows {
-            let instanceID = row["instance_id"] as Int64? ?? 0
-            let point = PointMapPoint(
-                id: row["id"] as Int64? ?? 0,
-                instanceID: instanceID,
-                name: row["name"] as String? ?? "",
-                latitude: row["latitude"] as Double? ?? 0,
-                longitude: row["longitude"] as Double? ?? 0,
-                hint: row["hint"] as String? ?? ""
+        if loadCache.pointsByInstanceID == nil {
+            // Group points per instance to build payloads
+            var pointsByInstanceID: [Int64: [PointMapPoint]] = [:]
+            let allPointRows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT id, instance_id, name, hint, latitude, longitude
+                    FROM pointmap_point
+                    WHERE instance_id IN (
+                        SELECT DISTINCT instance_id FROM pointmap_point
+                    )
+                    ORDER BY instance_id, id
+                    """
             )
-            pointsByInstanceID[instanceID, default: []].append(point)
-        }
-
-        // Cache boundary geometries per instance so the JSON decoding cost
-        // is paid once per unique instance instead of once per query row.
-        var boundariesByInstanceID: [Int64: [BoundaryGeometry]] = [:]
-        return try rows.map { row in
-            let boundaries: [BoundaryGeometry]
-            if let cached = boundariesByInstanceID[row.instanceID] {
-                boundaries = cached
-            } else {
-                boundaries = try Self.fetchBoundaryGeometries(db: db, instanceID: row.instanceID)
-                boundariesByInstanceID[row.instanceID] = boundaries
+            for row in allPointRows {
+                let instanceID = row["instance_id"] as Int64? ?? 0
+                let point = PointMapPoint(
+                    id: row["id"] as Int64? ?? 0,
+                    instanceID: instanceID,
+                    name: row["name"] as String? ?? "",
+                    latitude: row["latitude"] as Double? ?? 0,
+                    longitude: row["longitude"] as Double? ?? 0,
+                    hint: row["hint"] as String? ?? ""
+                )
+                pointsByInstanceID[instanceID, default: []].append(point)
             }
+            loadCache.pointsByInstanceID = pointsByInstanceID
+        }
+        let pointsByInstanceID = loadCache.pointsByInstanceID ?? [:]
+
+        return rows.map { row in
             let payload = PointMapStudyPayload(
                 pointID: row.pointID,
                 pointName: row.pointName,
@@ -5728,7 +5767,7 @@ struct AppDatabase {
                 defaultCenterLng: row.defaultCenterLng,
                 defaultZoom: row.defaultZoom,
                 showAllPointsInQuestion: row.showAllPointsInQuestion,
-                boundaries: boundaries,
+                boundaries: [],
                 isReverse: row.isReverse,
                 hint: pointsByInstanceID[row.instanceID]?.first { $0.id == row.pointID }?.hint ?? "",
                 pointSize: row.pointSize
@@ -5786,7 +5825,7 @@ struct AppDatabase {
         let rows = try Row.fetchAll(
             db,
             sql: """
-                SELECT b.id AS id, b.name AS name, b.geometry_json AS geometry_json, b.color AS color
+                SELECT b.id AS id, b.name AS name, b.color AS color
                 FROM boundarymap_attachment AS bq
                 JOIN boundary AS b ON b.id = bq.boundary_id
                 WHERE bq.instance_id = ?
@@ -5794,16 +5833,7 @@ struct AppDatabase {
                 """,
             arguments: [instanceID]
         )
-        return rows.compactMap { row in
-            guard let data = row["geometry_json"] as Data? else { return nil }
-            guard let parsed = AppDatabase.parseMultiPolygonJSON(data: data) else { return nil }
-            return BoundaryGeometry(
-                id: row["id"] as Int64? ?? 0,
-                name: row["name"] as String? ?? "",
-                geometry: parsed,
-                color: BoundaryColor(rawValue: row["color"] as String? ?? "") ?? .red
-            )
-        }
+        return try boundaryGeometries(db: db, rows: rows)
     }
 
     // Boundaries on the instance with at least one enabled query direction (a
@@ -6151,11 +6181,15 @@ struct AppDatabase {
         )
     }
 
+    // Attached geometry is NOT loaded here: pool payloads carry `geometries`
+    // empty and resolvingMapGeometry fills it for the query being shown (see
+    // fetchPointMapStudyQueries).
     private func fetchBoundaryMapStudyQueries(
         db: Database,
         parsedQuery: QuerySearchQuery,
         whereSQL: String,
-        additionalArguments: StatementArguments
+        additionalArguments: StatementArguments,
+        loadCache: inout MapStudyLoadCache
     ) throws -> [StudyQuery] {
         let rows = try fetchBoundaryMapStudyRows(
             db: db,
@@ -6164,31 +6198,21 @@ struct AppDatabase {
             additionalArguments: additionalArguments
         )
 
-        // Cache attached geometries + queryable ids per instance — cost paid
-        // once per unique instance instead of once per query row.
-        var geometriesByInstanceID: [Int64: [BoundaryGeometry]] = [:]
-        var queryableIDsByInstanceID: [Int64: Set<Int64>] = [:]
+        // Queryable ids are looked up once per instance per load.
         return try rows.map { row in
-            let geometries: [BoundaryGeometry]
-            if let cached = geometriesByInstanceID[row.instanceID] {
-                geometries = cached
-            } else {
-                geometries = try Self.fetchBoundaryMapAttachedGeometries(db: db, instanceID: row.instanceID)
-                geometriesByInstanceID[row.instanceID] = geometries
-            }
             let queryableIDs: Set<Int64>
-            if let cached = queryableIDsByInstanceID[row.instanceID] {
+            if let cached = loadCache.queryableIDsByInstanceID[row.instanceID] {
                 queryableIDs = cached
             } else {
                 queryableIDs = try Self.fetchBoundaryMapQueryableBoundaryIDs(db: db, instanceID: row.instanceID)
-                queryableIDsByInstanceID[row.instanceID] = queryableIDs
+                loadCache.queryableIDsByInstanceID[row.instanceID] = queryableIDs
             }
             let payload = BoundaryMapStudyPayload(
                 attachmentID: row.attachmentID,
                 boundaryID: row.boundaryID,
                 boundaryName: row.boundaryName,
                 instanceTitle: row.title,
-                geometries: geometries,
+                geometries: [],
                 queryableBoundaryIDs: queryableIDs,
                 defaultCenterLat: row.defaultCenterLat,
                 defaultCenterLng: row.defaultCenterLng,

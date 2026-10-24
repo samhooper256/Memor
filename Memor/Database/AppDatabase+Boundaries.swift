@@ -260,12 +260,7 @@ extension AppDatabase {
 
     func fetchBoundaryGeometry(boundaryID: Int64) throws -> ParsedMultiPolygon? {
         try dbQueue.read { db in
-            guard let data = try Data.fetchOne(
-                db,
-                sql: "SELECT geometry_json FROM boundary WHERE id = ?",
-                arguments: [boundaryID]
-            ) else { return nil }
-            return Self.parseMultiPolygonJSON(data: data)
+            try Self.cachedGeometries(db: db, boundaryIDs: [boundaryID])[boundaryID]
         }
     }
 
@@ -279,7 +274,7 @@ extension AppDatabase {
         let rows = try Row.fetchAll(
             db,
             sql: """
-                SELECT b.id AS id, b.name AS name, b.geometry_json AS geometry_json, b.color AS color
+                SELECT b.id AS id, b.name AS name, b.color AS color
                 FROM pointmap_boundary AS pb
                 JOIN boundary AS b ON b.id = pb.boundary_id
                 WHERE pb.instance_id = ?
@@ -287,11 +282,18 @@ extension AppDatabase {
                 """,
             arguments: [instanceID]
         )
+        return try boundaryGeometries(db: db, rows: rows)
+    }
+
+    /// Builds BoundaryGeometry values for `id`/`name`/`color` rows, in row
+    /// order, with geometry from the parsed-geometry cache. Rows whose
+    /// geometry fails to parse are dropped.
+    static func boundaryGeometries(db: Database, rows: [Row]) throws -> [BoundaryGeometry] {
+        let geometries = try cachedGeometries(db: db, boundaryIDs: rows.compactMap { $0["id"] as Int64? })
         return rows.compactMap { row in
-            guard let data = row["geometry_json"] as Data? else { return nil }
-            guard let parsed = parseMultiPolygonJSON(data: data) else { return nil }
+            guard let id = row["id"] as Int64?, let parsed = geometries[id] else { return nil }
             return BoundaryGeometry(
-                id: row["id"] as Int64? ?? 0,
+                id: id,
                 name: row["name"] as String? ?? "",
                 geometry: parsed,
                 color: BoundaryColor(rawValue: row["color"] as String? ?? "") ?? .red
@@ -366,6 +368,74 @@ extension AppDatabase {
         )
     }
 
+    // MARK: - Parsed geometry cache
+
+    /// Parsed boundary geometry for the app's lifetime, keyed by boundary id.
+    /// Parsing is the expensive part of loading a boundary (JSONSerialization
+    /// over up to megabytes of coordinates for one country), and
+    /// `geometry_json` never changes after upload, so each parse is paid once
+    /// per launch; a hit also skips reading the blob from SQLite. Names and
+    /// colors are editable and are NOT cached — callers read them from the
+    /// row every time.
+    ///
+    /// Invalidation: an entry only goes stale when its boundary is deleted —
+    /// and a deleted INTEGER PRIMARY KEY can be reused by a later insert, so
+    /// BOTH delete paths (`deleteBoundary`, `deleteBoundarySet`) clear the
+    /// whole cache. Inserts need nothing (fresh ids).
+    final class BoundaryGeometryCache {
+        private var geometryByBoundaryID: [Int64: ParsedMultiPolygon] = [:]
+
+        func geometry(for boundaryID: Int64) -> ParsedMultiPolygon? {
+            geometryByBoundaryID[boundaryID]
+        }
+
+        func store(_ geometry: ParsedMultiPolygon, for boundaryID: Int64) {
+            geometryByBoundaryID[boundaryID] = geometry
+        }
+
+        func removeAll() {
+            geometryByBoundaryID.removeAll()
+        }
+    }
+
+    /// Static rather than a stored member so the static geometry fetchers
+    /// (which take a `db` and have no `self`) can reach it; there is exactly
+    /// one AppDatabase per process, so the distinction is moot.
+    static let boundaryGeometryCache = BoundaryGeometryCache()
+
+    /// Parsed geometry for `boundaryIDs` — the one seam every geometry read
+    /// goes through. Cache hits cost nothing; misses are read in one
+    /// statement, parsed, and cached. Ids whose JSON fails to parse (or that
+    /// no longer exist) are absent from the result.
+    static func cachedGeometries(db: Database, boundaryIDs: [Int64]) throws -> [Int64: ParsedMultiPolygon] {
+        var result: [Int64: ParsedMultiPolygon] = [:]
+        result.reserveCapacity(boundaryIDs.count)
+        var missingIDs: [Int64] = []
+        for boundaryID in boundaryIDs {
+            if let cached = boundaryGeometryCache.geometry(for: boundaryID) {
+                result[boundaryID] = cached
+            } else {
+                missingIDs.append(boundaryID)
+            }
+        }
+        guard !missingIDs.isEmpty else { return result }
+
+        let placeholders = repeatElement("?", count: missingIDs.count).joined(separator: ", ")
+        let rows = try Row.fetchAll(
+            db,
+            sql: "SELECT id, geometry_json FROM boundary WHERE id IN (\(placeholders))",
+            arguments: StatementArguments(missingIDs)
+        )
+        for row in rows {
+            guard let boundaryID = row["id"] as Int64?,
+                  let data = row["geometry_json"] as Data?,
+                  let parsed = parseMultiPolygonJSON(data: data) else { continue }
+            boundaryGeometryCache.store(parsed, for: boundaryID)
+            result[boundaryID] = parsed
+        }
+        return result
+    }
+
     static func parseMultiPolygonJSON(data: Data) -> ParsedMultiPolygon? {
         guard let root = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
               let coords = root["coordinates"] as? [[[[Double]]]] else { return nil }
@@ -424,6 +494,8 @@ extension AppDatabase {
                 throw BoundaryImportError(message: "Boundary not found.")
             }
         }
+        // The deleted id may be reused by a later insert — see BoundaryGeometryCache.
+        Self.boundaryGeometryCache.removeAll()
     }
 
     /// Appends already-parsed features to an existing set (built-in included)
@@ -583,5 +655,7 @@ extension AppDatabase {
                 arguments: [id]
             )
         }
+        // The cascade-deleted boundary ids may be reused — see BoundaryGeometryCache.
+        Self.boundaryGeometryCache.removeAll()
     }
 }
