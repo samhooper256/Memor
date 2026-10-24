@@ -267,7 +267,7 @@ struct CollectionChecklistRow: View {
                     Text(item.name)
                     // A long name truncates before the ID does.
                     Text("\(item.id)")
-                        .font(.system(.body, design: .monospaced))
+                        .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .fixedSize()
                 }
