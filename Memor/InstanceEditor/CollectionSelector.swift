@@ -257,9 +257,9 @@ struct CollectionChecklistRow: View {
                 isPinHovered = hovering
             }
 
-            // The name + ID live outside the Toggle's label: the checkbox style
-            // baseline-aligns its label, which sinks the smaller ID; here the
-            // row's HStack centers it. Clicking them still toggles.
+            // The name + ID sit beside a label-hidden checkbox (not in its
+            // label) so this HStack controls their alignment: the smaller ID
+            // shares the name's baseline. Clicking them still toggles.
             Toggle(
                 item.name,
                 isOn: Binding(
@@ -270,7 +270,7 @@ struct CollectionChecklistRow: View {
             .toggleStyle(.checkbox)
             .labelsHidden()
 
-            HStack(alignment: .center, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(item.name)
                     .lineLimit(1)
                 // A long name truncates before the ID does.
