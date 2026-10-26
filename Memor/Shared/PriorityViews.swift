@@ -12,12 +12,15 @@
 //  key.
 //
 
+import AppKit
 import SwiftUI
 
-/// "P3"-style label. Priority 1 (the default) renders muted; anything higher
-/// renders orange so raised priorities stand out. When `effectivePriority` is
-/// higher than `priority` (the instance's priority outranks the query's own),
-/// it is appended as "→ P5".
+/// "P3"-style label, colored by level. Priority 1 (the default) renders muted
+/// gray; P2–P10 sweep amber → orange → red → crimson → magenta → purple, with
+/// a slightly heavier capsule fill as priority rises, so each level looks
+/// different and higher reads hotter. When `effectivePriority` is higher than
+/// `priority` (the instance's priority outranks the query's own), it is
+/// appended as "→ P5" and the badge takes the effective level's color.
 struct PriorityBadge: View {
     let priority: Int
     var effectivePriority: Int? = nil
@@ -28,8 +31,36 @@ struct PriorityBadge: View {
         return effectivePriority
     }
 
+    /// 0 for P2 … 8 for P10 (P1 never reaches the ramp).
+    private static func rampStep(for priority: Int) -> Double {
+        Double(min(priority, QUERY_PRIORITY_MAX) - QUERY_PRIORITY_DEFAULT - 1)
+    }
+
     static func color(for priority: Int) -> Color {
-        priority > QUERY_PRIORITY_DEFAULT ? .orange : .secondary
+        guard priority > QUERY_PRIORITY_DEFAULT else { return .secondary }
+        // 40° (amber) at P2, 12.5° hotter per step, through red (0°) at P5–P6
+        // to 300° (purple) at P10 — neighbors differ a little, levels a few
+        // apart differ a lot.
+        var hueDegrees = 40 - rampStep(for: priority) * 12.5
+        if hueDegrees < 0 { hueDegrees += 360 }
+        let hue = hueDegrees / 360
+        // Light mode gets a darker, fully saturated variant so colored text
+        // stays legible on white; dark mode a brighter, softer one.
+        return Color(nsColor: NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            return NSColor(
+                hue: hue,
+                saturation: isDark ? 0.75 : 0.95,
+                brightness: isDark ? 1.0 : 0.78,
+                alpha: 1
+            )
+        })
+    }
+
+    /// Capsule tint: 15% at P1–P2 rising to ~31% at P10.
+    static func fillOpacity(for priority: Int) -> Double {
+        guard priority > QUERY_PRIORITY_DEFAULT else { return 0.15 }
+        return 0.15 + rampStep(for: priority) * 0.02
     }
 
     var body: some View {
@@ -48,7 +79,7 @@ struct PriorityBadge: View {
         .padding(.vertical, 1)
         .background(
             Capsule()
-                .fill(Self.color(for: shownPriority).opacity(0.15))
+                .fill(Self.color(for: shownPriority).opacity(Self.fillOpacity(for: shownPriority)))
         )
     }
 }
