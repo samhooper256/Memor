@@ -23,6 +23,7 @@ struct StacksPageView: View {
     @State private var errorMessage: String?
     @State private var stackPendingDeletion: Stack?
     @State private var selectedStack: Stack?
+    @State private var highlightedStackID: Int64?   // keyboard-selected row; nil only while there are no stacks
 
     private var lastRefreshedFormatter: DateFormatter {
         let formatter = DateFormatter()
@@ -54,6 +55,9 @@ struct StacksPageView: View {
         .task(id: selectedStack?.id) {
             guard selectedStack == nil else { return }
             await loadStacks()
+        }
+        .onChange(of: stacks.map(\.id)) { _, _ in
+            reconcileHighlight()
         }
         .onChange(of: navigationState.resetToHomeNonce) { _, _ in
             selectedStack = nil
@@ -94,6 +98,7 @@ struct StacksPageView: View {
     }
 
     private var stackListBody: some View {
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(spacing: 8) {
@@ -151,6 +156,7 @@ struct StacksPageView: View {
                                 stack: stack,
                                 queryCounts: stacksPageState.queryCounts(for: stack.id),
                                 isRefreshing: stacksPageState.isRefreshing,
+                                isHighlighted: stack.id == highlightedStackID,
                                 onOpen: {
                                     Task {
                                         await openStudyMode(for: stack)
@@ -174,6 +180,7 @@ struct StacksPageView: View {
                                     Task { await togglePin(for: stack) }
                                 }
                             )
+                            .id(stack.id)
                         }
                     }
                 }
@@ -181,6 +188,50 @@ struct StacksPageView: View {
             .padding(24)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
+        .onChange(of: highlightedStackID) { _, id in
+            guard let id else { return }
+            withAnimation { proxy.scrollTo(id, anchor: .center) }
+        }
+        .background {
+            ListKeyNavigationHandler(
+                isEnabled: stackPendingDeletion == nil,
+                onMoveUp: { moveHighlight(by: -1) },
+                onMoveDown: { moveHighlight(by: 1) },
+                onOpen: {
+                    guard let stack = highlightedStack else { return }
+                    Task { await openStudyMode(for: stack) }
+                }
+            )
+        }
+        }
+    }
+
+    // The keyboard-selected ("highlighted") stack on the list page.
+    private var highlightedStack: Stack? {
+        stacks.first { $0.id == highlightedStackID }
+    }
+
+    // Moves the keyboard selection up (-1) or down (+1), wrapping around at both ends.
+    private func moveHighlight(by delta: Int) {
+        guard !stacks.isEmpty else { return }
+        guard let current = stacks.firstIndex(where: { $0.id == highlightedStackID }) else {
+            highlightedStackID = stacks.first?.id
+            return
+        }
+        let next = ((current + delta) % stacks.count + stacks.count) % stacks.count
+        highlightedStackID = stacks[next].id
+    }
+
+    /// A highlighted row always exists while there are stacks: the current one
+    /// survives a reload when its stack does; otherwise the stack last opened
+    /// in Study (this page is recreated when Study ends), else the first.
+    private func reconcileHighlight() {
+        if let id = highlightedStackID, stacks.contains(where: { $0.id == id }) { return }
+        if let id = stacksPageState.lastStudiedStackID, stacks.contains(where: { $0.id == id }) {
+            highlightedStackID = id
+            return
+        }
+        highlightedStackID = stacks.first?.id
     }
 
     @MainActor
@@ -219,6 +270,7 @@ struct StacksPageView: View {
         do {
             try await stacksPageState.refreshQueryCounts(for: stack, appDatabase: appDatabase)
             errorMessage = nil
+            stacksPageState.lastStudiedStackID = stack.id
             onSelectStack(stack)
         } catch {
             errorMessage = "Failed to refresh this stack."
@@ -242,6 +294,7 @@ private struct StackRowView: View {
     let stack: Stack
     let queryCounts: StackQueryCounts?
     let isRefreshing: Bool
+    let isHighlighted: Bool
     let onOpen: () -> Void
     let onEdit: () -> Void
     let onStats: () -> Void
@@ -386,7 +439,10 @@ private struct StackRowView: View {
         .pointerStyle(isHovered ? .link : .default)
         .overlay {
             RoundedRectangle(cornerRadius: 14)
-                .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
+                .stroke(
+                    isHighlighted ? Color.blue : Color.secondary.opacity(0.15),
+                    lineWidth: isHighlighted ? 2 : 1
+                )
         }
         .onTapGesture {
             isHovered = false

@@ -32,7 +32,7 @@ Memor/
     DatabaseModels.swift            All plain-data structs/enums returned by AppDatabase
     PersonModels.swift              Person types: PersonRef (instance-or-bare-name), slot drafts, PersonQueryKind, PersonSaveError conflicts, the save change set
   Pages/
-    StacksPageView.swift            Stacks sidebar + detail pages, stack cards
+    StacksPageView.swift            Stacks list + detail pages, stack cards; the list is keyboard-navigable via `ListKeyNavigationHandler` (one row always highlighted with a blue border — the first by default, kept across reloads while its stack survives; ↑/↓ wrap; Return starts Study on it)
     InstancesPageView.swift         Instances sidebar + type-instances table + toast + key commands
     CollectionsPageView.swift       Collections list + detail page; each list row's right-click menu has "Rename…" (the shared RenamePopover, row-scoped via scopedPopoverItem; same name rules as Add Collection)
     GraphPageView.swift             Graph tab + WKWebView wrapper
@@ -199,7 +199,7 @@ The shortcut system lives in `Memor/Shortcuts/`. **Customizable** shortcuts are 
 These are intentionally NOT in `ShortcutAction`:
 - Escape (close secondary windows, cancel study, exit popovers)
 - Tab / Shift-Tab (instance-editor field navigation)
-- Arrow keys (⌘← for Query Preview back history; bare ←/→ reserved for instance link shortcuts — see below; up/down in popups)
+- Arrow keys (⌘← for Query Preview back history; bare ←/→ reserved for instance link shortcuts — see below; up/down in popups; bare ↑/↓ + Return on the Types/Collections/Stacks list pages move/open the highlighted row via `ListKeyNavigationHandler` — Stacks wraps and Return starts Study)
 - Delete key (remove row from instance table / collection table)
 - Shift (press to toggle the collection overlay in Study mode; on BoundaryMap queries it instead toggles the gold "boundary finder" — a gold frame around the current boundary, or a gold edge arrow pointing to it when off-screen — on forward queries any time, on reverse queries only after the answer is revealed; Study ignores the key on an unrevealed reverse query so the sticky toggle can't flip invisibly)
 - `.defaultAction` on confirmation buttons (Return)

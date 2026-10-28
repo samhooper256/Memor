@@ -69,6 +69,9 @@ final class StacksPageState: ObservableObject {
     @Published private(set) var lastUpdatedTimestamp: Date?
     @Published private(set) var averageQueryInterval: Double?
     @Published private(set) var isRefreshing = false
+    /// The stack most recently opened in Study from the list, so the list —
+    /// recreated when Study ends — highlights it rather than the first stack.
+    var lastStudiedStackID: Int64?
 
     func refresh(appDatabase: AppDatabase) async throws {
         isRefreshing = true

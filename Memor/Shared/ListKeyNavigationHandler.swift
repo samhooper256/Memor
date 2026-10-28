@@ -2,8 +2,8 @@
 //  ListKeyNavigationHandler.swift
 //  Memor
 //
-//  Background NSEvent monitor for list pages (Types, Collections): bare ↑/↓
-//  move the keyboard-selected row and Return/Enter opens it. A window-scoped
+//  Background NSEvent monitor for list pages (Types, Collections, Stacks): bare
+//  ↑/↓ move the keyboard-selected row and Return/Enter opens it. A window-scoped
 //  local monitor fires before the event reaches the focused field editor, so
 //  these keys work even while the page's search box has focus — and consuming
 //  them (returning nil) leaves that focus untouched (the search box keeps its
