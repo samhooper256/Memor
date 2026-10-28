@@ -13,6 +13,7 @@ struct GraphPageView: View {
     let appDatabase: AppDatabase
 
     @State private var searchQuery = ""
+    @State private var searchFocusRequest: UUID?
     @State private var graphData: GraphData?
     @State private var errorMessage: String?
     @State private var isSearching = false
@@ -20,7 +21,7 @@ struct GraphPageView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                SearchQueryTextField("Search instances", text: $searchQuery, onSubmit: { runSearch() }, autocomplete: SearchAutocompleteProvider(appDatabase: appDatabase))
+                SearchQueryTextField("Search instances", text: $searchQuery, onSubmit: { runSearch() }, focusRequest: searchFocusRequest, autocomplete: SearchAutocompleteProvider(appDatabase: appDatabase))
                     .searchCodeEditorStyle()
                 Button("Search") {
                     runSearch()
@@ -55,6 +56,14 @@ struct GraphPageView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .task {
+            // Focus the search box on every visit. Deferred like the
+            // Collections page's: arriving from a tab whose own search field
+            // was focused, that field's teardown lands after this task starts
+            // and swallows an immediate focus set.
+            try? await Task.sleep(for: .milliseconds(50))
+            searchFocusRequest = UUID()
+        }
     }
 
     private func runSearch() {
