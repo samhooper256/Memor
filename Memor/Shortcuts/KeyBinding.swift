@@ -109,12 +109,33 @@ struct KeyBinding: Codable, Equatable, Hashable {
         }
 
         // Letters/digits/punctuation: compare charactersIgnoringModifiers.
+        // Punctuation is stored by name ("Slash") but arrives as its character.
         // Strip Shift when comparing so "⌘⇧A" matches "A" not "a".
+        let expected = Self.punctuationCharacter(for: key) ?? key
         var compareEvent = event.charactersIgnoringModifiers ?? ""
         if !requiredFlags.contains(.shift) {
             compareEvent = compareEvent.lowercased()
         }
-        return compareEvent == key.lowercased() || compareEvent == key
+        return compareEvent == expected.lowercased() || compareEvent == expected
+    }
+
+    /// The character a punctuation key name stands for (the inverse of
+    /// `fromEvent`'s naming); nil for letters, digits, and keyCode-matched keys.
+    static func punctuationCharacter(for named: String) -> String? {
+        switch named {
+        case "Comma": return ","
+        case "Period": return "."
+        case "Slash": return "/"
+        case "Backtick": return "`"
+        case "Minus": return "-"
+        case "Equal": return "="
+        case "LeftBracket": return "["
+        case "RightBracket": return "]"
+        case "Backslash": return "\\"
+        case "Semicolon": return ";"
+        case "Quote": return "'"
+        default: return nil
+        }
     }
 
     private static func nsModifierFlags(from mods: EventModifiers) -> NSEvent.ModifierFlags {
