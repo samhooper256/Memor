@@ -34,7 +34,7 @@ Memor/
   Pages/
     StacksPageView.swift            Stacks sidebar + detail pages, stack cards
     InstancesPageView.swift         Instances sidebar + type-instances table + toast + key commands
-    CollectionsPageView.swift       Collections sidebar + detail page
+    CollectionsPageView.swift       Collections list + detail page; each list row's right-click menu has "Rename…" (the shared RenamePopover, row-scoped via scopedPopoverItem; same name rules as Add Collection)
     GraphPageView.swift             Graph tab + WKWebView wrapper
     TypeDetailPageView.swift        Type detail: fields section, query-type editors (co-located with TypesPageView)
   Study/
@@ -70,7 +70,7 @@ Memor/
     FinderRowSelection.swift        Pure Finder/NSTableView-style click selection model (click selects one, ⌘-click toggles, shift-click spans anchor…row over the pre-anchor selection, `clear()` for empty-space clicks) for hand-built row lists that can't use List(selection:)
     PriorityViews.swift             Study-priority UI: `PriorityBadge` ("P3"; one color per level — P1 muted gray, P2–P10 a hue ramp amber→orange→red→crimson→magenta→purple with a heavier capsule tint as it rises, light/dark variants via a dynamic NSColor; "P1 → P5" when the instance raises it, colored by the effective level), `PriorityMenu` (click-to-change; a Menu, not a popover, so it also works in the borderless Add/Edit Point panel), `SetPrioritySubmenu` for context menus
     ToastView.swift                 ToastMessage, ToastStyle, ToastView (used by InstanceEditor)
-    RenamePopover.swift             App-standard "Rename X" popover (name field, in-place error, Cancel/Rename); present via a row-scoped `.popover(item:)` — used by Manage Boundaries and the BoundaryMap editor list. Each open popover enrolls in `RenamePopoverSubmitRegistry` so a window-level ⌘Return handler can commit it first (the instance editor's: rename saved, then the instance saved + window closed; a rejected name stays up and the submit waits) — the window's key monitor sees the chord before the popover's field editor, as with Escape
+    RenamePopover.swift             App-standard "Rename X" popover (name field, in-place error, Cancel/Rename); present via a row-scoped `.popover(item: scopedPopoverItem($target, to: row))` (the generic helper lives here) — used by Manage Boundaries, the BoundaryMap editor list, and the Collections list rows. Each open popover enrolls in `RenamePopoverSubmitRegistry` so a window-level ⌘Return handler can commit it first (the instance editor's: rename saved, then the instance saved + window closed; a rejected name stays up and the submit waits) — the window's key monitor sees the chord before the popover's field editor, as with Escape
     WindowKeyCommandHandler.swift   Background NSViewRepresentable wiring ⌘Return/⌘S/⌘B/⌘I/⌘O/⌘J/⌘L/⌘T/Esc
     PlainTextEditor.swift           NSTextView wrapper for plain-text fields
     PlainCodeTextView.swift         Code editor NSTextView + FocusedEditor + query-type editor split view

@@ -78,6 +78,7 @@ struct CollectionsPageView: View {
     @State private var isAddCollectionSheetPresented = false
     @State private var newCollectionName = ""
     @State private var collectionPendingDeletion: Collection?
+    @State private var collectionPendingRename: Collection?
     @AppStorage(CollectionSortOrder.userDefaultsKey) private var sortOrder: CollectionSortOrder = .nameAscending
 
     private var titleText: String {
@@ -173,6 +174,21 @@ struct CollectionsPageView: View {
                                             collectionPendingDeletion = collection
                                         }
                                     )
+                                    .contextMenu {
+                                        Button("Rename…") {
+                                            collectionPendingRename = collection
+                                        }
+                                    }
+                                    // Row-scoped so only this row presents the popover.
+                                    .popover(item: scopedPopoverItem($collectionPendingRename, to: collection), arrowEdge: .bottom) { target in
+                                        RenamePopover(
+                                            title: "Rename Collection",
+                                            placeholder: "Collection Name",
+                                            initialName: target.name,
+                                            onCommit: { renameCollection(target, to: $0) },
+                                            onCancel: { collectionPendingRename = nil }
+                                        )
+                                    }
                                     .id(collection.id)
                                 }
                             }
@@ -192,7 +208,7 @@ struct CollectionsPageView: View {
                 }
                 .background {
                     ListKeyNavigationHandler(
-                        isEnabled: !isAddCollectionSheetPresented && collectionPendingDeletion == nil,
+                        isEnabled: !isAddCollectionSheetPresented && collectionPendingDeletion == nil && collectionPendingRename == nil,
                         onMoveUp: { moveHighlight(by: -1) },
                         onMoveDown: { moveHighlight(by: 1) },
                         onOpen: {
@@ -350,6 +366,25 @@ struct CollectionsPageView: View {
         } catch {
             errorMessage = "Failed to delete collection."
         }
+    }
+
+    /// The row's RenamePopover commit: an error to show in place, or nil once
+    /// the rename is saved (the popover is then dismissed). Same rules as
+    /// creating a collection: non-empty, not starting with a digit.
+    private func renameCollection(_ collection: Collection, to newName: String) -> String? {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "A collection name cannot be empty." }
+        guard !AppDatabase.nameStartsWithDigit(trimmed) else { return "A collection name cannot start with a digit." }
+        if trimmed != collection.name {
+            do {
+                try appDatabase.renameCollection(id: collection.id, to: trimmed)
+                collections = try appDatabase.fetchCollections()
+            } catch {
+                return "Failed to rename collection."
+            }
+        }
+        collectionPendingRename = nil
+        return nil
     }
 }
 
