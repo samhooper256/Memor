@@ -4,8 +4,8 @@
 //
 //  The app-standard "Rename X" popover: headline, name field (Return commits),
 //  an in-place error line, Cancel/Rename buttons. Present it with
-//  `.popover(item:)` scoped to ONE row (see ManageBoundariesWindowView's
-//  scopedRenameItem) so a list-wide target doesn't open it from every row.
+//  `.popover(item:)` scoped to ONE row via `scopedPopoverItem` (below) so a
+//  list-wide target doesn't open it from every row.
 //
 
 import SwiftUI
@@ -123,4 +123,22 @@ struct RenamePopover: View {
         errorMessage = onCommit(text)
         return errorMessage == nil
     }
+}
+
+/// Item-based presentation scoped to ONE row. A popover modifier attached to
+/// every row of a list with one shared `$target` would present from all of
+/// them at once; each row instead sees the target only when it is that row's
+/// own, and a dismissal only clears its own.
+func scopedPopoverItem<Item: Identifiable>(
+    _ target: Binding<Item?>,
+    to rowItem: Item
+) -> Binding<Item?> {
+    Binding(
+        get: { target.wrappedValue?.id == rowItem.id ? target.wrappedValue : nil },
+        set: { newValue in
+            if newValue == nil, target.wrappedValue?.id == rowItem.id {
+                target.wrappedValue = nil
+            }
+        }
+    )
 }

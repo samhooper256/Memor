@@ -111,24 +111,6 @@ private enum BoundaryDeleteTarget {
     }
 }
 
-/// Item-based presentation, but scoped to ONE row: the popover modifier is
-/// attached to every row, so a shared `$renameTarget` would present the
-/// popover from all of them at once. Each row sees the target only when it is
-/// that row's own.
-private func scopedRenameItem(
-    _ renameTarget: Binding<BoundaryRenameTarget?>,
-    to rowTarget: BoundaryRenameTarget
-) -> Binding<BoundaryRenameTarget?> {
-    Binding(
-        get: { renameTarget.wrappedValue?.id == rowTarget.id ? renameTarget.wrappedValue : nil },
-        set: { newValue in
-            if newValue == nil, renameTarget.wrappedValue?.id == rowTarget.id {
-                renameTarget.wrappedValue = nil
-            }
-        }
-    )
-}
-
 /// One set card as the list shows it. While a search is active this is the
 /// FILTERED view of the set: a set with matching boundaries lists only those
 /// (and opens itself so the matches are visible); a set matched by its own
@@ -588,7 +570,7 @@ private struct BoundarySetCard: View {
                 Button("Delete…", role: .destructive, action: onDelete)
             }
         }
-        .popover(item: scopedRenameItem(renameTarget, to: .set(set)), arrowEdge: .bottom) { target in
+        .popover(item: scopedPopoverItem(renameTarget, to: .set(set)), arrowEdge: .bottom) { target in
             BoundaryRenamePopover(
                 target: target,
                 onCommit: { onCommitRename(target, $0) },
@@ -680,7 +662,7 @@ private struct BoundaryRow: View {
             }
             Button("Delete…", role: .destructive, action: onDelete)
         }
-        .popover(item: scopedRenameItem(renameTarget, to: .boundary(boundary)), arrowEdge: .bottom) { target in
+        .popover(item: scopedPopoverItem(renameTarget, to: .boundary(boundary)), arrowEdge: .bottom) { target in
             BoundaryRenamePopover(
                 target: target,
                 onCommit: { onCommitRename(target, $0) },
