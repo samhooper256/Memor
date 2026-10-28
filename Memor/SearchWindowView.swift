@@ -462,14 +462,20 @@ struct SearchWindowView: View {
                 HelpWindowButton(windowID: helpWindowID, tooltip: "Show search syntax help")
             }
 
-            Toggle("Case sensitive", isOn: $isCaseSensitive)
-                .toggleStyle(.checkbox)
-                .onChange(of: isCaseSensitive) { _, _ in
-                    // Re-run what is in the box now, skipping any pending debounce.
-                    debounceTask?.cancel()
-                    debouncedSearchQuery = searchQuery
-                    Task { await runSearch(for: searchQuery) }
+            HStack(spacing: 12) {
+                Toggle("Case sensitive", isOn: $isCaseSensitive)
+                    .toggleStyle(.checkbox)
+                    .onChange(of: isCaseSensitive) { _, _ in
+                        rerunCurrentSearch()
+                    }
+
+                Button {
+                    rerunCurrentSearch()
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
                 }
+                .help("Run the search again")
+            }
 
             if let collection = collectionInAddMode {
                 Text("Adding instances to \(collection.name)")
@@ -862,6 +868,14 @@ struct SearchWindowView: View {
             guard !Task.isCancelled else { return }
             await MainActor.run { debouncedSearchQuery = query }
         }
+    }
+
+    /// Re-runs what is in the box right now, skipping any pending debounce
+    /// (the Case sensitive toggle and the Refresh button).
+    private func rerunCurrentSearch() {
+        debounceTask?.cancel()
+        debouncedSearchQuery = searchQuery
+        Task { await runSearch(for: searchQuery) }
     }
 
     @MainActor
