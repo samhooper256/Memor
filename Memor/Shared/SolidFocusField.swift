@@ -4,7 +4,9 @@
 //
 //  The app-standard flat text-field chrome: solid controlBackgroundColor fill,
 //  rounded corners, and a 1pt hairline stroke that turns SOLID blue when the
-//  field is focused. No focus ring, no glow, no animation. Replaces
+//  field is focused (a caller can opt out of the blue with
+//  `showsFocusStroke: false` — the Collections/Types page search boxes do).
+//  No focus ring, no glow, no animation. Replaces
 //  .textFieldStyle(.roundedBorder) everywhere a field could show the native
 //  macOS focus glow.
 //
@@ -16,8 +18,8 @@ extension View {
     /// effect disabled, internal focus tracking, flat chrome. Caller-owned
     /// `.focused(...)` bindings keep working — multiple focused bindings on
     /// one field all update together.
-    func solidFocusField(cornerRadius: CGFloat = 6) -> some View {
-        modifier(SolidFocusFieldModifier(cornerRadius: cornerRadius))
+    func solidFocusField(cornerRadius: CGFloat = 6, showsFocusStroke: Bool = true) -> some View {
+        modifier(SolidFocusFieldModifier(cornerRadius: cornerRadius, showsFocusStroke: showsFocusStroke))
     }
 
     /// Chrome-only variant for AppKit-backed fields (NSViewRepresentable)
@@ -42,6 +44,8 @@ extension View {
 
 private struct SolidFocusFieldModifier: ViewModifier {
     let cornerRadius: CGFloat
+    /// False keeps the hairline stroke even while focused.
+    let showsFocusStroke: Bool
     @FocusState private var isFocused: Bool
 
     func body(content: Content) -> some View {
@@ -49,6 +53,6 @@ private struct SolidFocusFieldModifier: ViewModifier {
             .textFieldStyle(.plain)
             .focusEffectDisabled()
             .focused($isFocused)
-            .solidFocusFieldChrome(isFocused: isFocused, cornerRadius: cornerRadius)
+            .solidFocusFieldChrome(isFocused: showsFocusStroke && isFocused, cornerRadius: cornerRadius)
     }
 }

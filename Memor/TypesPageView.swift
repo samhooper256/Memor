@@ -167,7 +167,7 @@ struct TypesPageView: View {
                     .buttonStyle(.bordered)
 
                     TextField("Search types (⌘F)", text: $searchText)
-                        .solidFocusField()
+                        .solidFocusField(showsFocusStroke: false)
                         .focused($isSearchFocused)
                         .frame(maxWidth: .infinity)
                 }

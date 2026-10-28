@@ -139,7 +139,7 @@ struct CollectionsPageView: View {
                             .buttonStyle(.borderedProminent)
 
                             TextField("Search collections (⌘F)", text: $searchText)
-                                .solidFocusField()
+                                .solidFocusField(showsFocusStroke: false)
                                 .focused($isSearchFocused)
                                 .frame(maxWidth: .infinity)
 
