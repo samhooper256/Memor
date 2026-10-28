@@ -6,10 +6,11 @@
 //  click-to-edit priority menu used by the instance editor, and the
 //  "Set Priority" submenu used by context menus.
 //
-//  The editor control is a SwiftUI Menu (an NSMenu under the hood), not a
-//  popover: menus track without taking key status, so the control also works
-//  inside the borderless Add/Edit Point panel, which closes when it resigns
-//  key.
+//  The editor control pops an NSMenu under a hosted SwiftUI badge (SwiftUI's
+//  Menu can't be opened programmatically, and the instance editor's Open
+//  Priority Menu shortcut needs to): a menu tracks without taking key status,
+//  so the control also works inside the borderless Add/Edit Point panel,
+//  which closes when it resigns key.
 //
 
 import AppKit
@@ -84,28 +85,132 @@ struct PriorityBadge: View {
     }
 }
 
-/// A PriorityBadge that opens a 1–10 menu when clicked.
+/// A PriorityBadge that opens a 1–10 menu when clicked — or when `openRequest`
+/// changes to a fresh value (the instance editor's Open Priority Menu
+/// shortcut, ⌘/ by default), so a priority can be set by keyboard alone: with
+/// the menu up, ↑/↓ move and Return picks. The menu is an NSMenu popped under
+/// the badge; SwiftUI's Menu can't be opened programmatically.
 struct PriorityMenu: View {
     @Binding var priority: Int
     var effectivePriority: Int? = nil
     var help: String = "Priority (1–10). Click to change."
+    /// Set to a new UUID to pop the menu open.
+    var openRequest: UUID? = nil
 
     var body: some View {
-        Menu {
-            PriorityMenuItems(currentPriority: priority) { priority = $0 }
-        } label: {
-            PriorityBadge(priority: priority, effectivePriority: effectivePriority)
-        }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help(effectiveHelp)
+        PriorityMenuControl(priority: $priority, effectivePriority: effectivePriority, openRequest: openRequest)
+            .fixedSize()
+            .help(effectiveHelp)
     }
 
     private var effectiveHelp: String {
         guard let effectivePriority, effectivePriority > priority else { return help }
         return help + " Studied at priority \(effectivePriority) because its instance's priority is higher."
+    }
+}
+
+private struct PriorityMenuControl: NSViewRepresentable {
+    @Binding var priority: Int
+    let effectivePriority: Int?
+    let openRequest: UUID?
+
+    final class Coordinator {
+        var lastOpenRequest: UUID?
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> PriorityMenuNSView {
+        let view = PriorityMenuNSView(badge: PriorityBadge(priority: priority, effectivePriority: effectivePriority))
+        view.currentPriority = priority
+        view.onSelect = { [binding = $priority] in binding.wrappedValue = $0 }
+        // A request already pending at creation is a remount's stale value, not a press.
+        context.coordinator.lastOpenRequest = openRequest
+        return view
+    }
+
+    func updateNSView(_ view: PriorityMenuNSView, context: Context) {
+        view.badge = PriorityBadge(priority: priority, effectivePriority: effectivePriority)
+        view.currentPriority = priority
+        view.onSelect = { [binding = $priority] in binding.wrappedValue = $0 }
+        if let openRequest, context.coordinator.lastOpenRequest != openRequest {
+            context.coordinator.lastOpenRequest = openRequest
+            // After this update pass — the menu tracks synchronously.
+            DispatchQueue.main.async { view.popUpMenu() }
+        }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: PriorityMenuNSView, context: Context) -> CGSize? {
+        nsView.fittingSize
+    }
+}
+
+/// The hosted badge that pops the priority NSMenu on click or on request.
+final class PriorityMenuNSView: NSView {
+    private let hostingView: NSHostingView<PriorityBadge>
+    var currentPriority = QUERY_PRIORITY_DEFAULT
+    var onSelect: ((Int) -> Void)?
+
+    var badge: PriorityBadge {
+        get { hostingView.rootView }
+        set {
+            hostingView.rootView = newValue
+            invalidateIntrinsicContentSize()
+        }
+    }
+
+    init(badge: PriorityBadge) {
+        hostingView = NSHostingView(rootView: badge)
+        super.init(frame: .zero)
+        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(hostingView)
+        NSLayoutConstraint.activate([
+            hostingView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            hostingView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            hostingView.topAnchor.constraint(equalTo: topAnchor),
+            hostingView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var intrinsicContentSize: NSSize {
+        hostingView.intrinsicContentSize
+    }
+
+    // Clicks are ours, not the hosted badge's.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        bounds.contains(convert(point, from: superview)) ? self : nil
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        popUpMenu()
+    }
+
+    func popUpMenu() {
+        guard window != nil else { return }
+        let menu = NSMenu()
+        for value in (QUERY_PRIORITY_MIN...QUERY_PRIORITY_MAX).reversed() {
+            let item = NSMenuItem(
+                title: PriorityMenuItems.title(for: value),
+                action: #selector(selectPriority(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.tag = value
+            item.state = value == currentPriority ? .on : .off
+            menu.addItem(item)
+        }
+        // Drop down from the badge's bottom-left corner, like a menu button.
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: 0), in: self)
+    }
+
+    @objc private func selectPriority(_ sender: NSMenuItem) {
+        onSelect?(sender.tag)
     }
 }
 

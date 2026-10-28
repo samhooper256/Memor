@@ -19,6 +19,7 @@ struct WindowKeyCommandHandler: NSViewRepresentable {
     var onCommandL: (() -> Void)? = nil
     var onCommandT: (() -> Void)? = nil
     var onFocusCollectionSearch: (() -> Void)? = nil
+    var onOpenPriorityMenu: (() -> Void)? = nil
     var shortcutSettings: ShortcutSettings? = nil
 
     func makeNSView(context: Context) -> KeyCommandHandlingView {
@@ -33,6 +34,7 @@ struct WindowKeyCommandHandler: NSViewRepresentable {
         view.onCommandL = onCommandL
         view.onCommandT = onCommandT
         view.onFocusCollectionSearch = onFocusCollectionSearch
+        view.onOpenPriorityMenu = onOpenPriorityMenu
         view.shortcutSettings = shortcutSettings
         return view
     }
@@ -48,6 +50,7 @@ struct WindowKeyCommandHandler: NSViewRepresentable {
         nsView.onCommandL = onCommandL
         nsView.onCommandT = onCommandT
         nsView.onFocusCollectionSearch = onFocusCollectionSearch
+        nsView.onOpenPriorityMenu = onOpenPriorityMenu
         nsView.shortcutSettings = shortcutSettings
     }
 
@@ -62,6 +65,7 @@ struct WindowKeyCommandHandler: NSViewRepresentable {
         var onCommandL: (() -> Void)?
         var onCommandT: (() -> Void)?
         var onFocusCollectionSearch: (() -> Void)?
+        var onOpenPriorityMenu: (() -> Void)?
         var shortcutSettings: ShortcutSettings?
 
         private var monitor: Any?
@@ -138,6 +142,11 @@ struct WindowKeyCommandHandler: NSViewRepresentable {
                     return nil
                 }
 
+                if self.onOpenPriorityMenu != nil, self.matchesOpenPriorityMenu(event) {
+                    self.onOpenPriorityMenu?()
+                    return nil
+                }
+
                 return event
             }
         }
@@ -211,6 +220,11 @@ struct WindowKeyCommandHandler: NSViewRepresentable {
         private func matchesFocusCollectionSearch(_ event: NSEvent) -> Bool {
             guard let settings = shortcutSettings else { return false }
             return settings.binding(for: .editorFocusCollectionSearch).matches(event)
+        }
+
+        private func matchesOpenPriorityMenu(_ event: NSEvent) -> Bool {
+            guard let settings = shortcutSettings else { return false }
+            return settings.binding(for: .editorOpenPriorityMenu).matches(event)
         }
     }
 }

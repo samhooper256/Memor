@@ -48,6 +48,7 @@ struct InstanceEditorWindowView: View {
     @State private var allCollectionItems: [CollectionChecklistItem] = []
     @State private var collectionSearchQuery = ""
     @State private var collectionsScrollNonce = UUID()
+    @State private var priorityMenuOpenRequest: UUID?   // bumped by the Open Priority Menu shortcut
     @State private var addScrollNonce = UUID()   // bumped after an add to reset field scroll
     @State private var highlightedCollectionID: Int64?   // C; nil = none
     // The Collections header's "+ Add" popover (styled like the Collection
@@ -188,6 +189,7 @@ struct InstanceEditorWindowView: View {
                 collectionsScrollNonce = UUID()
                 focusController.focusCollectionSearch(placingCaretAtEnd: true)
             },
+            onOpenPriorityMenu: { priorityMenuOpenRequest = UUID() },
             shortcutSettings: shortcutSettings
         )
     }
@@ -346,7 +348,8 @@ struct InstanceEditorWindowView: View {
                             .padding(.leading, 8)
                         PriorityMenu(
                             priority: $draft.instancePriority,
-                            help: "Instance priority (1–10): each of this instance's queries is studied at this priority or its own, whichever is higher. Click to change."
+                            help: "Instance priority (1–10): each of this instance's queries is studied at this priority or its own, whichever is higher. Click, or press \(shortcutSettings.binding(for: .editorOpenPriorityMenu).displayString), to change.",
+                            openRequest: priorityMenuOpenRequest
                         )
                     }
                 }

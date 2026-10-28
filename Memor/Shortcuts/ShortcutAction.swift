@@ -67,6 +67,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
     case editorPreviewTopQueryType
     case editorFocusCollectionSearch
     case editorHighlightQueryTypes
+    case editorOpenPriorityMenu
 
     // Types page / code editors
     case typesSaveCurrent
@@ -114,6 +115,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         case .editorPreviewTopQueryType: return "Preview Topmost Query"
         case .editorFocusCollectionSearch: return "Focus Collections Search"
         case .editorHighlightQueryTypes: return "Highlight Query Types"
+        case .editorOpenPriorityMenu: return "Open Priority Menu"
         case .typesSaveCurrent: return "Save Current Editor"
         case .searchResetDueDates: return "Reset Due Dates"
         }
@@ -132,7 +134,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         case .editorSave, .editorSubmit, .editorWrapBold, .editorWrapItalic, .editorWrapEmphasis,
              .editorInsertImage, .editorCopyLink, .editorPickType, .editorOpenHyperlinkSearch,
              .editorPointMapAddQuery, .editorPreviewTopQueryType, .editorFocusCollectionSearch,
-             .editorHighlightQueryTypes:
+             .editorHighlightQueryTypes, .editorOpenPriorityMenu:
             return .editor
         case .typesSaveCurrent:
             return .types
@@ -186,6 +188,9 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         case .editorPreviewTopQueryType: return KeyBinding(key: "P", modifiers: .command)
         case .editorFocusCollectionSearch: return KeyBinding(key: "D", modifiers: .command)
         case .editorHighlightQueryTypes: return KeyBinding(key: "E", modifiers: .command)
+        // Pops the instance priority badge's menu, so a priority can be set by
+        // keyboard alone (↑/↓, then Return).
+        case .editorOpenPriorityMenu: return KeyBinding(key: "Slash", modifiers: .command)
         case .typesSaveCurrent: return KeyBinding(key: "S", modifiers: .command)
         case .searchResetDueDates: return KeyBinding(key: "R", modifiers: .command)
         }
