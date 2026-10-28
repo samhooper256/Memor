@@ -24,6 +24,7 @@ struct StacksPageView: View {
     @State private var stackPendingDeletion: Stack?
     @State private var selectedStack: Stack?
     @State private var highlightedStackID: Int64?   // keyboard-selected row; nil only while there are no stacks
+    @State private var stackPendingRename: Stack?
 
     private var lastRefreshedFormatter: DateFormatter {
         let formatter = DateFormatter()
@@ -180,6 +181,21 @@ struct StacksPageView: View {
                                     Task { await togglePin(for: stack) }
                                 }
                             )
+                            .contextMenu {
+                                Button("Rename…") {
+                                    stackPendingRename = stack
+                                }
+                            }
+                            // Row-scoped so only this row presents the popover.
+                            .popover(item: scopedPopoverItem($stackPendingRename, to: stack), arrowEdge: .bottom) { target in
+                                RenamePopover(
+                                    title: "Rename Stack",
+                                    placeholder: "Stack Name",
+                                    initialName: target.name,
+                                    onCommit: { renameStack(target, to: $0) },
+                                    onCancel: { stackPendingRename = nil }
+                                )
+                            }
                             .id(stack.id)
                         }
                     }
@@ -194,7 +210,7 @@ struct StacksPageView: View {
         }
         .background {
             ListKeyNavigationHandler(
-                isEnabled: stackPendingDeletion == nil,
+                isEnabled: stackPendingDeletion == nil && stackPendingRename == nil,
                 onMoveUp: { moveHighlight(by: -1) },
                 onMoveDown: { moveHighlight(by: 1) },
                 onOpen: {
@@ -232,6 +248,24 @@ struct StacksPageView: View {
             return
         }
         highlightedStackID = stacks.first?.id
+    }
+
+    /// The row's RenamePopover commit: an error to show in place, or nil once
+    /// the rename is saved (the popover is then dismissed). The only rule, as
+    /// on the detail page: a non-empty name.
+    private func renameStack(_ stack: Stack, to newName: String) -> String? {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "A stack name cannot be empty." }
+        if trimmed != stack.name {
+            do {
+                try appDatabase.updateStackName(id: stack.id, name: trimmed)
+                stacks = try appDatabase.fetchStacks()
+            } catch {
+                return "Failed to rename stack."
+            }
+        }
+        stackPendingRename = nil
+        return nil
     }
 
     @MainActor
