@@ -449,6 +449,8 @@ struct SearchWindowView: View {
                     text: $searchQuery,
                     focusRequest: searchFocusRequest,
                     highlightsNoQueries: windowState.mode == .instances,
+                    // Points & Boundaries rejects every completable component.
+                    autocomplete: windowState.mode == .pointsAndBoundaries ? nil : SearchAutocompleteProvider(appDatabase: appDatabase),
                     onFocusChange: { isFocused in
                         if isFocused { clearSelections() }
                     },
@@ -1192,6 +1194,9 @@ private struct SearchWindowKeyHandler: NSViewRepresentable {
                         return nil
                     }
                     if event.keyCode == 53 || event.charactersIgnoringModifiers == "\u{1b}" {
+                        // An open completion popup claims Escape (this monitor
+                        // runs before the field sees the key).
+                        if SearchAutocompleteController.dismissActivePopup() { return nil }
                         self.onEscape?()
                         return nil
                     }

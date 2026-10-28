@@ -20,7 +20,7 @@ struct GraphPageView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                SearchQueryTextField("Search instances", text: $searchQuery, onSubmit: { runSearch() })
+                SearchQueryTextField("Search instances", text: $searchQuery, onSubmit: { runSearch() }, autocomplete: SearchAutocompleteProvider(appDatabase: appDatabase))
                     .searchCodeEditorStyle()
                 Button("Search") {
                     runSearch()

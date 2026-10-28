@@ -116,15 +116,19 @@ struct SearchQueryTextField: NSViewRepresentable {
     var focusRequest: UUID?
     var onFocusChange: ((Bool) -> Void)?
     var highlightsNoQueries: Bool
+    /// Non-nil turns on the completion popup for col:/type:/office:/qt: (see
+    /// SearchAutocomplete.swift).
+    var autocomplete: SearchAutocompleteProvider?
     var onBacktab: (() -> Void)?
     var onMoveDown: (() -> Void)?
 
-    init(_ placeholder: String, text: Binding<String>, onSubmit: (() -> Void)? = nil, focusRequest: UUID? = nil, highlightsNoQueries: Bool = true, onFocusChange: ((Bool) -> Void)? = nil, onBacktab: (() -> Void)? = nil, onMoveDown: (() -> Void)? = nil) {
+    init(_ placeholder: String, text: Binding<String>, onSubmit: (() -> Void)? = nil, focusRequest: UUID? = nil, highlightsNoQueries: Bool = true, autocomplete: SearchAutocompleteProvider? = nil, onFocusChange: ((Bool) -> Void)? = nil, onBacktab: (() -> Void)? = nil, onMoveDown: (() -> Void)? = nil) {
         self.placeholder = placeholder
         self._text = text
         self.onSubmit = onSubmit
         self.focusRequest = focusRequest
         self.highlightsNoQueries = highlightsNoQueries
+        self.autocomplete = autocomplete
         self.onFocusChange = onFocusChange
         self.onBacktab = onBacktab
         self.onMoveDown = onMoveDown
@@ -162,6 +166,9 @@ struct SearchQueryTextField: NSViewRepresentable {
         textView.onFocusChange = onFocusChange
         textView.onBacktab = onBacktab
         textView.onMoveDown = onMoveDown
+        context.coordinator.autocompleteController.textView = textView
+        context.coordinator.autocompleteController.provider = autocomplete
+        textView.autocompleteController = context.coordinator.autocompleteController
 
         if let textContainer = textView.textContainer {
             textContainer.widthTracksTextView = false
@@ -183,6 +190,7 @@ struct SearchQueryTextField: NSViewRepresentable {
         (textView as? SearchHighlightingTextView)?.onFocusChange = onFocusChange
         (textView as? SearchHighlightingTextView)?.onBacktab = onBacktab
         (textView as? SearchHighlightingTextView)?.onMoveDown = onMoveDown
+        context.coordinator.autocompleteController.provider = autocomplete
         if let highlightingTextView = textView as? SearchHighlightingTextView,
            highlightingTextView.placeholderString != placeholder {
             highlightingTextView.placeholderString = placeholder
@@ -191,6 +199,9 @@ struct SearchQueryTextField: NSViewRepresentable {
         if textView.string != text {
             textView.string = text
             context.coordinator.applySyntaxHighlighting()
+            // A programmatic reset doesn't go through textDidChange; the
+            // popup's argument may be gone.
+            context.coordinator.autocompleteController.dismiss()
         }
         if let focusRequest {
             context.coordinator.applyFocusRequest(focusRequest)
@@ -203,6 +214,7 @@ struct SearchQueryTextField: NSViewRepresentable {
         var onFocusChange: ((Bool) -> Void)?
         var highlightsNoQueries: Bool
         weak var textView: NSTextView?
+        let autocompleteController = SearchAutocompleteController()
         private let baseFont = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
         private var lastAppliedFocusRequest: UUID?
 
@@ -217,6 +229,11 @@ struct SearchQueryTextField: NSViewRepresentable {
             guard let textView else { return }
             text = textView.string
             applySyntaxHighlighting()
+            autocompleteController.textDidChange()
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            autocompleteController.selectionDidChange()
         }
 
         func applySyntaxHighlighting() {
@@ -241,10 +258,14 @@ struct SearchQueryTextField: NSViewRepresentable {
         var onBacktab: (() -> Void)?
         var onMoveDown: (() -> Void)?
         var placeholderString: String = ""
+        /// Owned by the coordinator; consulted before every key the popup claims.
+        weak var autocompleteController: SearchAutocompleteController?
 
         override func keyDown(with event: NSEvent) {
             let isReturnKey = event.keyCode == 36 || event.keyCode == 76
             if isReturnKey {
+                // With the completion popup open, Return chooses the selected row.
+                if autocompleteController?.handleReturn() == true { return }
                 onSubmit?()
                 return
             }
@@ -252,6 +273,15 @@ struct SearchQueryTextField: NSViewRepresentable {
         }
 
         override func doCommand(by selector: Selector) {
+            // An open completion popup takes the arrows (wrap through its rows)
+            // and Escape — which reaches a text view as complete: (its built-in
+            // word completion), not cancelOperation:.
+            if let autocompleteController {
+                if selector == #selector(NSResponder.moveDown(_:)), autocompleteController.handleMoveDown() { return }
+                if selector == #selector(NSResponder.moveUp(_:)), autocompleteController.handleMoveUp() { return }
+                if selector == #selector(NSTextView.complete(_:)) || selector == #selector(NSResponder.cancelOperation(_:)),
+                   autocompleteController.handleEscape() { return }
+            }
             // Shift+Tab arrives as insertBacktab. When a handler is installed,
             // consume it (used to cycle the Search window's mode) instead of
             // moving focus.
@@ -290,8 +320,20 @@ struct SearchQueryTextField: NSViewRepresentable {
 
         override func resignFirstResponder() -> Bool {
             let result = super.resignFirstResponder()
-            if result { onFocusChange?(false) }
+            if result {
+                autocompleteController?.dismiss()
+                onFocusChange?(false)
+            }
             return result
+        }
+
+        override func viewWillMove(toWindow newWindow: NSWindow?) {
+            super.viewWillMove(toWindow: newWindow)
+            // SwiftUI tears the field down while its window lives on; the
+            // popup is a child window of that window and must not outlive the field.
+            if newWindow == nil {
+                autocompleteController?.tearDown()
+            }
         }
 
         private func drawPlaceholder(_ dirtyRect: NSRect) {

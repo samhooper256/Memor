@@ -80,7 +80,7 @@ struct InstancesPageView: View {
                             // content inset, so these align with the row text.
                             Group {
                                 HStack(spacing: 8) {
-                                    SearchQueryTextField("Search instances", text: $searchQuery, focusRequest: searchFocusRequest)
+                                    SearchQueryTextField("Search instances", text: $searchQuery, focusRequest: searchFocusRequest, autocomplete: SearchAutocompleteProvider(appDatabase: appDatabase))
                                         .searchCodeEditorStyle()
 
                                     HelpWindowButton(windowID: "instance-search-help", tooltip: "Show search syntax help")

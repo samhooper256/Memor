@@ -489,7 +489,7 @@ private struct StackDetailPageView: View {
                     Text("Search Query")
                         .font(.headline)
 
-                    SearchQueryTextField("Search query", text: $searchQuery, highlightsNoQueries: false)
+                    SearchQueryTextField("Search query", text: $searchQuery, highlightsNoQueries: false, autocomplete: SearchAutocompleteProvider(appDatabase: appDatabase))
                         .searchCodeEditorStyle()
 
                     if let searchErrorMessage {
