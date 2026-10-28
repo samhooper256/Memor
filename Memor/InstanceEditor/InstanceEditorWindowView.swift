@@ -51,6 +51,7 @@ struct InstanceEditorWindowView: View {
     @State private var priorityMenuOpenRequest: UUID?   // bumped by the Open Priority Menu shortcut
     @State private var addScrollNonce = UUID()   // bumped after an add to reset field scroll
     @State private var highlightedCollectionID: Int64?   // C; nil = none
+    @State private var isCollectionSearchFocused = false
     // The Collections header's "+ Add" popover (styled like the Collection
     // detail page's rename popover).
     @State private var isNewCollectionPopoverPresented = false
@@ -2248,6 +2249,23 @@ struct InstanceEditorWindowView: View {
         highlightedCollectionID = items[next].id
     }
 
+    /// Keeps the highlight ("C") consistent with the visible list: while the
+    /// search field is focused, a non-empty list always has one highlighted
+    /// row — the current one if it is still visible, else the first — and an
+    /// empty list (or an unfocused field) has none. Run on every change to the
+    /// query, the items, or the focus, so results reappearing after a
+    /// zero-match filter, or a reload while focused, never leave the list
+    /// highlight-less.
+    private func reconcileCollectionHighlight() {
+        guard isCollectionSearchFocused else {
+            highlightedCollectionID = nil
+            return
+        }
+        let items = filteredCollectionItems
+        if let id = highlightedCollectionID, items.contains(where: { $0.id == id }) { return }
+        highlightedCollectionID = items.first?.id
+    }
+
     // Toggles whether the highlighted collection is selected, without changing focus.
     private func toggleHighlightedCollection() {
         guard let id = highlightedCollectionID else { return }
@@ -2312,8 +2330,14 @@ struct InstanceEditorWindowView: View {
                 onMoveUp: { moveHighlight(by: -1) },
                 onMoveDown: { moveHighlight(by: 1) },
                 onToggleHighlighted: { toggleHighlightedCollection() },
-                onFocusGained: { highlightedCollectionID = filteredCollectionItems.first?.id },
-                onFocusLost: { highlightedCollectionID = nil }
+                onFocusGained: {
+                    isCollectionSearchFocused = true
+                    reconcileCollectionHighlight()
+                },
+                onFocusLost: {
+                    isCollectionSearchFocused = false
+                    reconcileCollectionHighlight()
+                }
             )
             .frame(height: 22)
 
@@ -2361,10 +2385,10 @@ struct InstanceEditorWindowView: View {
             }
         }
         .onChange(of: collectionSearchQuery) { _, _ in
-            if let c = highlightedCollectionID,
-               !filteredCollectionItems.contains(where: { $0.id == c }) {
-                highlightedCollectionID = filteredCollectionItems.first?.id
-            }
+            reconcileCollectionHighlight()
+        }
+        .onChange(of: allCollectionItems) { _, _ in
+            reconcileCollectionHighlight()
         }
         .padding(16)
         .background(Color(nsColor: .controlBackgroundColor))
