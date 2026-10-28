@@ -17,7 +17,8 @@ extension AppDatabase {
                     name TEXT,
                     description TEXT,
                     css TEXT,
-                    is_builtin INTEGER NOT NULL DEFAULT 0
+                    is_builtin INTEGER NOT NULL DEFAULT 0,
+                    is_pinned INTEGER NOT NULL DEFAULT 0
                 ) STRICT
                 """)
 
@@ -700,6 +701,9 @@ extension AppDatabase {
             // an instance's priority to it (never lowers). Every existing
             // collection lands on 1, which raises nothing.
             try addPriorityColumnIfMissing(db: db, table: "collection", column: "default_priority")
+            // The Instances sidebar's type pin (added October 2026): pinned
+            // types list first there. Existing databases land unpinned.
+            try addFlagColumnIfMissing(db: db, table: "\"type\"", column: "is_pinned")
 
             // Seed the built-in PointMap type (idempotent)
             let existingPointMapTypeID = try Int64.fetchOne(
@@ -845,6 +849,15 @@ extension AppDatabase {
             // exists, so this is effectively one-shot per database.
             try seedBuiltinCountryBoundaries(in: db)
         }
+    }
+
+    /// Adds a 0/1 flag column (default 0) to `table` unless it already exists.
+    /// Table/column names are code constants, safe to interpolate.
+    private static func addFlagColumnIfMissing(db: Database, table: String, column: String) throws {
+        let columns = try Row.fetchAll(db, sql: "PRAGMA table_info(\(table))")
+            .map { $0["name"] as String }
+        guard !columns.contains(column) else { return }
+        try db.execute(sql: "ALTER TABLE \(table) ADD COLUMN \(column) INTEGER NOT NULL DEFAULT 0")
     }
 
     /// Adds a 1–10 priority column (default 1) to `table` unless it already

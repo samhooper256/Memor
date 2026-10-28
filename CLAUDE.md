@@ -33,7 +33,7 @@ Memor/
     PersonModels.swift              Person types: PersonRef (instance-or-bare-name), slot drafts, PersonQueryKind, PersonSaveError conflicts, the save change set
   Pages/
     StacksPageView.swift            Stacks list + detail pages, stack cards; the list is keyboard-navigable via `ListKeyNavigationHandler` (one row always highlighted with a blue border — the first by default, kept across reloads while its stack survives; ↑/↓ wrap; Return starts Study on it); each row's right-click menu has "Rename…" (the shared RenamePopover, row-scoped via scopedPopoverItem; non-empty name is the only rule)
-    InstancesPageView.swift         Instances sidebar + type-instances table + toast + key commands
+    InstancesPageView.swift         Instances sidebar (types pinnable like the editor's collections: pin left of the type icon, pinned first) + type-instances table + toast + key commands
     CollectionsPageView.swift       Collections list + detail page; each list row's right-click menu has "Rename…" (the shared RenamePopover, row-scoped via scopedPopoverItem; same name rules as Add Collection)
     GraphPageView.swift             Graph tab + WKWebView wrapper
     TypeDetailPageView.swift        Type detail: fields section, query-type editors (co-located with TypesPageView)
@@ -102,7 +102,7 @@ There are three classes of type (no `type.kind` column — built-ins are identif
 - **Person** — a single built-in, non-deleteable, partially-editable type for genealogy (see the Person section below). Its fields live in the normal `field`/`type{N}` pipeline, so search/templating/user query types work unchanged; its relationships live in bespoke tables.
 - **Map types** (`PointMap`, `BoundaryMap`) — the closed, built-in class with bespoke editors/tables. Boundaries live in `boundary_set`/`boundary` (geometry_json is always a MultiPolygon); the built-in "Countries" set is seeded once from the bundled Natural Earth file (see Database/AppDatabase+BoundarySeed.swift), user sets come from the Manage Boundaries window's GeoJSON upload.
 
-- **Type** (`type` table) - User-defined data type with named fields and CSS
+- **Type** (`type` table) - User-defined data type with named fields and CSS; `is_pinned` (0/1, self-applied ALTER via `addFlagColumnIfMissing`) is the Instances sidebar's pin — pinned types list first there, pin icon left of the type icon (`FlashcardType.isPinned`, `setTypePinned`)
 - **Field** (`field` table) - Named field on a type (`field_type` 'text' | 'boolean' | 'sex'), with `field_index`, `field_display_index`, `is_primary`, and `is_protected` (built-in Person fields: no rename/delete). The seed-only `sex` kind stores the literal string "Male"/"Female" (normalized, default Male) so `{{Sex}}` renders as-is.
 - **Instance** (`instance_id_type_id` + `type{N}` tables) - Concrete object of a type. Each type has its own dynamic table `type{typeID}` with columns `field{field_index}`
 - **QueryType** (`query_type` table) - Defines a question template (question_html + answer_html) for a type. Person's built-in relationship queries are NOT query_type rows (they live in `person_query`).

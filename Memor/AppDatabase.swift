@@ -453,11 +453,12 @@ struct AppDatabase {
                         COALESCE("type".description, '') AS description,
                         "type".css,
                         CASE WHEN COALESCE("type".is_builtin, 0) = 0 THEN 0 ELSE 1 END AS isBuiltin,
+                        CASE WHEN COALESCE("type".is_pinned, 0) = 0 THEN 0 ELSE 1 END AS isPinned,
                         COUNT(instance_id_type_id.instance_id) AS instanceCount
                     FROM "type"
                     LEFT JOIN instance_id_type_id
                         ON instance_id_type_id.type_id = "type".id
-                    GROUP BY "type".id, "type".name, "type".description, "type".css, "type".is_builtin
+                    GROUP BY "type".id, "type".name, "type".description, "type".css, "type".is_builtin, "type".is_pinned
                     ORDER BY name COLLATE NOCASE, id
                     """
             )
@@ -475,11 +476,12 @@ struct AppDatabase {
                         COALESCE("type".description, '') AS description,
                         "type".css,
                         CASE WHEN COALESCE("type".is_builtin, 0) = 0 THEN 0 ELSE 1 END AS isBuiltin,
+                        CASE WHEN COALESCE("type".is_pinned, 0) = 0 THEN 0 ELSE 1 END AS isPinned,
                         COUNT(instance_id_type_id.instance_id) AS instanceCount
                     FROM "type"
                     LEFT JOIN instance_id_type_id
                         ON instance_id_type_id.type_id = "type".id
-                    GROUP BY "type".id, "type".name, "type".description, "type".css, "type".is_builtin
+                    GROUP BY "type".id, "type".name, "type".description, "type".css, "type".is_builtin, "type".is_pinned
                     ORDER BY id
                     """
             )
@@ -497,12 +499,13 @@ struct AppDatabase {
                         COALESCE("type".description, '') AS description,
                         "type".css,
                         CASE WHEN COALESCE("type".is_builtin, 0) = 0 THEN 0 ELSE 1 END AS isBuiltin,
+                        CASE WHEN COALESCE("type".is_pinned, 0) = 0 THEN 0 ELSE 1 END AS isPinned,
                         COUNT(instance_id_type_id.instance_id) AS instanceCount
                     FROM "type"
                     LEFT JOIN instance_id_type_id
                         ON instance_id_type_id.type_id = "type".id
                     WHERE "type".id = ?
-                    GROUP BY "type".id, "type".name, "type".description, "type".css, "type".is_builtin
+                    GROUP BY "type".id, "type".name, "type".description, "type".css, "type".is_builtin, "type".is_pinned
                     """,
                 arguments: [typeID]
             )
@@ -881,6 +884,18 @@ struct AppDatabase {
             try db.execute(
                 sql: """
                     UPDATE stack SET is_pinned = ? WHERE id = ?
+                    """,
+                arguments: [isPinned ? 1 : 0, id]
+            )
+        }
+    }
+
+    /// The Instances sidebar's type pin (see FlashcardType.isPinned).
+    func setTypePinned(id: Int64, isPinned: Bool) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE "type" SET is_pinned = ? WHERE id = ?
                     """,
                 arguments: [isPinned ? 1 : 0, id]
             )

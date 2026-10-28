@@ -20,6 +20,8 @@ struct FlashcardType: Identifiable, FetchableRecord, Decodable, Hashable {
     let css: String
     let isBuiltin: Bool
     let instanceCount: Int
+    /// The Instances sidebar's pin: pinned types list first there.
+    var isPinned: Bool = false
 }
 
 // Per-instance marker size for a PointMap. Medium == the historical fixed size.

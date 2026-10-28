@@ -58,6 +58,9 @@ struct InstancesPageView: View {
                         onAddInstance: {
                             addInstanceWindowState.requestOpen(preselectedTypeID: type.id)
                             openWindow(id: "add-instance")
+                        },
+                        onTogglePin: {
+                            Task { await togglePin(for: type) }
                         }
                     )
                         .tag(Optional(type.id))
@@ -277,7 +280,8 @@ struct InstancesPageView: View {
     private func loadTypes() async {
         do {
             let loadedTypes = try appDatabase.fetchTypes()
-            types = loadedTypes
+            // Pinned types list first; name order within each group.
+            types = loadedTypes.filter(\.isPinned) + loadedTypes.filter { !$0.isPinned }
             if let selectedTypeID,
                loadedTypes.contains(where: { $0.id == selectedTypeID }) {
                 errorMessage = nil
@@ -291,6 +295,16 @@ struct InstancesPageView: View {
             selectedTypeID = nil
             pageData = nil
             errorMessage = "Failed to load types."
+        }
+    }
+
+    @MainActor
+    private func togglePin(for type: FlashcardType) async {
+        do {
+            try appDatabase.setTypePinned(id: type.id, isPinned: !type.isPinned)
+            await loadTypes()
+        } catch {
+            errorMessage = "Failed to update type."
         }
     }
 
@@ -610,13 +624,33 @@ private struct InstancesSidebarRowView: View {
     let type: FlashcardType
     let onEditType: () -> Void
     let onAddInstance: () -> Void
+    let onTogglePin: () -> Void
 
     @State private var isHovered = false
     @State private var isEditButtonHovered = false
     @State private var isAddButtonHovered = false
+    @State private var isPinHovered = false
 
     var body: some View {
         HStack(spacing: 8) {
+            // Same pin as the editor's collection rows: always visible, faint
+            // until pinned.
+            Button(action: onTogglePin) {
+                Image(systemName: "pin.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(type.isPinned ? Color.primary : Color.secondary.opacity(0.5))
+                    .frame(width: 20, height: 20)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(isPinHovered ? Color.secondary.opacity(0.15) : Color.clear)
+                    )
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering in
+                isPinHovered = hovering
+            }
+            .help(type.isPinned ? "Unpin" : "Pin to the top")
+
             Image(systemName: type.kindIcon.name)
                 .foregroundStyle(type.kindIcon.color)
 
@@ -663,6 +697,7 @@ private struct InstancesSidebarRowView: View {
             if !hovering {
                 isEditButtonHovered = false
                 isAddButtonHovered = false
+                isPinHovered = false
             }
         }
     }
