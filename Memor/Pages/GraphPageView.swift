@@ -90,6 +90,14 @@ struct GraphPageView: View {
                 openFind()
             }
         }
+        .background {
+            // Open Graph Settings (⌘S by default): a local monitor, so it also
+            // fires while a search box has focus.
+            ShortcutActionsKeyHandler(
+                shortcutSettings: shortcutSettings,
+                handlers: [(.graphOpenSettings, { openWindow(id: "graph-settings") })]
+            )
+        }
         .task {
             // Focus the search box on every visit. Deferred like the
             // Collections page's: arriving from a tab whose own search field
@@ -125,7 +133,7 @@ struct GraphPageView: View {
                     .font(.system(size: 16))
             }
             .buttonStyle(.borderless)
-            .help("Graph settings")
+            .help("Graph settings (\(shortcutSettings.binding(for: .graphOpenSettings).displayString))")
 
             Picker("Layout:", selection: $layoutMode) {
                 ForEach(GraphLayoutMode.allCases) { mode in

@@ -10,6 +10,7 @@ import SwiftUI
 enum ShortcutCategory: String, CaseIterable, Identifiable {
     case global
     case instances
+    case graph
     case study
     case editor
     case types
@@ -21,6 +22,7 @@ enum ShortcutCategory: String, CaseIterable, Identifiable {
         switch self {
         case .global: return "Global"
         case .instances: return "Instances Tab"
+        case .graph: return "Graph Tab"
         case .study: return "Study Mode"
         case .editor: return "Instance Editor"
         case .types: return "Types Page"
@@ -46,6 +48,9 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
     // Instances tab
     case instancesSelectNextType
     case instancesSelectPreviousType
+
+    // Graph tab
+    case graphOpenSettings
 
     // Study mode
     case studyRevealOrGood
@@ -98,6 +103,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         case .toggleDeveloperMode: return "Toggle Developer Mode"
         case .instancesSelectNextType: return "Select Next Type"
         case .instancesSelectPreviousType: return "Select Previous Type"
+        case .graphOpenSettings: return "Open Graph Settings"
         case .studyRevealOrGood: return "Reveal / Rate Good"
         case .studyRatingAgain: return "Rate Again"
         case .studyRatingHard: return "Rate Hard"
@@ -137,6 +143,8 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
             return .global
         case .instancesSelectNextType, .instancesSelectPreviousType:
             return .instances
+        case .graphOpenSettings:
+            return .graph
         case .studyRevealOrGood, .studyRatingAgain, .studyRatingHard, .studyRatingGood,
              .studyRatingEasy, .studyUndo, .studyEditInstance, .studyEditType,
              .studyDuplicateInstance, .studyPlayAudio:
@@ -169,6 +177,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         // Move the Instances sidebar's type selection (wrapping at both ends).
         case .instancesSelectNextType: return KeyBinding(key: "DownArrow", modifiers: .command)
         case .instancesSelectPreviousType: return KeyBinding(key: "UpArrow", modifiers: .command)
+        case .graphOpenSettings: return KeyBinding(key: "S", modifiers: .command)
         case .studyRevealOrGood: return KeyBinding(key: "Space")
         case .studyRatingAgain: return KeyBinding(key: "1")
         case .studyRatingHard: return KeyBinding(key: "2")
