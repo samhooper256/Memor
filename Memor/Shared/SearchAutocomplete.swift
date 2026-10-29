@@ -44,7 +44,24 @@ struct SearchAutocompleteProvider {
             }
         case .queryTypeName:
             return queryTypeNameCandidates(typeArgument: queryTypeTypeArgument)
+        case .fieldFilterType:
+            // Types with text fields (only text can hold a link): Object types and Person.
+            return ((try? appDatabase.fetchTypes()) ?? [])
+                .filter { !($0.isBuiltin && ($0.name == POINTMAP_TYPE_NAME || $0.name == BOUNDARYMAP_TYPE_NAME)) }
+                .map { SearchAutocompleteCandidate(name: $0.name, id: nil) }
+        case .fieldFilterField:
+            return fieldCandidates(typeArgument: queryTypeTypeArgument)
         }
+    }
+
+    /// The named type's text fields (the type matched NOCASE); an unknown
+    /// type offers nothing.
+    private func fieldCandidates(typeArgument: String) -> [SearchAutocompleteCandidate] {
+        let types = (try? appDatabase.fetchTypes()) ?? []
+        guard let type = types.first(where: { AppDatabase.sqliteNocaseEquals($0.name, typeArgument) }) else { return [] }
+        return ((try? appDatabase.fetchFields(forTypeID: type.id)) ?? [])
+            .filter { $0.fieldType == .text }
+            .map { SearchAutocompleteCandidate(name: $0.name, id: nil) }
     }
 
     /// Everything `qt:` accepts after the type (see the parser's `.queryType`
@@ -104,6 +121,7 @@ final class SearchAutocompleteController: NSObject {
     var provider: SearchAutocompleteProvider? {
         didSet { if provider == nil { dismiss() } }
     }
+    var grammar: SearchAutocompleteGrammar = .search
 
     /// One argument's completion: fixed kind, anchor, and candidate list;
     /// refiltered as the typed text changes.
@@ -173,7 +191,7 @@ final class SearchAutocompleteController: NSObject {
         }
         let selection = textView.selectedRange()
         guard selection.length == 0,
-              let context = SearchAutocompleteEngine.context(in: textView.string, caretLocation: selection.location) else {
+              let context = SearchAutocompleteEngine.context(in: textView.string, caretLocation: selection.location, grammar: grammar) else {
             dismiss()
             return
         }

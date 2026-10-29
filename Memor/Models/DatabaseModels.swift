@@ -641,3 +641,9 @@ struct GraphData: Hashable {
     let sourceNodeIDs: Set<Int64>
     let edges: [GraphEdge]
 }
+
+/// One `typename:fieldname` entry of the Graph tab's field filter, as typed.
+nonisolated struct GraphFieldFilterEntry: Hashable {
+    let typeName: String
+    let fieldName: String
+}

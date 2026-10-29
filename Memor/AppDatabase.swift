@@ -1568,8 +1568,14 @@ struct AppDatabase {
         }
     }
 
-    func fetchGraphData(query: String) throws -> GraphData {
+    /// `fieldFilter` is the Graph tab's Field filter text when its checkbox is
+    /// on: whitespace-separated `typename:fieldname` entries, and only those
+    /// fields are scanned for `id:` links (a type with no entry contributes no
+    /// outgoing arrows); nil scans every field. Nodes are the search results
+    /// either way. Throws for an empty filter or an unknown type/field.
+    func fetchGraphData(query: String, fieldFilter: String? = nil) throws -> GraphData {
         let parsedQuery = try parseInstanceSearchQuery(query)
+        let filterEntries = try fieldFilter.map { try parseGraphFieldFilter($0) }
 
         return try dbQueue.read { db in
             try validateCollectionSearchComponents(
@@ -1582,6 +1588,9 @@ struct AppDatabase {
             )
 
             let typeInfos = try fetchInstanceSearchTypeInfos(db: db)
+            let linkFieldIndicesByTypeID = try filterEntries.map {
+                try resolveGraphFieldFilter($0, typeInfos: typeInfos, db: db)
+            }
             var allNodes: [GraphNode] = []
             var allNodeIDSet: Set<Int64> = []
             var rawEdges: [(from: Int64, to: Int64)] = []
@@ -1590,7 +1599,8 @@ struct AppDatabase {
                 let rows = try fetchGraphInstanceRows(
                     db: db,
                     typeInfo: typeInfo,
-                    parsedQuery: parsedQuery
+                    parsedQuery: parsedQuery,
+                    linkFieldIndices: linkFieldIndicesByTypeID.map { $0[typeInfo.typeID] ?? [] } ?? typeInfo.allFieldIndices
                 )
                 for row in rows {
                     allNodes.append(GraphNode(instanceID: row.instanceID, label: row.displayValue))
@@ -1615,6 +1625,58 @@ struct AppDatabase {
 
             return GraphData(nodes: allNodes, sourceNodeIDs: sourceNodeIDs, edges: edges)
         }
+    }
+
+    /// The Graph tab's Field filter text → entries. Tokenized like the search
+    /// language (whitespace-separated, quotes group), each token split at its
+    /// FIRST colon into type and field (a type name can't contain one; a field
+    /// name may). Throws for a token that isn't `typename:fieldname`.
+    nonisolated func parseGraphFieldFilter(_ text: String) throws -> [GraphFieldFilterEntry] {
+        try tokenizeSearchQueryComponents(text).map { token in
+            guard let colonIndex = token.firstIndex(of: ":"),
+                  colonIndex != token.startIndex,
+                  token.index(after: colonIndex) != token.endIndex else {
+                throw DatabaseError(message: "Field filter entries are typename:fieldname (e.g. Vocab:Definition) — “\(token)” isn't.")
+            }
+            return GraphFieldFilterEntry(
+                typeName: String(token[..<colonIndex]),
+                fieldName: String(token[token.index(after: colonIndex)...])
+            )
+        }
+    }
+
+    /// Resolves field-filter entries to field indices per type id (names
+    /// matched NOCASE, like the search language). Throws for an empty filter
+    /// or an unknown type or field.
+    private func resolveGraphFieldFilter(
+        _ entries: [GraphFieldFilterEntry],
+        typeInfos: [InstanceSearchTypeInfo],
+        db: Database
+    ) throws -> [Int64: [Int]] {
+        guard !entries.isEmpty else {
+            throw DatabaseError(message: "The field filter is on but empty — add typename:fieldname entries, or turn it off.")
+        }
+        var indicesByTypeID: [Int64: [Int]] = [:]
+        var fieldsByTypeID: [Int64: [TypeField]] = [:]
+        for entry in entries {
+            guard let typeInfo = typeInfos.first(where: { Self.sqliteNocaseEquals($0.typeName, entry.typeName) }) else {
+                throw DatabaseError(message: "Unknown type in the field filter: \(entry.typeName)")
+            }
+            let fields: [TypeField]
+            if let cached = fieldsByTypeID[typeInfo.typeID] {
+                fields = cached
+            } else {
+                fields = try fetchTypeFields(db: db, typeID: typeInfo.typeID)
+                fieldsByTypeID[typeInfo.typeID] = fields
+            }
+            guard let field = fields.first(where: { Self.sqliteNocaseEquals($0.name, entry.fieldName) }) else {
+                throw DatabaseError(message: "Unknown field in the field filter: \(entry.typeName):\(entry.fieldName)")
+            }
+            if !indicesByTypeID[typeInfo.typeID, default: []].contains(field.fieldIndex) {
+                indicesByTypeID[typeInfo.typeID, default: []].append(field.fieldIndex)
+            }
+        }
+        return indicesByTypeID
     }
 
     func searchQueries(query: String, caseSensitive: Bool = false) throws -> [QuerySearchSection] {
@@ -5165,10 +5227,13 @@ struct AppDatabase {
         }
     }
 
+    // `linkFieldIndices`: the field columns scanned for id: links — every
+    // field, or the field filter's for this type.
     private func fetchGraphInstanceRows(
         db: Database,
         typeInfo: InstanceSearchTypeInfo,
-        parsedQuery: InstanceSearchQuery
+        parsedQuery: InstanceSearchQuery,
+        linkFieldIndices: [Int]
     ) throws -> [GraphInstanceRow] {
         let tableName = "\"type\(typeInfo.typeID)\""
         let tableAlias = "instance_table"
@@ -5182,8 +5247,8 @@ struct AppDatabase {
         )
         let whereClause = searchConditions.sql.isEmpty ? "" : "\nWHERE \(searchConditions.sql)"
 
-        // Concatenate all field columns to scan for id: links
-        let allFieldsConcat = typeInfo.allFieldIndices
+        // Concatenate the link-scanned field columns to scan for id: links
+        let allFieldsConcat = linkFieldIndices
             .map { "COALESCE(\(tableAlias).\"field\($0)\", '')" }
             .joined(separator: " || ' ' || ")
         let concatExpr = allFieldsConcat.isEmpty ? "''" : allFieldsConcat
@@ -6355,7 +6420,7 @@ struct AppDatabase {
             tokens, allowsNoQueries: false, allowsNew: false, allowsTypeCollectionId: false, caseSensitive: caseSensitive))
     }
 
-    nonisolated private func tokenizeSearchQueryComponents(_ query: String) throws -> [String] {
+    nonisolated func tokenizeSearchQueryComponents(_ query: String) throws -> [String] {
         var tokens: [String] = []
         var currentToken = ""
         var isInsideQuotes = false

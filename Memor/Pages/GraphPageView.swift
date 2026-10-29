@@ -14,6 +14,10 @@ struct GraphPageView: View {
 
     @State private var searchQuery = ""
     @State private var searchFocusRequest: UUID?
+    // The field filter: typename:fieldname entries; ignored unless enabled.
+    // Deliberately not persisted — off and empty whenever the tab opens.
+    @State private var fieldFilterText = ""
+    @State private var isFieldFilterEnabled = false
     @State private var graphData: GraphData?
     @State private var errorMessage: String?
     @State private var isSearching = false
@@ -21,23 +25,9 @@ struct GraphPageView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                SearchQueryTextField("Search instances", text: $searchQuery, onSubmit: { runSearch() }, focusRequest: searchFocusRequest, autocomplete: SearchAutocompleteProvider(appDatabase: appDatabase))
-                    .searchCodeEditorStyle()
-                Button("Search") {
-                    runSearch()
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(isSearching)
-
-                if isSearching || layoutProgress != nil {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text(isSearching ? "Searching…" : "Laying out… \(Int((layoutProgress ?? 0) * 100))%")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                }
+            VStack(spacing: 8) {
+                searchRow
+                fieldFilterRow
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -78,12 +68,58 @@ struct GraphPageView: View {
         }
     }
 
+    private var searchRow: some View {
+        HStack(spacing: 10) {
+            SearchQueryTextField("Search instances", text: $searchQuery, onSubmit: { runSearch() }, focusRequest: searchFocusRequest, autocomplete: SearchAutocompleteProvider(appDatabase: appDatabase))
+                .searchCodeEditorStyle()
+            Button("Search") {
+                runSearch()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(isSearching)
+
+            if isSearching || layoutProgress != nil {
+                ProgressView()
+                    .controlSize(.small)
+                Text(isSearching ? "Searching…" : "Laying out… \(Int((layoutProgress ?? 0) * 100))%")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+        }
+    }
+
+    // Checkbox + the filter box + help. The checkbox re-runs the last search
+    // at once; filter text applies on the next Search (Return in the box runs it).
+    private var fieldFilterRow: some View {
+        HStack(spacing: 10) {
+            Toggle("Field filter", isOn: $isFieldFilterEnabled)
+                .toggleStyle(.checkbox)
+                .onChange(of: isFieldFilterEnabled) { _, _ in
+                    if graphData != nil || errorMessage != nil {
+                        runSearch()
+                    }
+                }
+            SearchQueryTextField(
+                "Field filter, e.g. Vocab:Definition",
+                text: $fieldFilterText,
+                onSubmit: { runSearch() },
+                autocomplete: SearchAutocompleteProvider(appDatabase: appDatabase),
+                grammar: .fieldFilter
+            )
+            .searchCodeEditorStyle()
+            .opacity(isFieldFilterEnabled ? 1 : 0.6)
+            HelpWindowButton(windowID: "graph-field-filter-help", tooltip: "How the field filter works")
+        }
+    }
+
     private func runSearch() {
         let query = searchQuery
+        let fieldFilter = isFieldFilterEnabled ? fieldFilterText : nil
         isSearching = true
         Task {
             do {
-                let data = try appDatabase.fetchGraphData(query: query)
+                let data = try appDatabase.fetchGraphData(query: query, fieldFilter: fieldFilter)
                 // The page reports progress only for data it hasn't laid out
                 // yet, and only while mounted (a non-empty graph).
                 layoutProgress = (!data.nodes.isEmpty && data != graphData) ? 0 : nil

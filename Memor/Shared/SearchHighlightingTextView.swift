@@ -68,6 +68,26 @@ func applySearchQueryHighlighting(to textStorage: NSTextStorage, baseFont: NSFon
     textStorage.endEditing()
 }
 
+// The Graph tab's field filter: `Type:Field` components. The type part and
+// its colon are blue, quotes gray.
+private let fieldFilterTypeRegex = try! NSRegularExpression(pattern: #"(?:^|(?<=[\s"]))[^\s:"]+:"#)
+
+func applyFieldFilterHighlighting(to textStorage: NSTextStorage, baseFont: NSFont, baseColor: NSColor = .labelColor) {
+    let fullRange = NSRange(location: 0, length: textStorage.length)
+    textStorage.beginEditing()
+    textStorage.setAttributes([.font: baseFont, .foregroundColor: baseColor], range: fullRange)
+    let string = textStorage.string
+    fieldFilterTypeRegex.enumerateMatches(in: string, range: fullRange) { match, _, _ in
+        guard let match else { return }
+        textStorage.addAttribute(.foregroundColor, value: NSColor.systemBlue, range: match.range)
+    }
+    searchQuoteRegex.enumerateMatches(in: string, range: fullRange) { match, _, _ in
+        guard let match else { return }
+        textStorage.addAttribute(.foregroundColor, value: NSColor.systemGray, range: match.range)
+    }
+    textStorage.endEditing()
+}
+
 func highlightedSearchQuery(_ search: String) -> AttributedString {
     let nsString = search as NSString
     let fullRange = NSRange(location: 0, length: nsString.length)
@@ -116,26 +136,30 @@ struct SearchQueryTextField: NSViewRepresentable {
     var focusRequest: UUID?
     var onFocusChange: ((Bool) -> Void)?
     var highlightsNoQueries: Bool
-    /// Non-nil turns on the completion popup for col:/type:/office:/qt: (see
-    /// SearchAutocomplete.swift).
+    /// Non-nil turns on the completion popup (see SearchAutocomplete.swift):
+    /// col:/type:/office:/qt: in the search grammar, Type:Field in the field
+    /// filter's.
     var autocomplete: SearchAutocompleteProvider?
+    /// Which language the box holds — drives highlighting and completion.
+    var grammar: SearchAutocompleteGrammar
     var onBacktab: (() -> Void)?
     var onMoveDown: (() -> Void)?
 
-    init(_ placeholder: String, text: Binding<String>, onSubmit: (() -> Void)? = nil, focusRequest: UUID? = nil, highlightsNoQueries: Bool = true, autocomplete: SearchAutocompleteProvider? = nil, onFocusChange: ((Bool) -> Void)? = nil, onBacktab: (() -> Void)? = nil, onMoveDown: (() -> Void)? = nil) {
+    init(_ placeholder: String, text: Binding<String>, onSubmit: (() -> Void)? = nil, focusRequest: UUID? = nil, highlightsNoQueries: Bool = true, autocomplete: SearchAutocompleteProvider? = nil, grammar: SearchAutocompleteGrammar = .search, onFocusChange: ((Bool) -> Void)? = nil, onBacktab: (() -> Void)? = nil, onMoveDown: (() -> Void)? = nil) {
         self.placeholder = placeholder
         self._text = text
         self.onSubmit = onSubmit
         self.focusRequest = focusRequest
         self.highlightsNoQueries = highlightsNoQueries
         self.autocomplete = autocomplete
+        self.grammar = grammar
         self.onFocusChange = onFocusChange
         self.onBacktab = onBacktab
         self.onMoveDown = onMoveDown
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, onSubmit: onSubmit, onFocusChange: onFocusChange, highlightsNoQueries: highlightsNoQueries)
+        Coordinator(text: $text, onSubmit: onSubmit, onFocusChange: onFocusChange, highlightsNoQueries: highlightsNoQueries, grammar: grammar)
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -168,6 +192,7 @@ struct SearchQueryTextField: NSViewRepresentable {
         textView.onMoveDown = onMoveDown
         context.coordinator.autocompleteController.textView = textView
         context.coordinator.autocompleteController.provider = autocomplete
+        context.coordinator.autocompleteController.grammar = grammar
         textView.autocompleteController = context.coordinator.autocompleteController
 
         if let textContainer = textView.textContainer {
@@ -191,6 +216,7 @@ struct SearchQueryTextField: NSViewRepresentable {
         (textView as? SearchHighlightingTextView)?.onBacktab = onBacktab
         (textView as? SearchHighlightingTextView)?.onMoveDown = onMoveDown
         context.coordinator.autocompleteController.provider = autocomplete
+        context.coordinator.autocompleteController.grammar = grammar
         if let highlightingTextView = textView as? SearchHighlightingTextView,
            highlightingTextView.placeholderString != placeholder {
             highlightingTextView.placeholderString = placeholder
@@ -213,16 +239,18 @@ struct SearchQueryTextField: NSViewRepresentable {
         var onSubmit: (() -> Void)?
         var onFocusChange: ((Bool) -> Void)?
         var highlightsNoQueries: Bool
+        let grammar: SearchAutocompleteGrammar
         weak var textView: NSTextView?
         let autocompleteController = SearchAutocompleteController()
         private let baseFont = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
         private var lastAppliedFocusRequest: UUID?
 
-        init(text: Binding<String>, onSubmit: (() -> Void)?, onFocusChange: ((Bool) -> Void)?, highlightsNoQueries: Bool) {
+        init(text: Binding<String>, onSubmit: (() -> Void)?, onFocusChange: ((Bool) -> Void)?, highlightsNoQueries: Bool, grammar: SearchAutocompleteGrammar) {
             _text = text
             self.onSubmit = onSubmit
             self.onFocusChange = onFocusChange
             self.highlightsNoQueries = highlightsNoQueries
+            self.grammar = grammar
         }
 
         func textDidChange(_ notification: Notification) {
@@ -239,7 +267,12 @@ struct SearchQueryTextField: NSViewRepresentable {
         func applySyntaxHighlighting() {
             guard let textView, let textStorage = textView.textStorage else { return }
             let selectedRanges = textView.selectedRanges
-            applySearchQueryHighlighting(to: textStorage, baseFont: baseFont, highlightsNoQueries: highlightsNoQueries)
+            switch grammar {
+            case .search:
+                applySearchQueryHighlighting(to: textStorage, baseFont: baseFont, highlightsNoQueries: highlightsNoQueries)
+            case .fieldFilter:
+                applyFieldFilterHighlighting(to: textStorage, baseFont: baseFont)
+            }
             textView.selectedRanges = selectedRanges
         }
 

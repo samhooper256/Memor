@@ -171,6 +171,11 @@ struct MemorApp: App {
         }
         .windowResizability(.contentSize)
 
+        Window("Field Filter Help", id: "graph-field-filter-help") {
+            GraphFieldFilterHelpWindowView()
+        }
+        .windowResizability(.contentSize)
+
         Window("Edit Global HTML", id: "global-html-editor") {
             GlobalCodeEditorWindowView(
                 appDatabase: appDatabase,

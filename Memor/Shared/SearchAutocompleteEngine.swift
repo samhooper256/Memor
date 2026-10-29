@@ -18,16 +18,27 @@ nonisolated enum SearchAutocompleteKind: Equatable {
     case office          // office:
     case queryTypeType   // qt:<here>:…  — the type argument
     case queryTypeName   // qt:Type:<here> — the query-type argument
+    case fieldFilterType   // field filter: <here>:…  — the type
+    case fieldFilterField  // field filter: Type:<here> — the field
 
     /// Plural noun for the popup's count header.
     var noun: String {
         switch self {
         case .collection: return "collections"
-        case .type, .queryTypeType: return "types"
+        case .type, .queryTypeType, .fieldFilterType: return "types"
         case .office: return "offices"
         case .queryTypeName: return "query types"
+        case .fieldFilterField: return "fields"
         }
     }
+}
+
+/// Which little language a field holds.
+nonisolated enum SearchAutocompleteGrammar {
+    /// The search language: keyword-prefixed components (`col:`, `qt:`, …).
+    case search
+    /// The Graph tab's field filter: every component is `Type:Field`.
+    case fieldFilter
 }
 
 nonisolated struct SearchAutocompleteContext: Equatable {
@@ -44,10 +55,12 @@ nonisolated struct SearchAutocompleteContext: Equatable {
     let anchorLocation: Int
     /// Quote-stripped text between the anchor and the caret — the filter text.
     let typedText: String
-    /// qt: only — the type argument as typed (quote-stripped); "" otherwise.
+    /// qt: and the field filter — the type argument as typed (quote-stripped);
+    /// "" otherwise.
     let queryTypeTypeArgument: String
-    /// qt: only — the text after the second colon (quote-stripped), whether or
-    /// not the caret is in it; "" when there is no second colon.
+    /// qt: and the field filter — the text after the type's colon
+    /// (quote-stripped), whether or not the caret is in it; "" when there is
+    /// no such colon.
     let queryTypeNameArgument: String
 }
 
@@ -94,13 +107,20 @@ nonisolated enum SearchAutocompleteEngine {
     private static let colon: UInt16 = 0x3A
 
     /// The completable argument at `caretLocation` (a UTF-16 offset), or nil
-    /// when the caret is not after the colon of a `col:`/`collection:`/
-    /// `type:`/`office:`/`qt:` component.
-    static func context(in text: String, caretLocation: Int) -> SearchAutocompleteContext? {
+    /// when there is none: in the search grammar, when the caret is not after
+    /// the colon of a `col:`/`collection:`/`type:`/`office:`/`qt:` component;
+    /// in the field-filter grammar, when the caret is between components.
+    static func context(in text: String, caretLocation: Int, grammar: SearchAutocompleteGrammar = .search) -> SearchAutocompleteContext? {
         guard let token = tokens(in: text).first(where: {
             $0.sourceStart <= caretLocation && caretLocation <= $0.sourceEnd
         }) else { return nil }
+        switch grammar {
+        case .search: return searchContext(token: token, caretLocation: caretLocation)
+        case .fieldFilter: return fieldFilterContext(token: token, caretLocation: caretLocation)
+        }
+    }
 
+    private static func searchContext(token: Token, caretLocation: Int) -> SearchAutocompleteContext? {
         let content = token.content
         guard let colonIndex = content.firstIndex(of: colon), colonIndex > 0 else { return nil }
         func substring(_ range: Range<Int>) -> String {
@@ -151,6 +171,42 @@ nonisolated enum SearchAutocompleteEngine {
             typedText: substring(argumentStart..<contentCaret),
             queryTypeTypeArgument: "",
             queryTypeNameArgument: ""
+        )
+    }
+
+    /// Field-filter grammar: every component is `Type:Field`, no keyword.
+    /// Before the colon — or with no colon yet — the type is being typed (the
+    /// popup anchors at the component's first character); after it, the field
+    /// (anchored just after the colon).
+    private static func fieldFilterContext(token: Token, caretLocation: Int) -> SearchAutocompleteContext? {
+        let content = token.content
+        func substring(_ range: Range<Int>) -> String {
+            String(decoding: content[range], as: UTF16.self)
+        }
+        let contentCaret = token.contentSourceOffsets.firstIndex { $0 >= caretLocation } ?? content.count
+        let componentRange = NSRange(location: token.sourceStart, length: token.sourceEnd - token.sourceStart)
+        let colonIndex = content.firstIndex(of: colon)
+
+        if let colonIndex, contentCaret > colonIndex {
+            let fieldStart = colonIndex + 1
+            return SearchAutocompleteContext(
+                kind: .fieldFilterField,
+                keyword: "",
+                componentRange: componentRange,
+                anchorLocation: token.contentSourceOffsets[colonIndex] + 1,
+                typedText: substring(fieldStart..<contentCaret),
+                queryTypeTypeArgument: substring(0..<colonIndex),
+                queryTypeNameArgument: substring(fieldStart..<content.count)
+            )
+        }
+        return SearchAutocompleteContext(
+            kind: .fieldFilterType,
+            keyword: "",
+            componentRange: componentRange,
+            anchorLocation: token.sourceStart,
+            typedText: substring(0..<contentCaret),
+            queryTypeTypeArgument: substring(0..<(colonIndex ?? content.count)),
+            queryTypeNameArgument: colonIndex.map { substring(($0 + 1)..<content.count) } ?? ""
         )
     }
 
@@ -236,6 +292,15 @@ nonisolated enum SearchAutocompleteEngine {
             caretStaysInsideQuotes = true
         case .queryTypeName:
             body = "\(context.keyword):\(context.queryTypeTypeArgument):\(value)"
+            caretOffset = body.utf16.count
+            caretStaysInsideQuotes = false
+        case .fieldFilterType:
+            let head = "\(value):"
+            body = head + context.queryTypeNameArgument
+            caretOffset = head.utf16.count
+            caretStaysInsideQuotes = true
+        case .fieldFilterField:
+            body = "\(context.queryTypeTypeArgument):\(value)"
             caretOffset = body.utf16.count
             caretStaysInsideQuotes = false
         }
