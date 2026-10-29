@@ -155,7 +155,9 @@ private struct GraphWebView: NSViewRepresentable {
         }
     }
 
-    // Force-directed graph with pan/zoom and hover tooltips
+    // Force-directed graph with pan/zoom and hover tooltips. The layout is a
+    // Barnes–Hut force simulation run in time-sliced frames (see the script's
+    // "layout" block, which a scratch jsc harness can extract and exercise).
     private static let graphHTML = """
         <!DOCTYPE html>
         <html>
@@ -192,10 +194,15 @@ private struct GraphWebView: NSViewRepresentable {
         var R = 14;       // node radius (world units)
         var ARROW = 9;    // arrowhead size
 
-        var nodes = [], edges = [], nodeMap = new Map();
+        // Node metadata ({id, label, isSource}) by index; positions,
+        // velocities and forces in typed arrays so the hot loops never touch
+        // objects. Edges are index pairs.
+        var nodes = [], N = 0;
+        var X, Y, VX, VY, FX, FY;
+        var EF, ET, E = 0;
         var tx = 0, ty = 0, sc = 1;
         var panning = false, px0 = 0, py0 = 0, ptx = 0, pty = 0;
-        var hovered = null;
+        var hovered = -1;
 
         function resize() {
             DPR = window.devicePixelRatio || 1;
@@ -209,77 +216,206 @@ private struct GraphWebView: NSViewRepresentable {
 
         function setGraphData(ns, es) {
             tip.style.display = 'none';
-            hovered = null;
-            var spread = Math.max(200, Math.sqrt(ns.length) * 60);
-            nodes = ns.map(function(n) {
-                return { id: n.id, label: n.label, isSource: n.isSource,
-                         x: (Math.random() - 0.5) * spread,
-                         y: (Math.random() - 0.5) * spread,
-                         vx: 0, vy: 0 };
-            });
-            edges = es;
-            nodeMap = new Map(nodes.map(function(n) { return [n.id, n]; }));
+            hovered = -1;
+            N = ns.length;
+            nodes = ns.map(function(n) { return { id: n.id, label: n.label, isSource: n.isSource }; });
+            X = new Float64Array(N); Y = new Float64Array(N);
+            VX = new Float64Array(N); VY = new Float64Array(N);
+            FX = new Float64Array(N); FY = new Float64Array(N);
+            var spread = Math.max(200, Math.sqrt(N) * 60);
+            var indexByID = new Map();
+            for (var i = 0; i < N; i++) {
+                X[i] = (Math.random() - 0.5) * spread;
+                Y[i] = (Math.random() - 0.5) * spread;
+                indexByID.set(nodes[i].id, i);
+            }
+            var from = [], to = [];
+            for (var k = 0; k < es.length; k++) {
+                var a = indexByID.get(es[k].from), b = indexByID.get(es[k].to);
+                if (a === undefined || b === undefined) continue;
+                from.push(a); to.push(b);
+            }
+            E = from.length;
+            EF = Int32Array.from(from); ET = Int32Array.from(to);
             tx = 0; ty = 0; sc = 1;
-            simulate();
-            draw();
+            startSimulation();
         }
 
-        function simulate() {
-            var N = nodes.length;
-            if (N === 0) return;
-            var steps = Math.min(700, 300 + N * 2);
-            for (var i = 0; i < steps; i++) {
-                tick(Math.max(0.01, 0.5 * Math.pow(0.985, i)));
+        // ---- layout begin (DOM-free: a scratch jsc harness extracts this block) ----
+        // The force model: pairwise repulsion 2500/(d²+1), springs along edges
+        // toward 100 units (k 0.12), gravity toward the centroid (0.04), 0.75
+        // damping, per-step force scale alpha. Repulsion goes through a
+        // Barnes–Hut quadtree — a cell far enough away (width/distance < θ)
+        // acts as one body at its centre of mass — so a step is O(N log N)
+        // instead of O(N²). The tree lives in flat typed arrays rebuilt each
+        // step: cell k has children QC[4k..4k+3] (-1 = none), mass QM[k],
+        // centre of mass (QMX, QMY) (sums while building, averaged after),
+        // leaf point QP[k] (-1 = internal), half-width QS[k], centre (QCX, QCY).
+        var MAX_DEPTH = 20, THETA2 = 0.85 * 0.85;
+        var QC, QM, QMX, QMY, QP, QS, QCX, QCY, qCount = 0, qCap = 0;
+        var stack = new Int32Array(4 * (MAX_DEPTH + 2) * 4);
+
+        function ensureTreeCapacity(cap) {
+            if (cap <= qCap) return;
+            qCap = cap;
+            QC = new Int32Array(4 * cap);
+            QM = new Float64Array(cap); QMX = new Float64Array(cap); QMY = new Float64Array(cap);
+            QP = new Int32Array(cap); QS = new Float64Array(cap);
+            QCX = new Float64Array(cap); QCY = new Float64Array(cap);
+        }
+
+        function newCell(cx, cy, half) {
+            var k = qCount++, b = 4 * k;
+            QC[b] = -1; QC[b+1] = -1; QC[b+2] = -1; QC[b+3] = -1;
+            QM[k] = 0; QMX[k] = 0; QMY[k] = 0; QP[k] = -1;
+            QS[k] = half; QCX[k] = cx; QCY[k] = cy;
+            return k;
+        }
+
+        function buildTree() {
+            ensureTreeCapacity(8 * N + 64);
+            qCount = 0;
+            var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            for (var i = 0; i < N; i++) {
+                if (X[i] < minX) minX = X[i];
+                if (X[i] > maxX) maxX = X[i];
+                if (Y[i] < minY) minY = Y[i];
+                if (Y[i] > maxY) maxY = Y[i];
             }
+            var half = Math.max(maxX - minX, maxY - minY) / 2 + 1;
+            var root = newCell((minX + maxX) / 2, (minY + maxY) / 2, half);
+            for (var p = 0; p < N; p++) insertPoint(root, p);
+            for (var k = 0; k < qCount; k++) {
+                if (QM[k] > 0) { QMX[k] /= QM[k]; QMY[k] /= QM[k]; }
+            }
+            return root;
         }
 
-        function tick(alpha) {
-            var N = nodes.length;
-            var i, j, n, e, dx, dy, d, f, a, b;
-
-            for (i = 0; i < N; i++) { nodes[i].fx = 0; nodes[i].fy = 0; }
-
-            // Repulsion
-            for (i = 0; i < N; i++) {
-                for (j = i + 1; j < N; j++) {
-                    dx = nodes[j].x - nodes[i].x;
-                    dy = nodes[j].y - nodes[i].y;
-                    var d2 = dx*dx + dy*dy + 1;
-                    f = 2500 / d2;
-                    d = Math.sqrt(d2);
-                    nodes[i].fx -= f*dx/d;  nodes[i].fy -= f*dy/d;
-                    nodes[j].fx += f*dx/d;  nodes[j].fy += f*dy/d;
+        function insertPoint(root, p) {
+            var x = X[p], y = Y[p], k = root, depth = 0;
+            while (true) {
+                QM[k] += 1; QMX[k] += x; QMY[k] += y;
+                if (QM[k] === 1) { QP[k] = p; return; }   // was empty: p lives here
+                if (QP[k] !== -1) {
+                    // A leaf already holding a point: move that point down a
+                    // level, then keep descending with p. At max depth (or
+                    // out of cells) the points stay aggregated in this cell.
+                    if (depth >= MAX_DEPTH || qCount + 2 > qCap) return;
+                    var q = QP[k]; QP[k] = -1;
+                    var cq = (X[q] >= QCX[k] ? 1 : 0) | (Y[q] >= QCY[k] ? 2 : 0);
+                    var hq = QS[k] / 2;
+                    var c = newCell(QCX[k] + ((cq & 1) ? hq : -hq), QCY[k] + ((cq & 2) ? hq : -hq), hq);
+                    QC[4*k + cq] = c;
+                    QP[c] = q; QM[c] = QM[k] - 1; QMX[c] = QMX[k] - x; QMY[c] = QMY[k] - y;
                 }
+                var ci = (x >= QCX[k] ? 1 : 0) | (y >= QCY[k] ? 2 : 0);
+                var child = QC[4*k + ci];
+                if (child === -1) {
+                    if (qCount + 1 > qCap) return;   // out of cells: p stays aggregated in k
+                    var h = QS[k] / 2;
+                    child = newCell(QCX[k] + ((ci & 1) ? h : -h), QCY[k] + ((ci & 2) ? h : -h), h);
+                    QC[4*k + ci] = child;
+                    QP[child] = p; QM[child] = 1; QMX[child] = x; QMY[child] = y;
+                    return;
+                }
+                k = child; depth++;
             }
+        }
+
+        function repulsion(root) {
+            for (var i = 0; i < N; i++) {
+                var x = X[i], y = Y[i], fx = 0, fy = 0, sp = 0;
+                stack[sp++] = root;
+                while (sp > 0) {
+                    var k = stack[--sp];
+                    var m = QM[k];
+                    if (m === 0 || (QP[k] === i && m === 1)) continue;
+                    var dx = QMX[k] - x, dy = QMY[k] - y;
+                    var d2 = dx*dx + dy*dy;
+                    var w = QS[k] * 2;
+                    if (QP[k] !== -1 || w*w < THETA2 * d2) {
+                        var f = 2500 * m / (d2 + 1), d = Math.sqrt(d2 + 1);
+                        fx -= f*dx/d; fy -= f*dy/d;
+                    } else {
+                        var b = 4*k;
+                        if (QC[b]   !== -1) stack[sp++] = QC[b];
+                        if (QC[b+1] !== -1) stack[sp++] = QC[b+1];
+                        if (QC[b+2] !== -1) stack[sp++] = QC[b+2];
+                        if (QC[b+3] !== -1) stack[sp++] = QC[b+3];
+                    }
+                }
+                FX[i] += fx; FY[i] += fy;
+            }
+        }
+
+        // One step at force scale `alpha`; returns the largest node movement.
+        function tick(alpha) {
+            if (N === 0) return 0;
+            var i;
+            for (i = 0; i < N; i++) { FX[i] = 0; FY[i] = 0; }
+            if (N > 1) repulsion(buildTree());
 
             // Spring attraction along edges
-            for (i = 0; i < edges.length; i++) {
-                e = edges[i];
-                a = nodeMap.get(e.from); b = nodeMap.get(e.to);
-                if (!a || !b) continue;
-                dx = b.x - a.x; dy = b.y - a.y;
-                d = Math.sqrt(dx*dx + dy*dy) + 0.001;
-                f = (d - 100) * 0.12;
-                a.fx += f*dx/d;  a.fy += f*dy/d;
-                b.fx -= f*dx/d;  b.fy -= f*dy/d;
+            for (i = 0; i < E; i++) {
+                var a = EF[i], b = ET[i];
+                var dx = X[b] - X[a], dy = Y[b] - Y[a];
+                var d = Math.sqrt(dx*dx + dy*dy) + 0.001;
+                var f = (d - 100) * 0.12;
+                FX[a] += f*dx/d; FY[a] += f*dy/d;
+                FX[b] -= f*dx/d; FY[b] -= f*dy/d;
             }
 
-            // Gravity toward centroid
+            // Gravity toward centroid, then integrate
             var cx = 0, cy = 0;
-            for (i = 0; i < N; i++) { cx += nodes[i].x; cy += nodes[i].y; }
+            for (i = 0; i < N; i++) { cx += X[i]; cy += Y[i]; }
             cx /= N; cy /= N;
+            var maxMove = 0;
             for (i = 0; i < N; i++) {
-                nodes[i].fx -= (nodes[i].x - cx) * 0.04;
-                nodes[i].fy -= (nodes[i].y - cy) * 0.04;
+                FX[i] -= (X[i] - cx) * 0.04;
+                FY[i] -= (Y[i] - cy) * 0.04;
+                VX[i] = (VX[i] + FX[i] * alpha) * 0.75;
+                VY[i] = (VY[i] + FY[i] * alpha) * 0.75;
+                X[i] += VX[i]; Y[i] += VY[i];
+                var mv = Math.abs(VX[i]) + Math.abs(VY[i]);
+                if (mv > maxMove) maxMove = mv;
             }
+            return maxMove;
+        }
+        // ---- layout end ----
 
-            // Integrate
-            for (i = 0; i < N; i++) {
-                n = nodes[i];
-                n.vx = (n.vx + n.fx * alpha) * 0.75;
-                n.vy = (n.vy + n.fy * alpha) * 0.75;
-                n.x += n.vx;
-                n.y += n.vy;
+        // Steps run in time-sliced frames that draw as they go: a 30 ms
+        // synchronous slice first (a small graph appears already settled),
+        // then 12 ms per animation frame until the step cap. Pan/zoom/hover
+        // work meanwhile. There is deliberately no "nothing moves any more"
+        // early stop: at the alpha floor the layout keeps drifting slowly, and
+        // a scratch run showed nodes travelling 40–240 more units after every
+        // such cutoff — stopping early freezes a visibly different picture.
+        var simGeneration = 0, simStep = 0, simSteps = 0, rafID = 0;
+
+        function startSimulation() {
+            simGeneration++;
+            var generation = simGeneration;
+            if (rafID) { cancelAnimationFrame(rafID); rafID = 0; }
+            simStep = 0;
+            simSteps = Math.min(700, 300 + N * 2);
+            runSlice(30);
+            draw();
+            if (simStep >= simSteps) return;
+            rafID = requestAnimationFrame(function frame() {
+                if (generation !== simGeneration) return;
+                runSlice(12);
+                draw();
+                rafID = simStep < simSteps ? requestAnimationFrame(frame) : 0;
+            });
+        }
+
+        function runSlice(budgetMs) {
+            var start = performance.now();
+            while (simStep < simSteps) {
+                var alpha = Math.max(0.01, 0.5 * Math.pow(0.985, simStep));
+                tick(alpha);
+                simStep++;
+                if (performance.now() - start > budgetMs) break;
             }
         }
 
@@ -289,70 +425,80 @@ private struct GraphWebView: NSViewRepresentable {
         function hitNode(csx, csy) {
             var wx = (csx * DPR - W()/2 - tx) / sc;
             var wy = (csy * DPR - H()/2 - ty) / sc;
-            for (var i = 0; i < nodes.length; i++) {
-                var n = nodes[i];
-                var dx = n.x - wx, dy = n.y - wy;
-                if (dx*dx + dy*dy <= R*R) return n;
+            for (var i = 0; i < N; i++) {
+                var dx = X[i] - wx, dy = Y[i] - wy;
+                if (dx*dx + dy*dy <= R*R) return i;
             }
-            return null;
+            return -1;
         }
 
+        // Batched: every edge line in one stroke, every arrowhead in one
+        // fill, the nodes in one fill per colour.
         function draw() {
             ctx.clearRect(0, 0, W(), H());
-            if (nodes.length === 0) return;
+            if (N === 0) return;
             ctx.save();
             ctx.translate(W()/2 + tx, H()/2 + ty);
             ctx.scale(sc, sc);
-            for (var i = 0; i < edges.length; i++) {
-                var f = nodeMap.get(edges[i].from), t = nodeMap.get(edges[i].to);
-                if (f && t) drawEdge(f, t);
-            }
-            for (var j = 0; j < nodes.length; j++) {
-                drawNode(nodes[j], nodes[j] === hovered);
-            }
-            ctx.restore();
-        }
 
-        function drawEdge(f, t) {
-            var dx = t.x - f.x, dy = t.y - f.y;
-            var dist = Math.sqrt(dx*dx + dy*dy);
-            if (dist < R*2 + 2) return;
-            var nx = dx/dist, ny = dy/dist;
-            var sx = f.x + nx*R, sy = f.y + ny*R;
-            var ex = t.x - nx*R, ey = t.y - ny*R;
-
-            ctx.beginPath();
-            ctx.moveTo(sx, sy);
-            ctx.lineTo(ex, ey);
-            ctx.strokeStyle = 'rgba(120,120,135,0.55)';
-            ctx.lineWidth = 1.3;
-            ctx.stroke();
-
-            var ang = Math.atan2(dy, dx);
+            var i, a, b, dx, dy, dist, nx, ny, ex, ey, ang;
             var aa = 0.42;
-            ctx.beginPath();
-            ctx.moveTo(ex, ey);
-            ctx.lineTo(ex - ARROW*Math.cos(ang - aa), ey - ARROW*Math.sin(ang - aa));
-            ctx.lineTo(ex - ARROW*Math.cos(ang + aa), ey - ARROW*Math.sin(ang + aa));
-            ctx.closePath();
+            ctx.strokeStyle = 'rgba(120,120,135,0.55)';
             ctx.fillStyle = 'rgba(120,120,135,0.55)';
-            ctx.fill();
-        }
-
-        function drawNode(n, hl) {
+            ctx.lineWidth = 1.3;
             ctx.beginPath();
-            ctx.arc(n.x, n.y, R, 0, Math.PI*2);
-            ctx.fillStyle = n.isSource ? '#30D158' : '#0A84FF';
+            for (i = 0; i < E; i++) {
+                a = EF[i]; b = ET[i];
+                dx = X[b] - X[a]; dy = Y[b] - Y[a];
+                dist = Math.sqrt(dx*dx + dy*dy);
+                if (dist < R*2 + 2) continue;
+                nx = dx/dist; ny = dy/dist;
+                ctx.moveTo(X[a] + nx*R, Y[a] + ny*R);
+                ctx.lineTo(X[b] - nx*R, Y[b] - ny*R);
+            }
+            ctx.stroke();
+            ctx.beginPath();
+            for (i = 0; i < E; i++) {
+                a = EF[i]; b = ET[i];
+                dx = X[b] - X[a]; dy = Y[b] - Y[a];
+                dist = Math.sqrt(dx*dx + dy*dy);
+                if (dist < R*2 + 2) continue;
+                nx = dx/dist; ny = dy/dist;
+                ex = X[b] - nx*R; ey = Y[b] - ny*R;
+                ang = Math.atan2(dy, dx);
+                ctx.moveTo(ex, ey);
+                ctx.lineTo(ex - ARROW*Math.cos(ang - aa), ey - ARROW*Math.sin(ang - aa));
+                ctx.lineTo(ex - ARROW*Math.cos(ang + aa), ey - ARROW*Math.sin(ang + aa));
+                ctx.closePath();
+            }
             ctx.fill();
-            if (hl) {
+
+            drawNodes(true, '#30D158');
+            drawNodes(false, '#0A84FF');
+
+            if (hovered >= 0) {
+                ctx.beginPath();
+                ctx.arc(X[hovered], Y[hovered], R, 0, Math.PI*2);
                 ctx.lineWidth = 2.5;
                 ctx.strokeStyle = 'rgba(255,255,255,0.9)';
                 ctx.stroke();
             }
+            ctx.restore();
+        }
+
+        function drawNodes(isSource, color) {
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            for (var i = 0; i < N; i++) {
+                if (nodes[i].isSource !== isSource) continue;
+                ctx.moveTo(X[i] + R, Y[i]);
+                ctx.arc(X[i], Y[i], R, 0, Math.PI*2);
+            }
+            ctx.fill();
         }
 
         canvas.addEventListener('mousedown', function(e) {
-            if (!hitNode(e.clientX, e.clientY)) {
+            if (hitNode(e.clientX, e.clientY) < 0) {
                 panning = true;
                 px0 = e.clientX * DPR; py0 = e.clientY * DPR;
                 ptx = tx; pty = ty;
@@ -369,9 +515,9 @@ private struct GraphWebView: NSViewRepresentable {
             }
             var n = hitNode(e.clientX, e.clientY);
             if (n !== hovered) { hovered = n; draw(); }
-            if (n) {
+            if (n >= 0) {
                 tip.style.display = 'block';
-                tip.textContent = n.label || '(no label)';
+                tip.textContent = nodes[n].label || '(no label)';
                 tip.style.left = (e.clientX + 14) + 'px';
                 tip.style.top  = (e.clientY -  8) + 'px';
                 canvas.style.cursor = 'pointer';
@@ -387,7 +533,7 @@ private struct GraphWebView: NSViewRepresentable {
         });
 
         canvas.addEventListener('mouseleave', function() {
-            hovered = null;
+            hovered = -1;
             tip.style.display = 'none';
             draw();
         });
