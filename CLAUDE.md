@@ -33,7 +33,7 @@ Memor/
     PersonModels.swift              Person types: PersonRef (instance-or-bare-name), slot drafts, PersonQueryKind, PersonSaveError conflicts, the save change set
   Pages/
     StacksPageView.swift            Stacks list + detail pages, stack cards; the list is keyboard-navigable via `ListKeyNavigationHandler` (one row always highlighted with a blue border — the first by default, kept across reloads while its stack survives; ↑/↓ wrap; Return starts Study on it); each row's right-click menu has "Rename…" (the shared RenamePopover, row-scoped via scopedPopoverItem; non-empty name is the only rule)
-    InstancesPageView.swift         Instances sidebar (types pinnable like the editor's collections: pin left of the type icon, pinned first) + type-instances table + toast + key commands
+    InstancesPageView.swift         Instances sidebar (hand-built rows, not a List — the selected type is a filled accent-blue row even though focus lives in the search box, which an unfocused List can't do; types pinnable like the editor's collections: pin left of the type icon, pinned first; ⌘↓/⌘↑ move the selection with wraparound via `ShortcutActionsKeyHandler`; the search text survives type changes, a pending debounce is flushed) + type-instances table + toast + key commands
     CollectionsPageView.swift       Collections list + detail page; each list row's right-click menu has "Rename…" (the shared RenamePopover, row-scoped via scopedPopoverItem; same name rules as Add Collection)
     GraphPageView.swift             Graph tab + WKWebView wrapper (search box focused on every visit, deferred 50 ms like the Collections page's)
     TypeDetailPageView.swift        Type detail: fields section, query-type editors (co-located with TypesPageView)
@@ -191,7 +191,7 @@ The shortcut system lives in `Memor/Shortcuts/`. **Customizable** shortcuts are 
 1. Add a case to `ShortcutAction` in `Shortcuts/ShortcutAction.swift` with `title`, `category`, and `default: KeyBinding`.
 2. Apply it to the SwiftUI view: `.shortcut(.myAction, settings: shortcutSettings)` (replaces `.keyboardShortcut(...)`).
 3. Display it in button text: `ShortcutLabel(title: "Save", action: .myAction)` or interpolate `shortcutSettings.binding(for: .myAction).displayString`.
-4. For `NSEvent.addLocalMonitorForEvents` handlers, store a `ShortcutSettings` ref on the NSView and call `settings.binding(for: .myAction).matches(event)`. See `StudyModeKeyCommandHandler` in Study/StudyModeView.swift for a reference implementation.
+4. For `NSEvent.addLocalMonitorForEvents` handlers, store a `ShortcutSettings` ref on the NSView and call `settings.binding(for: .myAction).matches(event)`. See `StudyModeKeyCommandHandler` in Study/StudyModeView.swift for a reference implementation — or, for a view that just needs "run this when that action's key is pressed in my window", drop a `ShortcutActionsKeyHandler` (Shortcuts/) in a `.background` with `[(action, handler)]` pairs, as the Instances tab's ⌘↑/⌘↓ do.
 5. Every scene that hosts the view must inject `.environmentObject(shortcutSettings)` (see MemorApp.swift).
 6. A Study-category action that also applies in the Query Preview window (`.studyEditInstance`, `.studyPlayAudio`) must be matched in BOTH monitors — `StudyModeKeyCommandHandler` (and stay in its `ownedActions` auto-repeat swallow list) and `QueryPreviewKeyHandler` (which has no repeat pass; guard `event.isARepeat` inline).
 
@@ -250,6 +250,7 @@ navigates to the linked instance).
 | Add Instance | ⌘N |
 | Open Search (preserves last mode) | ⌘⇧S |
 | Open Search in Queries mode | ⌘⌥S |
+| Instances tab — Select Next / Previous Type (sidebar selection, wraps; the search text is kept) | ⌘↓ / ⌘↑ |
 | Search — switch mode (Instances / Queries / Points & Boundaries) | Shift+Tab |
 | Settings | ⌘, |
 | Study — reveal / Good | Space |

@@ -9,6 +9,7 @@ import SwiftUI
 
 enum ShortcutCategory: String, CaseIterable, Identifiable {
     case global
+    case instances
     case study
     case editor
     case types
@@ -19,6 +20,7 @@ enum ShortcutCategory: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .global: return "Global"
+        case .instances: return "Instances Tab"
         case .study: return "Study Mode"
         case .editor: return "Instance Editor"
         case .types: return "Types Page"
@@ -40,6 +42,10 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
     case openSettings
     case findInList
     case toggleDeveloperMode
+
+    // Instances tab
+    case instancesSelectNextType
+    case instancesSelectPreviousType
 
     // Study mode
     case studyRevealOrGood
@@ -90,6 +96,8 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         case .openSettings: return "Open Settings"
         case .findInList: return "Find in List"
         case .toggleDeveloperMode: return "Toggle Developer Mode"
+        case .instancesSelectNextType: return "Select Next Type"
+        case .instancesSelectPreviousType: return "Select Previous Type"
         case .studyRevealOrGood: return "Reveal / Rate Good"
         case .studyRatingAgain: return "Rate Again"
         case .studyRatingHard: return "Rate Hard"
@@ -127,6 +135,8 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
              .openAddInstance, .openSearchInstances, .openSearchQueries, .openSettings, .findInList,
              .toggleDeveloperMode:
             return .global
+        case .instancesSelectNextType, .instancesSelectPreviousType:
+            return .instances
         case .studyRevealOrGood, .studyRatingAgain, .studyRatingHard, .studyRatingGood,
              .studyRatingEasy, .studyUndo, .studyEditInstance, .studyEditType,
              .studyDuplicateInstance, .studyPlayAudio:
@@ -156,6 +166,9 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         case .openSettings: return KeyBinding(key: "Comma", modifiers: .command)
         case .findInList: return KeyBinding(key: "F", modifiers: .command)
         case .toggleDeveloperMode: return KeyBinding(key: "D", modifiers: [.command, .shift])
+        // Move the Instances sidebar's type selection (wrapping at both ends).
+        case .instancesSelectNextType: return KeyBinding(key: "DownArrow", modifiers: .command)
+        case .instancesSelectPreviousType: return KeyBinding(key: "UpArrow", modifiers: .command)
         case .studyRevealOrGood: return KeyBinding(key: "Space")
         case .studyRatingAgain: return KeyBinding(key: "1")
         case .studyRatingHard: return KeyBinding(key: "2")

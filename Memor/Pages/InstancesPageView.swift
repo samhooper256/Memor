@@ -13,6 +13,7 @@ struct InstancesPageView: View {
     @EnvironmentObject private var addInstanceWindowState: AddInstanceWindowState
     @EnvironmentObject private var editInstanceWindowState: EditInstanceWindowState
     @EnvironmentObject private var navigationState: AppNavigationState
+    @EnvironmentObject private var shortcutSettings: ShortcutSettings
 
     let appDatabase: AppDatabase
     @ObservedObject var pageState: InstancesPageState
@@ -49,24 +50,8 @@ struct InstancesPageView: View {
             }
 
             HSplitView {
-                List(types, selection: $selectedTypeID) { type in
-                    InstancesSidebarRowView(
-                        type: type,
-                        onEditType: {
-                            navigationState.navigateToTypeDetail(typeID: type.id)
-                        },
-                        onAddInstance: {
-                            addInstanceWindowState.requestOpen(preselectedTypeID: type.id)
-                            openWindow(id: "add-instance")
-                        },
-                        onTogglePin: {
-                            Task { await togglePin(for: type) }
-                        }
-                    )
-                        .tag(Optional(type.id))
-                }
-                .listStyle(.sidebar)
-                .frame(minWidth: 180, idealWidth: 220, maxWidth: 260)
+                typeSidebar
+                    .frame(minWidth: 180, idealWidth: 220, maxWidth: 260)
 
                 Group {
                     if let errorMessage {
@@ -163,6 +148,15 @@ struct InstancesPageView: View {
                 onCommandF: focusSearchField
             )
         }
+        .background {
+            ShortcutActionsKeyHandler(
+                shortcutSettings: shortcutSettings,
+                handlers: [
+                    (.instancesSelectNextType, { moveTypeSelection(by: 1) }),
+                    (.instancesSelectPreviousType, { moveTypeSelection(by: -1) }),
+                ]
+            )
+        }
         .task {
             selectedTypeID = pageState.selectedTypeID
             await loadTypes()
@@ -175,9 +169,10 @@ struct InstancesPageView: View {
         }
         .onChange(of: selectedTypeID) { _, newValue in
             pageState.selectedTypeID = newValue
+            // The search text is kept across type changes; flush a pending
+            // debounce so the new type loads with what is in the box now.
             debounceTask?.cancel()
-            searchQuery = ""
-            debouncedSearchQuery = ""
+            debouncedSearchQuery = searchQuery
             searchErrorMessage = nil
             if newValue != nil {
                 searchFocusRequest = UUID()
@@ -257,6 +252,52 @@ struct InstancesPageView: View {
         } message: {
             Text("Leave blank for no max interval.")
         }
+    }
+
+    // Hand-built rows, not a List: the selected type must read as a filled
+    // accent-blue row even though focus lives in the search box (an unfocused
+    // List only ever shows the gray selection).
+    private var typeSidebar: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(types) { type in
+                        InstancesSidebarRowView(
+                            type: type,
+                            isSelected: type.id == selectedTypeID,
+                            onSelect: { selectedTypeID = type.id },
+                            onEditType: {
+                                navigationState.navigateToTypeDetail(typeID: type.id)
+                            },
+                            onAddInstance: {
+                                addInstanceWindowState.requestOpen(preselectedTypeID: type.id)
+                                openWindow(id: "add-instance")
+                            },
+                            onTogglePin: {
+                                Task { await togglePin(for: type) }
+                            }
+                        )
+                        .id(type.id)
+                    }
+                }
+                .padding(8)
+            }
+            .onChange(of: selectedTypeID) { _, id in
+                guard let id else { return }
+                proxy.scrollTo(id, anchor: .center)
+            }
+        }
+    }
+
+    // Moves the type selection down (+1) or up (-1) the sidebar, wrapping at
+    // both ends (the Select Next/Previous Type shortcuts).
+    private func moveTypeSelection(by delta: Int) {
+        guard !types.isEmpty else { return }
+        guard let current = types.firstIndex(where: { $0.id == selectedTypeID }) else {
+            selectedTypeID = types.first?.id
+            return
+        }
+        selectedTypeID = types[((current + delta) % types.count + types.count) % types.count].id
     }
 
     private var selectedType: FlashcardType? {
@@ -622,6 +663,8 @@ struct InstancesPageView: View {
 private struct InstancesSidebarRowView: View {
     @EnvironmentObject private var shortcutSettings: ShortcutSettings
     let type: FlashcardType
+    let isSelected: Bool
+    let onSelect: () -> Void
     let onEditType: () -> Void
     let onAddInstance: () -> Void
     let onTogglePin: () -> Void
@@ -631,6 +674,13 @@ private struct InstancesSidebarRowView: View {
     @State private var isAddButtonHovered = false
     @State private var isPinHovered = false
 
+    // On the filled selection everything reads in white, like a focused
+    // sidebar's row.
+    private var pinColor: Color {
+        if isSelected { return type.isPinned ? .white : .white.opacity(0.5) }
+        return type.isPinned ? .primary : Color.secondary.opacity(0.5)
+    }
+
     var body: some View {
         HStack(spacing: 8) {
             // Same pin as the editor's collection rows: always visible, faint
@@ -638,7 +688,7 @@ private struct InstancesSidebarRowView: View {
             Button(action: onTogglePin) {
                 Image(systemName: "pin.fill")
                     .font(.system(size: 10))
-                    .foregroundStyle(type.isPinned ? Color.primary : Color.secondary.opacity(0.5))
+                    .foregroundStyle(pinColor)
                     .frame(width: 20, height: 20)
                     .background(
                         RoundedRectangle(cornerRadius: 4)
@@ -652,16 +702,17 @@ private struct InstancesSidebarRowView: View {
             .help(type.isPinned ? "Unpin" : "Pin to the top")
 
             Image(systemName: type.kindIcon.name)
-                .foregroundStyle(type.kindIcon.color)
+                .foregroundStyle(isSelected ? Color.white : type.kindIcon.color)
 
             Text(type.name)
+                .foregroundStyle(isSelected ? Color.white : Color.primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if isHovered {
                 Button(action: onEditType) {
                     Image(systemName: "pencil")
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(isSelected ? Color.white : Color.primary)
                         .padding(5)
                         .background(
                             RoundedRectangle(cornerRadius: 6)
@@ -677,7 +728,7 @@ private struct InstancesSidebarRowView: View {
                 Button(action: onAddInstance) {
                     Image(systemName: "plus")
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(isSelected ? Color.white : Color.accentColor)
                         .padding(5)
                         .background(
                             RoundedRectangle(cornerRadius: 6)
@@ -691,7 +742,16 @@ private struct InstancesSidebarRowView: View {
                 .help("Add Instance (\(shortcutSettings.binding(for: .openAddInstance).displayString))")
             }
         }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isSelected
+                    ? Color.accentColor
+                    : (isHovered ? Color.secondary.opacity(0.08) : Color.clear))
+        )
         .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
         .onHover { hovering in
             isHovered = hovering
             if !hovering {
