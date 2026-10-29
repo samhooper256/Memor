@@ -313,6 +313,13 @@ private struct GraphWebView: NSViewRepresentable {
             }
             E = from.length;
             EF = Int32Array.from(from); ET = Int32Array.from(to);
+            // Colour kind: 2 = has an incoming arrow (blue), 1 = outgoing
+            // arrows only (green), 0 = no arrows at all (red).
+            var linked = new Uint8Array(N);
+            for (var m = 0; m < E; m++) { linked[EF[m]] = 1; linked[ET[m]] = 1; }
+            for (var j = 0; j < N; j++) {
+                nodes[j].kind = nodes[j].isSource ? (linked[j] ? 1 : 0) : 2;
+            }
             tx = 0; ty = 0; sc = 1;
             startSimulation();
         }
@@ -563,8 +570,9 @@ private struct GraphWebView: NSViewRepresentable {
             }
             ctx.fill();
 
-            drawNodes(true, '#30D158', r);
-            drawNodes(false, '#0A84FF', r);
+            drawNodes(0, '#FF453A', r);
+            drawNodes(1, '#30D158', r);
+            drawNodes(2, '#0A84FF', r);
 
             if (hovered >= 0) {
                 ctx.beginPath();
@@ -576,11 +584,11 @@ private struct GraphWebView: NSViewRepresentable {
             ctx.restore();
         }
 
-        function drawNodes(isSource, color, r) {
+        function drawNodes(kind, color, r) {
             ctx.fillStyle = color;
             ctx.beginPath();
             for (var i = 0; i < N; i++) {
-                if (nodes[i].isSource !== isSource) continue;
+                if (nodes[i].kind !== kind) continue;
                 ctx.moveTo(X[i] + r, Y[i]);
                 ctx.arc(X[i], Y[i], r, 0, Math.PI*2);
             }
