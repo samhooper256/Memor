@@ -289,6 +289,7 @@ private struct GraphWebView: NSViewRepresentable {
         let config = makeLocalContentWebViewConfiguration()
         config.userContentController.add(context.coordinator, name: Coordinator.progressMessageName)
         config.userContentController.add(context.coordinator, name: Coordinator.contextMenuMessageName)
+        config.userContentController.add(context.coordinator, name: Coordinator.doubleClickMessageName)
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
         webView.navigationDelegate = context.coordinator
@@ -310,11 +311,13 @@ private struct GraphWebView: NSViewRepresentable {
         // The user content controller retains its handlers; drop ours.
         webView.configuration.userContentController.removeScriptMessageHandler(forName: Coordinator.progressMessageName)
         webView.configuration.userContentController.removeScriptMessageHandler(forName: Coordinator.contextMenuMessageName)
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: Coordinator.doubleClickMessageName)
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         static let progressMessageName = "layoutProgress"
         static let contextMenuMessageName = "nodeContextMenu"
+        static let doubleClickMessageName = "nodeDoubleClick"
         var onLayoutProgress: ((Double) -> Void)?
         var onEditInstance: ((Int64) -> Void)?
 
@@ -331,6 +334,11 @@ private struct GraphWebView: NSViewRepresentable {
                     x: body["x"] as? Double ?? 0,
                     y: body["y"] as? Double ?? 0
                 ))
+            case Self.doubleClickMessageName:
+                // Double-clicking a node opens its editor directly — the same
+                // action as the context menu's Edit Instance.
+                guard let instanceID = (body["id"] as? NSNumber)?.int64Value else { return }
+                onEditInstance?(instanceID)
             default:
                 break
             }
@@ -1440,6 +1448,20 @@ private struct GraphWebView: NSViewRepresentable {
             var handlers = window.webkit && window.webkit.messageHandlers;
             if (handlers && handlers.nodeContextMenu) {
                 handlers.nodeContextMenu.postMessage({ id: nodes[n].id, x: e.clientX, y: e.clientY });
+            }
+        });
+
+        // Double-click on a node: the host opens its Edit Instance window.
+        // (A mousedown on a node never starts a pan, so the two clicks don't
+        // move the graph; a double-click on empty space just pans as usual.)
+        canvas.addEventListener('dblclick', function(e) {
+            if (e.button !== 0) return;
+            var n = hitNode(e.clientX, e.clientY);
+            if (n < 0) return;
+            e.preventDefault();
+            var handlers = window.webkit && window.webkit.messageHandlers;
+            if (handlers && handlers.nodeDoubleClick) {
+                handlers.nodeDoubleClick.postMessage({ id: nodes[n].id });
             }
         });
 
