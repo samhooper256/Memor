@@ -232,7 +232,7 @@ private struct GraphWebView: NSViewRepresentable {
         // the zoomed world space they are divided by the zoom factor, so nodes
         // shrink in world terms as the user zooms in and grow as he zooms out.
         var R = 14;       // node radius
-        var ARROW = 9;    // arrowhead size
+        var ARROW = 14;   // arrowhead length (a node radius)
 
         // Node metadata ({id, label, isSource}) by index; positions,
         // velocities and forces in typed arrays so the hot loops never touch
