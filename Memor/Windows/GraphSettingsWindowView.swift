@@ -163,8 +163,9 @@ struct GraphSettingsWindowView: View {
     }
 }
 
-/// One role's row: the title, the current colour's swatch, and a menu of the
-/// palette. Each row owns its UserDefaults binding.
+/// One role's row: the title and a popup of swatches — the chosen colour's
+/// circle is the popup itself, no colour names. Each row owns its
+/// UserDefaults binding.
 private struct GraphNodeColorRow: View {
     let role: GraphNodeRole
     @AppStorage private var color: GraphNodeColor
@@ -176,25 +177,15 @@ private struct GraphNodeColorRow: View {
 
     var body: some View {
         LabeledContent(role.title) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(color.color)
-                    .frame(width: 14, height: 14)
-                    .overlay(Circle().stroke(Color.black.opacity(0.25), lineWidth: 1))
-                Picker("", selection: $color) {
-                    ForEach(GraphNodeColor.allCases) { option in
-                        Label {
-                            Text(option.title)
-                        } icon: {
-                            Image(nsImage: option.swatchImage)
-                        }
+            Picker("", selection: $color) {
+                ForEach(GraphNodeColor.allCases) { option in
+                    Image(nsImage: option.swatchImage)
                         .tag(option)
-                    }
                 }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .fixedSize()
             }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .fixedSize()
         }
     }
 }
