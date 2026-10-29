@@ -43,13 +43,15 @@ struct GraphPageView: View {
     @State private var isFindPresented = false
     @State private var findText = ""
     @FocusState private var isFindFocused: Bool
-    @State private var searchQuery = ""
+    // The search text, the field filter text and its checkbox persist across
+    // tab switches (the page is rebuilt on every visit) and launches. Only
+    // the inputs are kept — the graph itself is not re-run until Search.
+    @AppStorage("com.sam.Memor.graphSearchQuery") private var searchQuery = ""
     @State private var searchFocusRequest: UUID?
     @State private var fieldFilterFocusRequest: UUID?   // Tab/Shift+Tab swap the two boxes
     // The field filter: typename:fieldname entries; ignored unless enabled.
-    // Deliberately not persisted — off and empty whenever the tab opens.
-    @State private var fieldFilterText = ""
-    @State private var isFieldFilterEnabled = false
+    @AppStorage("com.sam.Memor.graphFieldFilterText") private var fieldFilterText = ""
+    @AppStorage("com.sam.Memor.graphFieldFilterEnabled") private var isFieldFilterEnabled = false
     @State private var graphData: GraphData?
     @State private var errorMessage: String?
     @State private var isSearching = false
