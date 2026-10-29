@@ -228,7 +228,10 @@ private struct GraphWebView: NSViewRepresentable {
         var tip = document.getElementById('tip');
         var DPR = 1;
 
-        var R = 14;       // node radius (world units)
+        // Screen sizes (device pixels), constant across zoom: when drawing in
+        // the zoomed world space they are divided by the zoom factor, so nodes
+        // shrink in world terms as the user zooms in and grow as he zooms out.
+        var R = 14;       // node radius
         var ARROW = 9;    // arrowhead size
 
         // Node metadata ({id, label, isSource}) by index; positions,
@@ -473,9 +476,10 @@ private struct GraphWebView: NSViewRepresentable {
         function hitNode(csx, csy) {
             var wx = (csx * DPR - W()/2 - tx) / sc;
             var wy = (csy * DPR - H()/2 - ty) / sc;
+            var r = R / sc;
             for (var i = 0; i < N; i++) {
                 var dx = X[i] - wx, dy = Y[i] - wy;
-                if (dx*dx + dy*dy <= R*R) return i;
+                if (dx*dx + dy*dy <= r*r) return i;
             }
             return -1;
         }
@@ -489,20 +493,22 @@ private struct GraphWebView: NSViewRepresentable {
             ctx.translate(W()/2 + tx, H()/2 + ty);
             ctx.scale(sc, sc);
 
+            // World-space sizes for this zoom (constant on screen).
+            var r = R / sc, arrow = ARROW / sc, gap = 2 / sc;
             var i, a, b, dx, dy, dist, nx, ny, ex, ey, ang;
             var aa = 0.42;
             ctx.strokeStyle = 'rgba(120,120,135,0.55)';
             ctx.fillStyle = 'rgba(120,120,135,0.55)';
-            ctx.lineWidth = 1.3;
+            ctx.lineWidth = 1.3 / sc;
             ctx.beginPath();
             for (i = 0; i < E; i++) {
                 a = EF[i]; b = ET[i];
                 dx = X[b] - X[a]; dy = Y[b] - Y[a];
                 dist = Math.sqrt(dx*dx + dy*dy);
-                if (dist < R*2 + 2) continue;
+                if (dist < r*2 + gap) continue;
                 nx = dx/dist; ny = dy/dist;
-                ctx.moveTo(X[a] + nx*R, Y[a] + ny*R);
-                ctx.lineTo(X[b] - nx*R, Y[b] - ny*R);
+                ctx.moveTo(X[a] + nx*r, Y[a] + ny*r);
+                ctx.lineTo(X[b] - nx*r, Y[b] - ny*r);
             }
             ctx.stroke();
             ctx.beginPath();
@@ -510,37 +516,37 @@ private struct GraphWebView: NSViewRepresentable {
                 a = EF[i]; b = ET[i];
                 dx = X[b] - X[a]; dy = Y[b] - Y[a];
                 dist = Math.sqrt(dx*dx + dy*dy);
-                if (dist < R*2 + 2) continue;
+                if (dist < r*2 + gap) continue;
                 nx = dx/dist; ny = dy/dist;
-                ex = X[b] - nx*R; ey = Y[b] - ny*R;
+                ex = X[b] - nx*r; ey = Y[b] - ny*r;
                 ang = Math.atan2(dy, dx);
                 ctx.moveTo(ex, ey);
-                ctx.lineTo(ex - ARROW*Math.cos(ang - aa), ey - ARROW*Math.sin(ang - aa));
-                ctx.lineTo(ex - ARROW*Math.cos(ang + aa), ey - ARROW*Math.sin(ang + aa));
+                ctx.lineTo(ex - arrow*Math.cos(ang - aa), ey - arrow*Math.sin(ang - aa));
+                ctx.lineTo(ex - arrow*Math.cos(ang + aa), ey - arrow*Math.sin(ang + aa));
                 ctx.closePath();
             }
             ctx.fill();
 
-            drawNodes(true, '#30D158');
-            drawNodes(false, '#0A84FF');
+            drawNodes(true, '#30D158', r);
+            drawNodes(false, '#0A84FF', r);
 
             if (hovered >= 0) {
                 ctx.beginPath();
-                ctx.arc(X[hovered], Y[hovered], R, 0, Math.PI*2);
-                ctx.lineWidth = 2.5;
+                ctx.arc(X[hovered], Y[hovered], r, 0, Math.PI*2);
+                ctx.lineWidth = 2.5 / sc;
                 ctx.strokeStyle = 'rgba(255,255,255,0.9)';
                 ctx.stroke();
             }
             ctx.restore();
         }
 
-        function drawNodes(isSource, color) {
+        function drawNodes(isSource, color, r) {
             ctx.fillStyle = color;
             ctx.beginPath();
             for (var i = 0; i < N; i++) {
                 if (nodes[i].isSource !== isSource) continue;
-                ctx.moveTo(X[i] + R, Y[i]);
-                ctx.arc(X[i], Y[i], R, 0, Math.PI*2);
+                ctx.moveTo(X[i] + r, Y[i]);
+                ctx.arc(X[i], Y[i], r, 0, Math.PI*2);
             }
             ctx.fill();
         }
