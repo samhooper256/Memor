@@ -17,6 +17,7 @@ struct GraphPageView: View {
     @State private var graphData: GraphData?
     @State private var errorMessage: String?
     @State private var isSearching = false
+    @State private var layoutProgress: Double?   // 0…1 while the page lays a graph out; nil when idle
 
     var body: some View {
         VStack(spacing: 0) {
@@ -28,6 +29,15 @@ struct GraphPageView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(isSearching)
+
+                if isSearching || layoutProgress != nil {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(isSearching ? "Searching…" : "Laying out… \(Int((layoutProgress ?? 0) * 100))%")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -46,8 +56,10 @@ struct GraphPageView: View {
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    GraphWebView(graphData: graphData)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    GraphWebView(graphData: graphData, onLayoutProgress: { progress in
+                        layoutProgress = progress < 1 ? progress : nil
+                    })
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             } else {
                 Text("Run a search to see the graph.")
@@ -72,10 +84,14 @@ struct GraphPageView: View {
         Task {
             do {
                 let data = try appDatabase.fetchGraphData(query: query)
+                // The page reports progress only for data it hasn't laid out
+                // yet, and only while mounted (a non-empty graph).
+                layoutProgress = (!data.nodes.isEmpty && data != graphData) ? 0 : nil
                 graphData = data
                 errorMessage = nil
             } catch {
                 graphData = nil
+                layoutProgress = nil
                 errorMessage = error.localizedDescription
             }
             isSearching = false
@@ -85,14 +101,18 @@ struct GraphPageView: View {
 
 private struct GraphWebView: NSViewRepresentable {
     let graphData: GraphData
+    /// Layout progress 0…1 from the page (1 = finished).
+    let onLayoutProgress: (Double) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> WKWebView {
         let config = makeLocalContentWebViewConfiguration()
+        config.userContentController.add(context.coordinator, name: Coordinator.progressMessageName)
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
         webView.navigationDelegate = context.coordinator
+        context.coordinator.onLayoutProgress = onLayoutProgress
         // Stable baseURL (never nil) so this webview's WebContent process is
         // cacheable/reusable — see the queryHTMLBaseURL comment in QueryHTMLView.swift.
         webView.loadHTMLString(Self.graphHTML, baseURL: queryHTMLBaseURL)
@@ -100,10 +120,27 @@ private struct GraphWebView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
+        context.coordinator.onLayoutProgress = onLayoutProgress
         context.coordinator.update(graphData: graphData, on: webView)
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
+        // The user content controller retains its handlers; drop ours.
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: Coordinator.progressMessageName)
+    }
+
+    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+        static let progressMessageName = "layoutProgress"
+        var onLayoutProgress: ((Double) -> Void)?
+
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard message.name == Self.progressMessageName,
+                  let body = message.body as? [String: Any],
+                  let step = body["step"] as? Double,
+                  let steps = body["steps"] as? Double else { return }
+            onLayoutProgress?(steps > 0 ? min(1, step / steps) : 1)
+        }
+
         // Required with the custom-scheme baseURL: the initial loadHTMLString
         // navigation IS policy-checked, and WebKit's DEFAULT handling of an
         // unimplemented decidePolicyFor hands a scheme it can't display to
@@ -400,13 +437,24 @@ private struct GraphWebView: NSViewRepresentable {
             simSteps = Math.min(700, 300 + N * 2);
             runSlice(30);
             draw();
+            postProgress();
             if (simStep >= simSteps) return;
             rafID = requestAnimationFrame(function frame() {
                 if (generation !== simGeneration) return;
                 runSlice(12);
                 draw();
+                postProgress();
                 rafID = simStep < simSteps ? requestAnimationFrame(frame) : 0;
             });
+        }
+
+        // Tells the host how far the layout is (step/steps; equal = done) so
+        // it can show a loading indicator.
+        function postProgress() {
+            var handlers = window.webkit && window.webkit.messageHandlers;
+            if (handlers && handlers.layoutProgress) {
+                handlers.layoutProgress.postMessage({ step: simStep, steps: simSteps });
+            }
         }
 
         function runSlice(budgetMs) {
