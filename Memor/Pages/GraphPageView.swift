@@ -224,7 +224,9 @@ struct GraphPageView: View {
     // Same test the page applies (case-insensitive substring of the hover label).
     private var findMatchCountText: String {
         guard !findText.isEmpty, let graphData else { return "" }
-        let count = graphData.nodes.filter { $0.label.range(of: findText, options: .caseInsensitive) != nil }.count
+        let count = graphData.nodes.filter {
+            fieldDisplayPlainText($0.label).range(of: findText, options: .caseInsensitive) != nil
+        }.count
         return "\(count) \(count == 1 ? "match" : "matches")"
     }
 
@@ -365,8 +367,12 @@ private struct GraphWebView: NSViewRepresentable {
         private func sendData(_ data: GraphData, layoutMode: GraphLayoutMode, to webView: WKWebView) {
             lastSent = data
             lastSentMode = layoutMode
+            // The display field partially rendered: `html` for the tooltip,
+            // `label` the same as plain text for find matching.
             let nodesArray: [[String: Any]] = data.nodes.map { node in
-                ["id": node.instanceID, "label": node.label,
+                ["id": node.instanceID,
+                 "label": fieldDisplayPlainText(node.label),
+                 "html": fieldDisplayHTML(node.label),
                  "isSource": data.sourceNodeIDs.contains(node.instanceID)]
             }
             let edgesArray: [[String: Any]] = data.edges.map { edge in
@@ -471,7 +477,7 @@ private struct GraphWebView: NSViewRepresentable {
             var newIndex = new Int32Array(N);
             nodes = order.map(function(old, idx) {
                 newIndex[old] = idx;
-                return { id: ns[old].id, label: ns[old].label, isSource: ns[old].isSource, kind: kinds[old] };
+                return { id: ns[old].id, label: ns[old].label, html: ns[old].html, isSource: ns[old].isSource, kind: kinds[old] };
             });
             E = from.length;
             EF = new Int32Array(E); ET = new Int32Array(E);
@@ -992,7 +998,8 @@ private struct GraphWebView: NSViewRepresentable {
             if (n !== hovered) { hovered = n; draw(); }
             if (n >= 0) {
                 tip.style.display = 'block';
-                tip.textContent = nodes[n].label || '(no label)';
+                // Safe by construction: escaped text with only <b>/<i> (fieldDisplayHTML).
+                tip.innerHTML = nodes[n].html || '(no label)';
                 tip.style.left = (e.clientX + 14) + 'px';
                 tip.style.top  = (e.clientY -  8) + 'px';
                 canvas.style.cursor = 'pointer';

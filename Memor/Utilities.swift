@@ -108,7 +108,21 @@ private func substituteInstanceIDToken(in html: String, instanceID: Int64?) -> S
     return html.replacingOccurrences(of: token, with: instanceID.map(String.init) ?? "")
 }
 
-func formatFieldDisplayValue(_ raw: String) -> AttributedString {
+/// One run of a field's partially rendered display value: text plus the
+/// bold/italic state it sits in.
+struct FieldDisplayRun {
+    var text: String
+    var bold: Bool
+    var italic: Bool
+}
+
+/// The partial-rendering rules behind every instance/query row label — the
+/// Instances table, the Search window, query rows and, as HTML/plain text,
+/// the Graph tab's tooltips: `<br>` becomes "; "; `<b>`/`<i>` (nesting
+/// counted, attributes allowed, case-insensitive) style their text and are
+/// dropped; every other tag is dropped but its inner text kept; self-closing
+/// tags vanish entirely; everything else — entities included — is literal.
+func fieldDisplayRuns(_ raw: String) -> [FieldDisplayRun] {
     // 1. Replace <br> (with optional surrounding whitespace) with "; "
     let text = raw.replacingOccurrences(
         of: #"\s*<br>\s*"#,
@@ -117,11 +131,7 @@ func formatFieldDisplayValue(_ raw: String) -> AttributedString {
     )
 
     // 2. Parse bold and italic markers, strip all other HTML tags
-    struct StyledRun {
-        var text: String
-        var bold: Bool
-        var italic: Bool
-    }
+    typealias StyledRun = FieldDisplayRun
 
     var runs: [StyledRun] = []
     var boldDepth = 0
@@ -203,8 +213,12 @@ func formatFieldDisplayValue(_ raw: String) -> AttributedString {
         runs.append(StyledRun(text: current, bold: boldDepth > 0, italic: italicDepth > 0))
     }
 
+    return runs
+}
+
+func formatFieldDisplayValue(_ raw: String) -> AttributedString {
     var result = AttributedString()
-    for run in runs {
+    for run in fieldDisplayRuns(raw) {
         var attr = AttributedString(run.text)
         if run.bold && run.italic {
             attr.font = .system(.body).bold().italic()
@@ -217,6 +231,26 @@ func formatFieldDisplayValue(_ raw: String) -> AttributedString {
     }
 
     return result
+}
+
+/// The same rendering as safe HTML for a web view: text escaped, bold and
+/// italic as `<b>`/`<i>` (the Graph tab's hover tooltips).
+func fieldDisplayHTML(_ raw: String) -> String {
+    fieldDisplayRuns(raw).map { run in
+        var html = run.text
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+        if run.italic { html = "<i>\(html)</i>" }
+        if run.bold { html = "<b>\(html)</b>" }
+        return html
+    }.joined()
+}
+
+/// The same rendering as plain text — what a row shows, styling dropped
+/// (the Graph tab's ⌘F find matches against this).
+func fieldDisplayPlainText(_ raw: String) -> String {
+    fieldDisplayRuns(raw).map(\.text).joined()
 }
 
 
