@@ -200,7 +200,7 @@ The shortcut system lives in `Memor/Shortcuts/`. **Customizable** shortcuts are 
 
 These are intentionally NOT in `ShortcutAction`:
 - Escape (close secondary windows, cancel study, exit popovers)
-- Tab / Shift-Tab (instance-editor field navigation)
+- Tab / Shift-Tab (instance-editor field navigation; on the Graph tab both swap focus between the search box and the field-filter box via `SearchQueryTextField.onTab`/`onBacktab` — a `SearchQueryTextField` without an `onTab` handler lets NSTextView insert a tab character)
 - Arrow keys (⌘← for Query Preview back history; bare ←/→ reserved for instance link shortcuts — see below; up/down in popups; bare ↑/↓ + Return on the Types/Collections/Stacks list pages move/open the highlighted row via `ListKeyNavigationHandler` — Stacks wraps and Return starts Study)
 - Delete key (remove row from instance table / collection table)
 - Shift (press to toggle the collection overlay in Study mode; on BoundaryMap queries it instead toggles the gold "boundary finder" — a gold frame around the current boundary, or a gold edge arrow pointing to it when off-screen — on forward queries any time, on reverse queries only after the answer is revealed; Study ignores the key on an unrevealed reverse query so the sticky toggle can't flip invisibly)

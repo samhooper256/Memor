@@ -142,10 +142,12 @@ struct SearchQueryTextField: NSViewRepresentable {
     var autocomplete: SearchAutocompleteProvider?
     /// Which language the box holds — drives highlighting and completion.
     var grammar: SearchAutocompleteGrammar
+    /// Tab with a handler installed is consumed (no tab character inserted).
+    var onTab: (() -> Void)?
     var onBacktab: (() -> Void)?
     var onMoveDown: (() -> Void)?
 
-    init(_ placeholder: String, text: Binding<String>, onSubmit: (() -> Void)? = nil, focusRequest: UUID? = nil, highlightsNoQueries: Bool = true, autocomplete: SearchAutocompleteProvider? = nil, grammar: SearchAutocompleteGrammar = .search, onFocusChange: ((Bool) -> Void)? = nil, onBacktab: (() -> Void)? = nil, onMoveDown: (() -> Void)? = nil) {
+    init(_ placeholder: String, text: Binding<String>, onSubmit: (() -> Void)? = nil, focusRequest: UUID? = nil, highlightsNoQueries: Bool = true, autocomplete: SearchAutocompleteProvider? = nil, grammar: SearchAutocompleteGrammar = .search, onFocusChange: ((Bool) -> Void)? = nil, onTab: (() -> Void)? = nil, onBacktab: (() -> Void)? = nil, onMoveDown: (() -> Void)? = nil) {
         self.placeholder = placeholder
         self._text = text
         self.onSubmit = onSubmit
@@ -154,6 +156,7 @@ struct SearchQueryTextField: NSViewRepresentable {
         self.autocomplete = autocomplete
         self.grammar = grammar
         self.onFocusChange = onFocusChange
+        self.onTab = onTab
         self.onBacktab = onBacktab
         self.onMoveDown = onMoveDown
     }
@@ -188,6 +191,7 @@ struct SearchQueryTextField: NSViewRepresentable {
         textView.onSubmit = onSubmit
         textView.placeholderString = placeholder
         textView.onFocusChange = onFocusChange
+        textView.onTab = onTab
         textView.onBacktab = onBacktab
         textView.onMoveDown = onMoveDown
         context.coordinator.autocompleteController.textView = textView
@@ -213,6 +217,7 @@ struct SearchQueryTextField: NSViewRepresentable {
         context.coordinator.onFocusChange = onFocusChange
         (textView as? SearchHighlightingTextView)?.onSubmit = onSubmit
         (textView as? SearchHighlightingTextView)?.onFocusChange = onFocusChange
+        (textView as? SearchHighlightingTextView)?.onTab = onTab
         (textView as? SearchHighlightingTextView)?.onBacktab = onBacktab
         (textView as? SearchHighlightingTextView)?.onMoveDown = onMoveDown
         context.coordinator.autocompleteController.provider = autocomplete
@@ -288,6 +293,7 @@ struct SearchQueryTextField: NSViewRepresentable {
     final class SearchHighlightingTextView: NSTextView {
         var onSubmit: (() -> Void)?
         var onFocusChange: ((Bool) -> Void)?
+        var onTab: (() -> Void)?
         var onBacktab: (() -> Void)?
         var onMoveDown: (() -> Void)?
         var placeholderString: String = ""
@@ -314,6 +320,12 @@ struct SearchQueryTextField: NSViewRepresentable {
                 if selector == #selector(NSResponder.moveUp(_:)), autocompleteController.handleMoveUp() { return }
                 if selector == #selector(NSTextView.complete(_:)) || selector == #selector(NSResponder.cancelOperation(_:)),
                    autocompleteController.handleEscape() { return }
+            }
+            // Tab with a handler installed (the Graph tab's two boxes swap
+            // focus): consume it instead of inserting a tab character.
+            if selector == #selector(NSResponder.insertTab(_:)), let onTab {
+                onTab()
+                return
             }
             // Shift+Tab arrives as insertBacktab. When a handler is installed,
             // consume it (used to cycle the Search window's mode) instead of

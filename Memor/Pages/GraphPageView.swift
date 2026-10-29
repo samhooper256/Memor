@@ -34,6 +34,7 @@ struct GraphPageView: View {
     @AppStorage(GraphLayoutMode.userDefaultsKey) private var layoutMode: GraphLayoutMode = .tree
     @State private var searchQuery = ""
     @State private var searchFocusRequest: UUID?
+    @State private var fieldFilterFocusRequest: UUID?   // Tab/Shift+Tab swap the two boxes
     // The field filter: typename:fieldname entries; ignored unless enabled.
     // Deliberately not persisted — off and empty whenever the tab opens.
     @State private var fieldFilterText = ""
@@ -90,8 +91,16 @@ struct GraphPageView: View {
 
     private var searchRow: some View {
         HStack(spacing: 10) {
-            SearchQueryTextField("Search instances", text: $searchQuery, onSubmit: { runSearch() }, focusRequest: searchFocusRequest, autocomplete: SearchAutocompleteProvider(appDatabase: appDatabase))
-                .searchCodeEditorStyle()
+            SearchQueryTextField(
+                "Search instances",
+                text: $searchQuery,
+                onSubmit: { runSearch() },
+                focusRequest: searchFocusRequest,
+                autocomplete: SearchAutocompleteProvider(appDatabase: appDatabase),
+                onTab: { fieldFilterFocusRequest = UUID() },
+                onBacktab: { fieldFilterFocusRequest = UUID() }
+            )
+            .searchCodeEditorStyle()
             Button("Search") {
                 runSearch()
             }
@@ -139,8 +148,11 @@ struct GraphPageView: View {
                 "Field filter, e.g. Vocab:Definition",
                 text: $fieldFilterText,
                 onSubmit: { runSearch() },
+                focusRequest: fieldFilterFocusRequest,
                 autocomplete: SearchAutocompleteProvider(appDatabase: appDatabase),
-                grammar: .fieldFilter
+                grammar: .fieldFilter,
+                onTab: { searchFocusRequest = UUID() },
+                onBacktab: { searchFocusRequest = UUID() }
             )
             .searchCodeEditorStyle()
             .opacity(isFieldFilterEnabled ? 1 : 0.6)
