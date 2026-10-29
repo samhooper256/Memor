@@ -29,7 +29,9 @@ enum GraphLayoutMode: String, CaseIterable, Identifiable {
 }
 
 struct GraphPageView: View {
+    @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var shortcutSettings: ShortcutSettings
+    @EnvironmentObject private var editInstanceWindowState: EditInstanceWindowState
 
     let appDatabase: AppDatabase
 
@@ -176,6 +178,10 @@ struct GraphPageView: View {
                     findQuery: isFindPresented ? findText : nil,
                     onLayoutProgress: { progress in
                         layoutProgress = progress < 1 ? progress : nil
+                    },
+                    onEditInstance: { instanceID in
+                        editInstanceWindowState.requestOpen(instanceID: instanceID)
+                        openWindow(id: "edit-instance")
                     }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -270,16 +276,20 @@ private struct GraphWebView: NSViewRepresentable {
     let findQuery: String?
     /// Layout progress 0…1 from the page (1 = finished).
     let onLayoutProgress: (Double) -> Void
+    /// The node context menu's Edit Instance.
+    let onEditInstance: (Int64) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> WKWebView {
         let config = makeLocalContentWebViewConfiguration()
         config.userContentController.add(context.coordinator, name: Coordinator.progressMessageName)
+        config.userContentController.add(context.coordinator, name: Coordinator.contextMenuMessageName)
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
         webView.navigationDelegate = context.coordinator
         context.coordinator.onLayoutProgress = onLayoutProgress
+        context.coordinator.onEditInstance = onEditInstance
         // Stable baseURL (never nil) so this webview's WebContent process is
         // cacheable/reusable — see the queryHTMLBaseURL comment in QueryHTMLView.swift.
         webView.loadHTMLString(Self.graphHTML, baseURL: queryHTMLBaseURL)
@@ -288,24 +298,57 @@ private struct GraphWebView: NSViewRepresentable {
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.onLayoutProgress = onLayoutProgress
+        context.coordinator.onEditInstance = onEditInstance
         context.coordinator.update(graphData: graphData, layoutMode: layoutMode, findQuery: findQuery, on: webView)
     }
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
         // The user content controller retains its handlers; drop ours.
         webView.configuration.userContentController.removeScriptMessageHandler(forName: Coordinator.progressMessageName)
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: Coordinator.contextMenuMessageName)
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         static let progressMessageName = "layoutProgress"
+        static let contextMenuMessageName = "nodeContextMenu"
         var onLayoutProgress: ((Double) -> Void)?
+        var onEditInstance: ((Int64) -> Void)?
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-            guard message.name == Self.progressMessageName,
-                  let body = message.body as? [String: Any],
-                  let step = body["step"] as? Double,
-                  let steps = body["steps"] as? Double else { return }
-            onLayoutProgress?(steps > 0 ? min(1, step / steps) : 1)
+            guard let body = message.body as? [String: Any] else { return }
+            switch message.name {
+            case Self.progressMessageName:
+                guard let step = body["step"] as? Double, let steps = body["steps"] as? Double else { return }
+                onLayoutProgress?(steps > 0 ? min(1, step / steps) : 1)
+            case Self.contextMenuMessageName:
+                guard let instanceID = (body["id"] as? NSNumber)?.int64Value,
+                      let webView = message.webView else { return }
+                presentNodeMenu(instanceID: instanceID, in: webView, fallbackClientPoint: NSPoint(
+                    x: body["x"] as? Double ?? 0,
+                    y: body["y"] as? Double ?? 0
+                ))
+            default:
+                break
+            }
+        }
+
+        /// The native right-click menu for a node, at the pointer (the click
+        /// just happened, so the live mouse position beats translating the
+        /// page's client coordinates).
+        private func presentNodeMenu(instanceID: Int64, in webView: WKWebView, fallbackClientPoint: NSPoint) {
+            let menu = NSMenu()
+            let edit = NSMenuItem(title: "Edit Instance", action: #selector(editInstanceMenuItem(_:)), keyEquivalent: "")
+            edit.target = self
+            edit.representedObject = NSNumber(value: instanceID)
+            menu.addItem(edit)
+            let point = webView.window.map { webView.convert($0.mouseLocationOutsideOfEventStream, from: nil) }
+                ?? fallbackClientPoint
+            menu.popUp(positioning: nil, at: point, in: webView)
+        }
+
+        @objc private func editInstanceMenuItem(_ sender: NSMenuItem) {
+            guard let instanceID = (sender.representedObject as? NSNumber)?.int64Value else { return }
+            onEditInstance?(instanceID)
         }
 
         // Required with the custom-scheme baseURL: the initial loadHTMLString
@@ -1018,6 +1061,19 @@ private struct GraphWebView: NSViewRepresentable {
             hovered = -1;
             tip.style.display = 'none';
             draw();
+        });
+
+        // Right-click on a node: the host shows a native menu (Edit Instance).
+        // WebKit's own menu is suppressed either way — its Reload would wipe
+        // the graph.
+        canvas.addEventListener('contextmenu', function(e) {
+            e.preventDefault();
+            var n = hitNode(e.clientX, e.clientY);
+            if (n < 0) return;
+            var handlers = window.webkit && window.webkit.messageHandlers;
+            if (handlers && handlers.nodeContextMenu) {
+                handlers.nodeContextMenu.postMessage({ id: nodes[n].id, x: e.clientX, y: e.clientY });
+            }
         });
 
         canvas.addEventListener('wheel', function(e) {
