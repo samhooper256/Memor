@@ -9,9 +9,29 @@ import AppKit
 import SwiftUI
 import WebKit
 
+/// How the page lays the graph out: a spanning forest drawn top-down (tree
+/// edges never cross) or the force simulation. A display preference, so it
+/// persists.
+enum GraphLayoutMode: String, CaseIterable, Identifiable {
+    case tree
+    case force
+
+    static let userDefaultsKey = "com.sam.Memor.graphLayoutMode"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .tree: return "Tree"
+        case .force: return "Force"
+        }
+    }
+}
+
 struct GraphPageView: View {
     let appDatabase: AppDatabase
 
+    @AppStorage(GraphLayoutMode.userDefaultsKey) private var layoutMode: GraphLayoutMode = .tree
     @State private var searchQuery = ""
     @State private var searchFocusRequest: UUID?
     // The field filter: typename:fieldname entries; ignored unless enabled.
@@ -46,7 +66,7 @@ struct GraphPageView: View {
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    GraphWebView(graphData: graphData, onLayoutProgress: { progress in
+                    GraphWebView(graphData: graphData, layoutMode: layoutMode, onLayoutProgress: { progress in
                         layoutProgress = progress < 1 ? progress : nil
                     })
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -77,6 +97,21 @@ struct GraphPageView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(isSearching)
+
+            Picker("Layout:", selection: $layoutMode) {
+                ForEach(GraphLayoutMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.menu)
+            .fixedSize()
+            .help("Tree: a spanning forest drawn top-down — tree arrows never cross. Force: the physics layout.")
+            .onChange(of: layoutMode) { _, _ in
+                // The page re-lays out the current graph; force mode reports progress.
+                if let graphData, !graphData.nodes.isEmpty {
+                    layoutProgress = 0
+                }
+            }
 
             if isSearching || layoutProgress != nil {
                 ProgressView()
@@ -137,6 +172,7 @@ struct GraphPageView: View {
 
 private struct GraphWebView: NSViewRepresentable {
     let graphData: GraphData
+    let layoutMode: GraphLayoutMode
     /// Layout progress 0…1 from the page (1 = finished).
     let onLayoutProgress: (Double) -> Void
 
@@ -157,7 +193,7 @@ private struct GraphWebView: NSViewRepresentable {
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.onLayoutProgress = onLayoutProgress
-        context.coordinator.update(graphData: graphData, on: webView)
+        context.coordinator.update(graphData: graphData, layoutMode: layoutMode, on: webView)
     }
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -192,27 +228,35 @@ private struct GraphWebView: NSViewRepresentable {
 
         private var isLoaded = false
         private var lastSent: GraphData?
-        private var pending: GraphData?
+        private var lastSentMode: GraphLayoutMode?
+        private var pending: (data: GraphData, mode: GraphLayoutMode)?
 
-        func update(graphData: GraphData, on webView: WKWebView) {
-            guard graphData != lastSent else { return }
+        func update(graphData: GraphData, layoutMode: GraphLayoutMode, on webView: WKWebView) {
+            guard graphData != lastSent || layoutMode != lastSentMode else { return }
             if isLoaded {
-                send(graphData, to: webView)
+                send(graphData, layoutMode: layoutMode, to: webView)
             } else {
-                pending = graphData
+                pending = (graphData, layoutMode)
             }
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             isLoaded = true
-            if let data = pending {
-                pending = nil
-                send(data, to: webView)
+            if let pending {
+                self.pending = nil
+                send(pending.data, layoutMode: pending.mode, to: webView)
             }
         }
 
-        private func send(_ data: GraphData, to webView: WKWebView) {
+        private func send(_ data: GraphData, layoutMode: GraphLayoutMode, to webView: WKWebView) {
+            // Same data, new mode: re-lay out in place rather than resending it.
+            if data == lastSent, layoutMode != lastSentMode {
+                lastSentMode = layoutMode
+                webView.evaluateJavaScript("setLayoutMode('\(layoutMode.rawValue)')", completionHandler: nil)
+                return
+            }
             lastSent = data
+            lastSentMode = layoutMode
             let nodesArray: [[String: Any]] = data.nodes.map { node in
                 ["id": node.instanceID, "label": node.label,
                  "isSource": data.sourceNodeIDs.contains(node.instanceID)]
@@ -224,7 +268,7 @@ private struct GraphWebView: NSViewRepresentable {
                   let edgesData = try? JSONSerialization.data(withJSONObject: edgesArray),
                   let nodesStr = String(data: nodesData, encoding: .utf8),
                   let edgesStr = String(data: edgesData, encoding: .utf8) else { return }
-            webView.evaluateJavaScript("setGraphData(\(nodesStr), \(edgesStr))", completionHandler: nil)
+            webView.evaluateJavaScript("setGraphData(\(nodesStr), \(edgesStr), '\(layoutMode.rawValue)')", completionHandler: nil)
         }
     }
 
@@ -292,7 +336,8 @@ private struct GraphWebView: NSViewRepresentable {
         }
         window.addEventListener('resize', resize);
 
-        function setGraphData(ns, es) {
+        function setGraphData(ns, es, mode) {
+            if (mode) layoutMode = mode;
             tip.style.display = 'none';
             hovered = -1;
             N = ns.length;
@@ -332,7 +377,34 @@ private struct GraphWebView: NSViewRepresentable {
                 Y[p] = (Math.random() - 0.5) * spread;
             }
             tx = 0; ty = 0; sc = 1;
-            startSimulation();
+            startLayout();
+        }
+
+        // 'tree' (a spanning forest drawn top-down — see treeLayout) or
+        // 'force' (the physics simulation). Switching re-lays out the data in
+        // place; force mode then starts from the current positions.
+        var layoutMode = 'tree';
+
+        function startLayout() {
+            if (layoutMode === 'force') {
+                startSimulation();
+                return;
+            }
+            simGeneration++;   // cancels a running force layout's frames
+            if (rafID) { cancelAnimationFrame(rafID); rafID = 0; }
+            treeLayout();
+            placeIsolated();
+            draw();
+            simStep = 1; simSteps = 1;
+            postProgress();
+        }
+
+        function setLayoutMode(mode) {
+            if (mode !== 'tree' && mode !== 'force') return;
+            layoutMode = mode;
+            if (N === 0) return;
+            tx = 0; ty = 0; sc = 1;
+            startLayout();
         }
 
         // The isolated nodes sit in their own cluster: a compact grid to the
@@ -505,6 +577,120 @@ private struct GraphWebView: NSViewRepresentable {
                 if (mv > maxMove) maxMove = mv;
             }
             return maxMove;
+        }
+
+        // ---- Tree layout. A spanning forest of the connected nodes (BFS
+        // from each component's highest-degree node, children by degree, so
+        // hubs sit on top with their fans beneath), drawn top-down: leaves
+        // LEAF_SPACING apart in DFS order, every inner node centred over its
+        // children, depth × LEVEL_SPACING down. Tree edges therefore never
+        // cross, and two nodes sharing a depth are at least a leaf slot apart
+        // (their leaf-index ranges are disjoint). Components are packed into
+        // rows, widest first, and the whole thing is centred on the origin.
+        // Non-tree edges are just drawn where their ends fall. O(N + E).
+        var LEAF_SPACING = 40, LEVEL_SPACING = 80, COMPONENT_GAP = 60;
+
+        function treeLayout() {
+            if (NC === 0) return;
+            // Undirected adjacency (CSR) over the connected nodes.
+            var deg = new Int32Array(NC), i, e;
+            for (e = 0; e < E; e++) { deg[EF[e]]++; deg[ET[e]]++; }
+            var adjStart = new Int32Array(NC + 1);
+            for (i = 0; i < NC; i++) adjStart[i + 1] = adjStart[i] + deg[i];
+            var fill = new Int32Array(NC), adj = new Int32Array(adjStart[NC]);
+            for (e = 0; e < E; e++) {
+                var a = EF[e], b = ET[e];
+                adj[adjStart[a] + fill[a]++] = b;
+                adj[adjStart[b] + fill[b]++] = a;
+            }
+            function byDegree(p, q) { return deg[q] - deg[p] || p - q; }
+
+            // Spanning forest: roots in degree order, BFS, children kept as
+            // sibling lists in discovery order (neighbours by degree).
+            var order = new Int32Array(NC);
+            for (i = 0; i < NC; i++) order[i] = i;
+            order.sort(byDegree);
+            var depth = new Int32Array(NC), comp = new Int32Array(NC), visited = new Uint8Array(NC);
+            var firstChild = new Int32Array(NC).fill(-1), lastChild = new Int32Array(NC).fill(-1);
+            var nextSibling = new Int32Array(NC).fill(-1);
+            var queue = new Int32Array(NC), roots = [];
+            for (var r = 0; r < NC; r++) {
+                var root = order[r];
+                if (visited[root]) continue;
+                visited[root] = 1; depth[root] = 0; comp[root] = roots.length;
+                roots.push(root);
+                var head = 0, tail = 0;
+                queue[tail++] = root;
+                while (head < tail) {
+                    var u = queue[head++];
+                    var nb = adj.subarray(adjStart[u], adjStart[u + 1]);
+                    nb.sort(byDegree);
+                    for (var t = 0; t < nb.length; t++) {
+                        var v = nb[t];
+                        if (visited[v]) continue;
+                        visited[v] = 1; depth[v] = depth[u] + 1; comp[v] = comp[u];
+                        if (firstChild[u] === -1) firstChild[u] = v; else nextSibling[lastChild[u]] = v;
+                        lastChild[u] = v;
+                        queue[tail++] = v;
+                    }
+                }
+            }
+
+            // Per component: pre-order DFS assigns leaf x in visit order; the
+            // reverse pass centres inner nodes (children already placed).
+            var compWidth = new Float64Array(roots.length), compHeight = new Float64Array(roots.length);
+            var stack = new Int32Array(NC), pre = new Int32Array(NC);
+            for (var c = 0; c < roots.length; c++) {
+                var sp = 0, n = 0, leafCount = 0, maxDepth = 0;
+                stack[sp++] = roots[c];
+                while (sp > 0) {
+                    var w = stack[--sp];
+                    pre[n++] = w;
+                    if (depth[w] > maxDepth) maxDepth = depth[w];
+                    if (firstChild[w] === -1) { X[w] = leafCount * LEAF_SPACING; leafCount++; }
+                    for (var ch = firstChild[w]; ch !== -1; ch = nextSibling[ch]) stack[sp++] = ch;
+                }
+                for (var m = n - 1; m >= 0; m--) {
+                    var z = pre[m];
+                    if (firstChild[z] !== -1) X[z] = (X[firstChild[z]] + X[lastChild[z]]) / 2;
+                    Y[z] = depth[z] * LEVEL_SPACING;
+                }
+                compWidth[c] = (leafCount - 1) * LEAF_SPACING;
+                compHeight[c] = maxDepth * LEVEL_SPACING;
+            }
+
+            // Pack components into rows, widest first, about square overall.
+            var byWidth = new Int32Array(roots.length);
+            for (i = 0; i < roots.length; i++) byWidth[i] = i;
+            byWidth.sort(function(p, q) { return compWidth[q] - compWidth[p] || p - q; });
+            var totalArea = 0, widest = 0;
+            for (i = 0; i < roots.length; i++) {
+                totalArea += (compWidth[i] + COMPONENT_GAP) * (compHeight[i] + COMPONENT_GAP);
+                if (compWidth[i] > widest) widest = compWidth[i];
+            }
+            var rowWidth = Math.max(widest, Math.sqrt(totalArea) * 1.2);
+            var offsetX = new Float64Array(roots.length), offsetY = new Float64Array(roots.length);
+            var cursorX = 0, cursorY = 0, rowHeight = 0;
+            for (i = 0; i < roots.length; i++) {
+                var k = byWidth[i];
+                if (cursorX > 0 && cursorX + compWidth[k] > rowWidth) {
+                    cursorY += rowHeight + COMPONENT_GAP;
+                    cursorX = 0; rowHeight = 0;
+                }
+                offsetX[k] = cursorX; offsetY[k] = cursorY;
+                cursorX += compWidth[k] + COMPONENT_GAP;
+                if (compHeight[k] > rowHeight) rowHeight = compHeight[k];
+            }
+            var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            for (i = 0; i < NC; i++) {
+                X[i] += offsetX[comp[i]]; Y[i] += offsetY[comp[i]];
+                if (X[i] < minX) minX = X[i];
+                if (X[i] > maxX) maxX = X[i];
+                if (Y[i] < minY) minY = Y[i];
+                if (Y[i] > maxY) maxY = Y[i];
+            }
+            var cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+            for (i = 0; i < NC; i++) { X[i] -= cx; Y[i] -= cy; VX[i] = 0; VY[i] = 0; }
         }
         // ---- layout end ----
 
