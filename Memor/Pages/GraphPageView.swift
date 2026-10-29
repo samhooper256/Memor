@@ -38,6 +38,14 @@ struct GraphPageView: View {
     let appDatabase: AppDatabase
 
     @AppStorage(GraphLayoutMode.userDefaultsKey) private var layoutMode: GraphLayoutMode = .tree
+    // Node colours per role, edited in the Graph Settings window (same keys);
+    // a change recolours the page in place.
+    @AppStorage(GraphNodeRole.isolated.userDefaultsKey) private var isolatedColor: GraphNodeColor = GraphNodeRole.isolated.defaultColor
+    @AppStorage(GraphNodeRole.inbound.userDefaultsKey) private var inboundColor: GraphNodeColor = GraphNodeRole.inbound.defaultColor
+    @AppStorage(GraphNodeRole.sourceOnly.userDefaultsKey) private var sourceOnlyColor: GraphNodeColor = GraphNodeRole.sourceOnly.defaultColor
+    private var nodeColors: GraphNodeColorSet {
+        GraphNodeColorSet(isolated: isolatedColor, inbound: inboundColor, sourceOnly: sourceOnlyColor)
+    }
     // The ⌘F find bar: while open, nodes whose hover label contains findText
     // (case-insensitive) draw yellow and every other node gray.
     @State private var isFindPresented = false
@@ -110,6 +118,15 @@ struct GraphPageView: View {
             .buttonStyle(.borderedProminent)
             .disabled(isSearching)
 
+            Button {
+                openWindow(id: "graph-settings")
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 16))
+            }
+            .buttonStyle(.borderless)
+            .help("Graph settings")
+
             Picker("Layout:", selection: $layoutMode) {
                 ForEach(GraphLayoutMode.allCases) { mode in
                     Text(mode.title).tag(mode)
@@ -179,6 +196,7 @@ struct GraphPageView: View {
                 GraphWebView(
                     graphData: graphData,
                     layoutMode: layoutMode,
+                    nodeColors: nodeColors,
                     findQuery: isFindPresented ? findText : nil,
                     onLayoutProgress: { progress in
                         layoutProgress = progress < 1 ? progress : nil
@@ -276,6 +294,8 @@ struct GraphPageView: View {
 private struct GraphWebView: NSViewRepresentable {
     let graphData: GraphData
     let layoutMode: GraphLayoutMode
+    /// The per-role node colours (Graph Settings); applied in place, no relayout.
+    let nodeColors: GraphNodeColorSet
     /// The find bar's text while it is open; nil when closed (normal colours).
     let findQuery: String?
     /// Layout progress 0…1 from the page (1 = finished).
@@ -304,7 +324,13 @@ private struct GraphWebView: NSViewRepresentable {
     func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.onLayoutProgress = onLayoutProgress
         context.coordinator.onEditInstance = onEditInstance
-        context.coordinator.update(graphData: graphData, layoutMode: layoutMode, findQuery: findQuery, on: webView)
+        context.coordinator.update(
+            graphData: graphData,
+            layoutMode: layoutMode,
+            findQuery: findQuery,
+            nodeColors: nodeColors.hexesByKind,
+            on: webView
+        )
     }
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -381,15 +407,23 @@ private struct GraphWebView: NSViewRepresentable {
         private var lastSentMode: GraphLayoutMode?
         private var lastSentFindQuery: String?
         private var hasSentFindQuery = false
-        private var pending: (data: GraphData, mode: GraphLayoutMode, find: String?)?
+        private var lastSentColors: [String]?
+        private var pending: (data: GraphData, mode: GraphLayoutMode, find: String?, colors: [String])?
 
-        func update(graphData: GraphData, layoutMode: GraphLayoutMode, findQuery: String?, on webView: WKWebView) {
+        func update(
+            graphData: GraphData,
+            layoutMode: GraphLayoutMode,
+            findQuery: String?,
+            nodeColors: [String],
+            on webView: WKWebView
+        ) {
             let findChanged = !hasSentFindQuery || findQuery != lastSentFindQuery
-            guard graphData != lastSent || layoutMode != lastSentMode || findChanged else { return }
+            guard graphData != lastSent || layoutMode != lastSentMode || findChanged
+                    || nodeColors != lastSentColors else { return }
             if isLoaded {
-                send(graphData, layoutMode: layoutMode, findQuery: findQuery, to: webView)
+                send(graphData, layoutMode: layoutMode, findQuery: findQuery, nodeColors: nodeColors, to: webView)
             } else {
-                pending = (graphData, layoutMode, findQuery)
+                pending = (graphData, layoutMode, findQuery, nodeColors)
             }
         }
 
@@ -397,11 +431,25 @@ private struct GraphWebView: NSViewRepresentable {
             isLoaded = true
             if let pending {
                 self.pending = nil
-                send(pending.data, layoutMode: pending.mode, findQuery: pending.find, to: webView)
+                send(pending.data, layoutMode: pending.mode, findQuery: pending.find, nodeColors: pending.colors, to: webView)
             }
         }
 
-        private func send(_ data: GraphData, layoutMode: GraphLayoutMode, findQuery: String?, to webView: WKWebView) {
+        private func send(
+            _ data: GraphData,
+            layoutMode: GraphLayoutMode,
+            findQuery: String?,
+            nodeColors: [String],
+            to webView: WKWebView
+        ) {
+            // Colours first, so the data's first draw already uses them.
+            if nodeColors != lastSentColors {
+                lastSentColors = nodeColors
+                if let json = try? JSONSerialization.data(withJSONObject: nodeColors),
+                   let literal = String(data: json, encoding: .utf8) {
+                    webView.evaluateJavaScript("setNodeColors(\(literal))", completionHandler: nil)
+                }
+            }
             if data != lastSent {
                 sendData(data, layoutMode: layoutMode, to: webView)
             } else if layoutMode != lastSentMode {
@@ -557,6 +605,17 @@ private struct GraphWebView: NSViewRepresentable {
         // nodes whose label contains the text (case-insensitive) draw yellow
         // and all others gray — nothing typed yet means all gray. Recolours
         // without any relayout, and the query survives new data.
+        // Node fill by kind (0 isolated, 1 source-only, 2 inbound): the Graph
+        // Settings colours. The host sends them before the first data and on
+        // every change; a change only redraws.
+        var nodeColors = ['#FF453A', '#30D158', '#0A84FF'];
+
+        function setNodeColors(cs) {
+            if (!Array.isArray(cs) || cs.length !== 3) return;
+            nodeColors = cs.slice();
+            draw();
+        }
+
         var findQuery = null, findMatch = null;
 
         function setFindQuery(q) {
@@ -1359,9 +1418,9 @@ private struct GraphWebView: NSViewRepresentable {
                 drawFindNodes(0, '#8E8E93', r);
                 drawFindNodes(1, '#FFD60A', r);
             } else {
-                drawNodes(0, '#FF453A', r);
-                drawNodes(1, '#30D158', r);
-                drawNodes(2, '#0A84FF', r);
+                drawNodes(0, nodeColors[0], r);
+                drawNodes(1, nodeColors[1], r);
+                drawNodes(2, nodeColors[2], r);
             }
 
             if (hovered >= 0) {
