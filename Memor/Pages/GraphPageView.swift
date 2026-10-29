@@ -29,9 +29,16 @@ enum GraphLayoutMode: String, CaseIterable, Identifiable {
 }
 
 struct GraphPageView: View {
+    @EnvironmentObject private var shortcutSettings: ShortcutSettings
+
     let appDatabase: AppDatabase
 
     @AppStorage(GraphLayoutMode.userDefaultsKey) private var layoutMode: GraphLayoutMode = .tree
+    // The ⌘F find bar: while open, nodes whose hover label contains findText
+    // (case-insensitive) draw yellow and every other node gray.
+    @State private var isFindPresented = false
+    @State private var findText = ""
+    @FocusState private var isFindFocused: Bool
     @State private var searchQuery = ""
     @State private var searchFocusRequest: UUID?
     @State private var fieldFilterFocusRequest: UUID?   // Tab/Shift+Tab swap the two boxes
@@ -56,29 +63,19 @@ struct GraphPageView: View {
 
             Divider()
 
-            if let errorMessage {
-                Text(errorMessage)
-                    .foregroundStyle(.red)
-                    .padding(24)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            } else if let graphData {
-                if graphData.nodes.isEmpty {
-                    Text("No instances match the search.")
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    GraphWebView(graphData: graphData, layoutMode: layoutMode, onLayoutProgress: { progress in
-                        layoutProgress = progress < 1 ? progress : nil
-                    })
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            graphArea
+                .overlay(alignment: .topTrailing) {
+                    if isFindPresented {
+                        findBar
+                    }
                 }
-            } else {
-                Text("Run a search to see the graph.")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background {
+            FindShortcutKeyHandler(shortcutSettings: shortcutSettings) {
+                openFind()
+            }
+        }
         .task {
             // Focus the search box on every visit. Deferred like the
             // Collections page's: arriving from a tab whose own search field
@@ -160,6 +157,88 @@ struct GraphPageView: View {
         }
     }
 
+    @ViewBuilder
+    private var graphArea: some View {
+        if let errorMessage {
+            Text(errorMessage)
+                .foregroundStyle(.red)
+                .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        } else if let graphData {
+            if graphData.nodes.isEmpty {
+                Text("No instances match the search.")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                GraphWebView(
+                    graphData: graphData,
+                    layoutMode: layoutMode,
+                    findQuery: isFindPresented ? findText : nil,
+                    onLayoutProgress: { progress in
+                        layoutProgress = progress < 1 ? progress : nil
+                    }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        } else {
+            Text("Run a search to see the graph.")
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    // Chrome-style find bar: close button on the left, the field, the count.
+    private var findBar: some View {
+        HStack(spacing: 8) {
+            Button {
+                closeFind()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Close (Escape)")
+
+            TextField("Find in graph", text: $findText)
+                .textFieldStyle(.plain)
+                .focused($isFindFocused)
+                .frame(width: 180)
+                .onExitCommand { closeFind() }
+
+            Text(findMatchCountText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+        }
+        .padding(12)
+        .onAppear { isFindFocused = true }
+    }
+
+    // Same test the page applies (case-insensitive substring of the hover label).
+    private var findMatchCountText: String {
+        guard !findText.isEmpty, let graphData else { return "" }
+        let count = graphData.nodes.filter { $0.label.range(of: findText, options: .caseInsensitive) != nil }.count
+        return "\(count) \(count == 1 ? "match" : "matches")"
+    }
+
+    private func openFind() {
+        isFindPresented = true
+        // Already open: just put the caret back in the field.
+        DispatchQueue.main.async { isFindFocused = true }
+    }
+
+    private func closeFind() {
+        isFindPresented = false
+        searchFocusRequest = UUID()
+    }
+
     private func runSearch() {
         let query = searchQuery
         let fieldFilter = isFieldFilterEnabled ? fieldFilterText : nil
@@ -185,6 +264,8 @@ struct GraphPageView: View {
 private struct GraphWebView: NSViewRepresentable {
     let graphData: GraphData
     let layoutMode: GraphLayoutMode
+    /// The find bar's text while it is open; nil when closed (normal colours).
+    let findQuery: String?
     /// Layout progress 0…1 from the page (1 = finished).
     let onLayoutProgress: (Double) -> Void
 
@@ -205,7 +286,7 @@ private struct GraphWebView: NSViewRepresentable {
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.onLayoutProgress = onLayoutProgress
-        context.coordinator.update(graphData: graphData, layoutMode: layoutMode, on: webView)
+        context.coordinator.update(graphData: graphData, layoutMode: layoutMode, findQuery: findQuery, on: webView)
     }
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -241,14 +322,17 @@ private struct GraphWebView: NSViewRepresentable {
         private var isLoaded = false
         private var lastSent: GraphData?
         private var lastSentMode: GraphLayoutMode?
-        private var pending: (data: GraphData, mode: GraphLayoutMode)?
+        private var lastSentFindQuery: String?
+        private var hasSentFindQuery = false
+        private var pending: (data: GraphData, mode: GraphLayoutMode, find: String?)?
 
-        func update(graphData: GraphData, layoutMode: GraphLayoutMode, on webView: WKWebView) {
-            guard graphData != lastSent || layoutMode != lastSentMode else { return }
+        func update(graphData: GraphData, layoutMode: GraphLayoutMode, findQuery: String?, on webView: WKWebView) {
+            let findChanged = !hasSentFindQuery || findQuery != lastSentFindQuery
+            guard graphData != lastSent || layoutMode != lastSentMode || findChanged else { return }
             if isLoaded {
-                send(graphData, layoutMode: layoutMode, to: webView)
+                send(graphData, layoutMode: layoutMode, findQuery: findQuery, to: webView)
             } else {
-                pending = (graphData, layoutMode)
+                pending = (graphData, layoutMode, findQuery)
             }
         }
 
@@ -256,17 +340,29 @@ private struct GraphWebView: NSViewRepresentable {
             isLoaded = true
             if let pending {
                 self.pending = nil
-                send(pending.data, layoutMode: pending.mode, to: webView)
+                send(pending.data, layoutMode: pending.mode, findQuery: pending.find, to: webView)
             }
         }
 
-        private func send(_ data: GraphData, layoutMode: GraphLayoutMode, to webView: WKWebView) {
-            // Same data, new mode: re-lay out in place rather than resending it.
-            if data == lastSent, layoutMode != lastSentMode {
+        private func send(_ data: GraphData, layoutMode: GraphLayoutMode, findQuery: String?, to webView: WKWebView) {
+            if data != lastSent {
+                sendData(data, layoutMode: layoutMode, to: webView)
+            } else if layoutMode != lastSentMode {
+                // Same data, new mode: re-lay out in place rather than resending it.
                 lastSentMode = layoutMode
                 webView.evaluateJavaScript("setLayoutMode('\(layoutMode.rawValue)')", completionHandler: nil)
-                return
             }
+            if !hasSentFindQuery || findQuery != lastSentFindQuery {
+                hasSentFindQuery = true
+                lastSentFindQuery = findQuery
+                let literal = findQuery
+                    .flatMap { try? JSONSerialization.data(withJSONObject: $0, options: .fragmentsAllowed) }
+                    .flatMap { String(data: $0, encoding: .utf8) } ?? "null"
+                webView.evaluateJavaScript("setFindQuery(\(literal))", completionHandler: nil)
+            }
+        }
+
+        private func sendData(_ data: GraphData, layoutMode: GraphLayoutMode, to webView: WKWebView) {
             lastSent = data
             lastSentMode = layoutMode
             let nodesArray: [[String: Any]] = data.nodes.map { node in
@@ -388,8 +484,31 @@ private struct GraphWebView: NSViewRepresentable {
                 X[p] = (Math.random() - 0.5) * spread;
                 Y[p] = (Math.random() - 0.5) * spread;
             }
+            applyFind();
             tx = 0; ty = 0; sc = 1;
             startLayout();
+        }
+
+        // The host's find bar: null while closed (normal colours); while open,
+        // nodes whose label contains the text (case-insensitive) draw yellow
+        // and all others gray — nothing typed yet means all gray. Recolours
+        // without any relayout, and the query survives new data.
+        var findQuery = null, findMatch = null;
+
+        function setFindQuery(q) {
+            findQuery = (typeof q === 'string') ? q : null;
+            applyFind();
+            draw();
+        }
+
+        function applyFind() {
+            if (findQuery === null || N === 0) { findMatch = null; return; }
+            findMatch = new Uint8Array(N);
+            var q = findQuery.toLowerCase();
+            if (q.length === 0) return;
+            for (var i = 0; i < N; i++) {
+                if ((nodes[i].label || '').toLowerCase().indexOf(q) >= 0) findMatch[i] = 1;
+            }
         }
 
         // 'tree' (a spanning forest drawn top-down — see treeLayout) or
@@ -812,9 +931,14 @@ private struct GraphWebView: NSViewRepresentable {
             }
             ctx.fill();
 
-            drawNodes(0, '#FF453A', r);
-            drawNodes(1, '#30D158', r);
-            drawNodes(2, '#0A84FF', r);
+            if (findMatch) {
+                drawFindNodes(0, '#8E8E93', r);
+                drawFindNodes(1, '#FFD60A', r);
+            } else {
+                drawNodes(0, '#FF453A', r);
+                drawNodes(1, '#30D158', r);
+                drawNodes(2, '#0A84FF', r);
+            }
 
             if (hovered >= 0) {
                 ctx.beginPath();
@@ -831,6 +955,17 @@ private struct GraphWebView: NSViewRepresentable {
             ctx.beginPath();
             for (var i = 0; i < N; i++) {
                 if (nodes[i].kind !== kind) continue;
+                ctx.moveTo(X[i] + r, Y[i]);
+                ctx.arc(X[i], Y[i], r, 0, Math.PI*2);
+            }
+            ctx.fill();
+        }
+
+        function drawFindNodes(matching, color, r) {
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            for (var i = 0; i < N; i++) {
+                if (findMatch[i] !== matching) continue;
                 ctx.moveTo(X[i] + r, Y[i]);
                 ctx.arc(X[i], Y[i], r, 0, Math.PI*2);
             }
