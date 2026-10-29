@@ -270,10 +270,12 @@ private struct GraphWebView: NSViewRepresentable {
         var R = 14;       // node radius
         var ARROW = 14;   // arrowhead length (a node radius)
 
-        // Node metadata ({id, label, isSource}) by index; positions,
+        // Node metadata ({id, label, isSource, kind}) by index; positions,
         // velocities and forces in typed arrays so the hot loops never touch
-        // objects. Edges are index pairs.
-        var nodes = [], N = 0;
+        // objects. Edges are index pairs. The connected nodes are stored first
+        // (indices 0..NC-1) and are the only ones the force layout moves; the
+        // isolated (red) ones follow and are placed as their own cluster.
+        var nodes = [], N = 0, NC = 0;
         var X, Y, VX, VY, FX, FY;
         var EF, ET, E = 0;
         var tx = 0, ty = 0, sc = 1;
@@ -294,40 +296,80 @@ private struct GraphWebView: NSViewRepresentable {
             tip.style.display = 'none';
             hovered = -1;
             N = ns.length;
-            nodes = ns.map(function(n) { return { id: n.id, label: n.label, isSource: n.isSource }; });
-            X = new Float64Array(N); Y = new Float64Array(N);
-            VX = new Float64Array(N); VY = new Float64Array(N);
-            FX = new Float64Array(N); FY = new Float64Array(N);
-            var spread = Math.max(200, Math.sqrt(N) * 60);
+            // Resolve edges and colour kinds in the given order first: 2 = has
+            // an incoming arrow (blue), 1 = outgoing arrows only (green),
+            // 0 = no arrows at all (red).
             var indexByID = new Map();
-            for (var i = 0; i < N; i++) {
-                X[i] = (Math.random() - 0.5) * spread;
-                Y[i] = (Math.random() - 0.5) * spread;
-                indexByID.set(nodes[i].id, i);
-            }
+            for (var i = 0; i < N; i++) indexByID.set(ns[i].id, i);
             var from = [], to = [];
             for (var k = 0; k < es.length; k++) {
                 var a = indexByID.get(es[k].from), b = indexByID.get(es[k].to);
                 if (a === undefined || b === undefined) continue;
                 from.push(a); to.push(b);
             }
-            E = from.length;
-            EF = Int32Array.from(from); ET = Int32Array.from(to);
-            // Colour kind: 2 = has an incoming arrow (blue), 1 = outgoing
-            // arrows only (green), 0 = no arrows at all (red).
             var linked = new Uint8Array(N);
-            for (var m = 0; m < E; m++) { linked[EF[m]] = 1; linked[ET[m]] = 1; }
-            for (var j = 0; j < N; j++) {
-                nodes[j].kind = nodes[j].isSource ? (linked[j] ? 1 : 0) : 2;
+            for (var m = 0; m < from.length; m++) { linked[from[m]] = 1; linked[to[m]] = 1; }
+            var kinds = ns.map(function(n, j) { return n.isSource ? (linked[j] ? 1 : 0) : 2; });
+            // Connected nodes first, isolated ones after (see NC above).
+            var order = [];
+            for (var c = 0; c < N; c++) if (kinds[c] !== 0) order.push(c);
+            NC = order.length;
+            for (var d = 0; d < N; d++) if (kinds[d] === 0) order.push(d);
+            var newIndex = new Int32Array(N);
+            nodes = order.map(function(old, idx) {
+                newIndex[old] = idx;
+                return { id: ns[old].id, label: ns[old].label, isSource: ns[old].isSource, kind: kinds[old] };
+            });
+            E = from.length;
+            EF = new Int32Array(E); ET = new Int32Array(E);
+            for (var e = 0; e < E; e++) { EF[e] = newIndex[from[e]]; ET[e] = newIndex[to[e]]; }
+            X = new Float64Array(N); Y = new Float64Array(N);
+            VX = new Float64Array(N); VY = new Float64Array(N);
+            FX = new Float64Array(N); FY = new Float64Array(N);
+            var spread = Math.max(200, Math.sqrt(NC) * 60);
+            for (var p = 0; p < NC; p++) {
+                X[p] = (Math.random() - 0.5) * spread;
+                Y[p] = (Math.random() - 0.5) * spread;
             }
             tx = 0; ty = 0; sc = 1;
             startSimulation();
         }
 
+        // The isolated nodes sit in their own cluster: a compact grid to the
+        // right of the connected nodes' bounding box (centred on the origin
+        // when every node is isolated), re-placed after every slice so it
+        // follows the animating layout.
+        var ISO_SPACING = 2 * R + 8, ISO_GAP = 120;
+        function placeIsolated() {
+            var M = N - NC;
+            if (M === 0) return;
+            var cols = Math.ceil(Math.sqrt(M)), rows = Math.ceil(M / cols);
+            var left, centerY;
+            if (NC > 0) {
+                var maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+                for (var i = 0; i < NC; i++) {
+                    if (X[i] > maxX) maxX = X[i];
+                    if (Y[i] < minY) minY = Y[i];
+                    if (Y[i] > maxY) maxY = Y[i];
+                }
+                left = maxX + ISO_GAP;
+                centerY = (minY + maxY) / 2;
+            } else {
+                left = -(cols - 1) * ISO_SPACING / 2;
+                centerY = 0;
+            }
+            var top = centerY - (rows - 1) * ISO_SPACING / 2;
+            for (var k = 0; k < M; k++) {
+                X[NC + k] = left + (k % cols) * ISO_SPACING;
+                Y[NC + k] = top + Math.floor(k / cols) * ISO_SPACING;
+            }
+        }
+
         // ---- layout begin (DOM-free: a scratch jsc harness extracts this block) ----
-        // The force model: pairwise repulsion 2500/(d²+1), springs along edges
-        // toward 100 units (k 0.12), gravity toward the centroid (0.04), 0.75
-        // damping, per-step force scale alpha. Repulsion goes through a
+        // The force model, over the first NC nodes (the connected ones):
+        // pairwise repulsion 2500/(d²+1), springs along edges toward 100 units
+        // (k 0.12), gravity toward the centroid (0.04), 0.75 damping,
+        // per-step force scale alpha. Repulsion goes through a
         // Barnes–Hut quadtree — a cell far enough away (width/distance < θ)
         // acts as one body at its centre of mass — so a step is O(N log N)
         // instead of O(N²). The tree lives in flat typed arrays rebuilt each
@@ -356,10 +398,10 @@ private struct GraphWebView: NSViewRepresentable {
         }
 
         function buildTree() {
-            ensureTreeCapacity(8 * N + 64);
+            ensureTreeCapacity(8 * NC + 64);
             qCount = 0;
             var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-            for (var i = 0; i < N; i++) {
+            for (var i = 0; i < NC; i++) {
                 if (X[i] < minX) minX = X[i];
                 if (X[i] > maxX) maxX = X[i];
                 if (Y[i] < minY) minY = Y[i];
@@ -367,7 +409,7 @@ private struct GraphWebView: NSViewRepresentable {
             }
             var half = Math.max(maxX - minX, maxY - minY) / 2 + 1;
             var root = newCell((minX + maxX) / 2, (minY + maxY) / 2, half);
-            for (var p = 0; p < N; p++) insertPoint(root, p);
+            for (var p = 0; p < NC; p++) insertPoint(root, p);
             for (var k = 0; k < qCount; k++) {
                 if (QM[k] > 0) { QMX[k] /= QM[k]; QMY[k] /= QM[k]; }
             }
@@ -406,7 +448,7 @@ private struct GraphWebView: NSViewRepresentable {
         }
 
         function repulsion(root) {
-            for (var i = 0; i < N; i++) {
+            for (var i = 0; i < NC; i++) {
                 var x = X[i], y = Y[i], fx = 0, fy = 0, sp = 0;
                 stack[sp++] = root;
                 while (sp > 0) {
@@ -433,10 +475,10 @@ private struct GraphWebView: NSViewRepresentable {
 
         // One step at force scale `alpha`; returns the largest node movement.
         function tick(alpha) {
-            if (N === 0) return 0;
+            if (NC === 0) return 0;
             var i;
-            for (i = 0; i < N; i++) { FX[i] = 0; FY[i] = 0; }
-            if (N > 1) repulsion(buildTree());
+            for (i = 0; i < NC; i++) { FX[i] = 0; FY[i] = 0; }
+            if (NC > 1) repulsion(buildTree());
 
             // Spring attraction along edges
             for (i = 0; i < E; i++) {
@@ -450,10 +492,10 @@ private struct GraphWebView: NSViewRepresentable {
 
             // Gravity toward centroid, then integrate
             var cx = 0, cy = 0;
-            for (i = 0; i < N; i++) { cx += X[i]; cy += Y[i]; }
-            cx /= N; cy /= N;
+            for (i = 0; i < NC; i++) { cx += X[i]; cy += Y[i]; }
+            cx /= NC; cy /= NC;
             var maxMove = 0;
-            for (i = 0; i < N; i++) {
+            for (i = 0; i < NC; i++) {
                 FX[i] -= (X[i] - cx) * 0.04;
                 FY[i] -= (Y[i] - cy) * 0.04;
                 VX[i] = (VX[i] + FX[i] * alpha) * 0.75;
@@ -480,14 +522,16 @@ private struct GraphWebView: NSViewRepresentable {
             var generation = simGeneration;
             if (rafID) { cancelAnimationFrame(rafID); rafID = 0; }
             simStep = 0;
-            simSteps = Math.min(700, 300 + N * 2);
+            simSteps = Math.min(700, 300 + NC * 2);
             runSlice(30);
+            placeIsolated();
             draw();
             postProgress();
             if (simStep >= simSteps) return;
             rafID = requestAnimationFrame(function frame() {
                 if (generation !== simGeneration) return;
                 runSlice(12);
+                placeIsolated();
                 draw();
                 postProgress();
                 rafID = simStep < simSteps ? requestAnimationFrame(frame) : 0;
