@@ -1230,6 +1230,48 @@ struct AppDatabase {
         }
     }
 
+    /// Every collection holding at least one of `instanceIDs`, with how many of
+    /// them it holds, ordered like `fetchCollections`. Feeds the Search
+    /// window's "Remove from collection" submenu.
+    func fetchCollectionMemberships(
+        forInstanceIDs instanceIDs: some Swift.Collection<Int64>
+    ) throws -> [CollectionMembershipCount] {
+        guard !instanceIDs.isEmpty else { return [] }
+        return try dbQueue.read { db in
+            var namesByID: [Int64: String] = [:]
+            var countsByID: [Int64: Int] = [:]
+            // Chunked to stay well under SQLite's bound-parameter limit.
+            let ids = Array(Set(instanceIDs))
+            for start in stride(from: 0, to: ids.count, by: 500) {
+                let chunk = Array(ids[start..<min(start + 500, ids.count)])
+                let placeholders = repeatElement("?", count: chunk.count).joined(separator: ", ")
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                        SELECT collection.id, collection.name, COUNT(*) AS memberCount
+                        FROM instance_id_collection_id
+                        JOIN collection
+                            ON collection.id = instance_id_collection_id.collection_id
+                        WHERE instance_id_collection_id.instance_id IN (\(placeholders))
+                        GROUP BY collection.id, collection.name
+                        """,
+                    arguments: StatementArguments(chunk)
+                )
+                for row in rows {
+                    let id: Int64 = row["id"]
+                    namesByID[id] = row["name"]
+                    countsByID[id, default: 0] += row["memberCount"] as Int
+                }
+            }
+            return namesByID
+                .map { CollectionMembershipCount(id: $0.key, name: $0.value, memberCount: countsByID[$0.key] ?? 0) }
+                .sorted {
+                    let order = $0.name.localizedCaseInsensitiveCompare($1.name)
+                    return order == .orderedSame ? $0.id < $1.id : order == .orderedAscending
+                }
+        }
+    }
+
     /// Replaces the instance's memberships wholesale. Deliberately applies NO
     /// collection default priority: its only caller is the instance editor,
     /// which raises its DRAFT priority the moment a collection is checked (so

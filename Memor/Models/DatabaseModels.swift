@@ -205,6 +205,13 @@ struct Collection: Identifiable, FetchableRecord, Decodable, Hashable {
     let defaultPriority: Int
 }
 
+/// A collection plus how many instances of some given set it holds.
+struct CollectionMembershipCount: Identifiable, Hashable {
+    let id: Int64
+    let name: String
+    let memberCount: Int
+}
+
 struct CollectionChecklistItem: Identifiable, Hashable {
     let id: Int64
     let name: String

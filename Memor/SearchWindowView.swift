@@ -136,7 +136,7 @@ struct SearchWindowView: View {
     @State private var queryIDsPendingReset: Set<String> = []
     @State private var queryIDsPendingDelete: Set<String> = []
 
-    // Both tabs: the "Add to collection…" / "Remove from collection…" picker.
+    // Both tabs: the "Add to collection…" picker.
     @StateObject private var collectionPickerController = PickerPanelController()
 
     private var collectionInAddMode: Collection? { windowState.addToCollection }
@@ -288,18 +288,17 @@ struct SearchWindowView: View {
 
     // MARK: - Add to / remove from collection
 
-    /// Opens the collection picker for "Add to collection…" / "Remove from
-    /// collection…". Every collection is listed, unfiltered by the selection's
-    /// current memberships — adds skip instances already in the collection and
-    /// removals of non-members are no-ops.
-    private func presentCollectionPicker(instanceIDs: Set<Int64>, adding: Bool) {
+    /// Opens the collection picker for "Add to collection…". Every collection
+    /// is listed, unfiltered by the selection's current memberships — adds
+    /// skip instances already in the collection.
+    private func presentAddToCollectionPicker(instanceIDs: Set<Int64>) {
         guard !instanceIDs.isEmpty else { return }
         let collections = (try? appDatabase.fetchCollections()) ?? []
         let count = instanceIDs.count
         let noun = count == 1 ? "Instance" : "Instances"
         collectionPickerController.present(
             from: NSApp.keyWindow,
-            title: adding ? "Add \(count) \(noun) to…" : "Remove \(count) \(noun) from…",
+            title: "Add \(count) \(noun) to…",
             placeholder: "Search collections…",
             emptyText: "No matching collections.",
             items: collections.map { PickerPanelItem(id: $0.id, title: $0.name) }
@@ -308,10 +307,34 @@ struct SearchWindowView: View {
                 await applyCollectionMembership(
                     instanceIDs: instanceIDs,
                     collectionID: collection.id,
-                    adding: adding
+                    adding: true
                 )
             }
         }
+    }
+
+    /// The "Remove from collection" submenu: every collection holding at least
+    /// one of `instanceIDs`, prefixed "ꪜ " when it holds all of them and "— "
+    /// when only some. Choosing one removes every given instance from it
+    /// (non-members are no-ops). Disabled when none are in any collection.
+    @ViewBuilder
+    private func removeFromCollectionSubmenu(instanceIDs: Set<Int64>) -> some View {
+        let memberships = (try? appDatabase.fetchCollectionMemberships(forInstanceIDs: instanceIDs)) ?? []
+        Menu("Remove from collection") {
+            ForEach(memberships) { membership in
+                let prefix = membership.memberCount >= instanceIDs.count ? "ꪜ" : "—"
+                Button("\(prefix) \(membership.name)") {
+                    Task {
+                        await applyCollectionMembership(
+                            instanceIDs: instanceIDs,
+                            collectionID: membership.id,
+                            adding: false
+                        )
+                    }
+                }
+            }
+        }
+        .disabled(memberships.isEmpty)
     }
 
     @MainActor
@@ -616,11 +639,9 @@ struct SearchWindowView: View {
                     instanceIDs: items
                 )
                 Button("Add to collection…") {
-                    presentCollectionPicker(instanceIDs: items, adding: true)
+                    presentAddToCollectionPicker(instanceIDs: items)
                 }
-                Button("Remove from collection…") {
-                    presentCollectionPicker(instanceIDs: items, adding: false)
-                }
+                removeFromCollectionSubmenu(instanceIDs: items)
                 SetPrioritySubmenu(
                     currentPriority: appDatabase.fetchSharedInstancePriority(instanceIDs: items)
                 ) { priority in
@@ -693,11 +714,9 @@ struct SearchWindowView: View {
                     instanceIDs: queryInstanceIDs(forSelectedQueryIDs: items)
                 )
                 Button("Add to collection…") {
-                    presentCollectionPicker(instanceIDs: queryInstanceIDs(forSelectedQueryIDs: items), adding: true)
+                    presentAddToCollectionPicker(instanceIDs: queryInstanceIDs(forSelectedQueryIDs: items))
                 }
-                Button("Remove from collection…") {
-                    presentCollectionPicker(instanceIDs: queryInstanceIDs(forSelectedQueryIDs: items), adding: false)
-                }
+                removeFromCollectionSubmenu(instanceIDs: queryInstanceIDs(forSelectedQueryIDs: items))
                 Divider()
                 // A query's own priority and its instance's are separate
                 // settings (the higher one wins in Study), so both are offered.
