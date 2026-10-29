@@ -314,8 +314,8 @@ struct SearchWindowView: View {
     }
 
     /// The "Remove from collection" submenu: every collection holding at least
-    /// one of `instanceIDs`, prefixed "ꪜ " when it holds all of them and "— "
-    /// when only some. Choosing one removes every given instance from it
+    /// one of `instanceIDs`, prefixed "ꪜ" when it holds all of them and "—"
+    /// when only some (then two spaces). Choosing one removes every given instance from it
     /// (non-members are no-ops). Disabled when none are in any collection.
     @ViewBuilder
     private func removeFromCollectionSubmenu(instanceIDs: Set<Int64>) -> some View {
@@ -323,7 +323,7 @@ struct SearchWindowView: View {
         Menu("Remove from collection") {
             ForEach(memberships) { membership in
                 let prefix = membership.memberCount >= instanceIDs.count ? "ꪜ" : "—"
-                Button("\(prefix) \(membership.name)") {
+                Button("\(prefix)  \(membership.name)") {
                     Task {
                         await applyCollectionMembership(
                             instanceIDs: instanceIDs,
