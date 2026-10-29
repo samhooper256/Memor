@@ -10,10 +10,11 @@ import SwiftUI
 import WebKit
 
 /// How the page lays the graph out: a spanning forest drawn top-down (tree
-/// edges never cross) or the force simulation. A display preference, so it
-/// persists.
+/// edges never cross), a layered drawing in which every arrow points up, or
+/// the force simulation. A display preference, so it persists.
 enum GraphLayoutMode: String, CaseIterable, Identifiable {
     case tree
+    case layered
     case force
 
     static let userDefaultsKey = "com.sam.Memor.graphLayoutMode"
@@ -23,6 +24,7 @@ enum GraphLayoutMode: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .tree: return "Tree"
+        case .layered: return "Layered"
         case .force: return "Force"
         }
     }
@@ -113,7 +115,7 @@ struct GraphPageView: View {
             }
             .pickerStyle(.menu)
             .fixedSize()
-            .help("Tree: a spanning forest drawn top-down — tree arrows never cross. Force: the physics layout.")
+            .help("Tree: a spanning forest drawn top-down — tree arrows never cross. Layered: every arrow points up (an instance sits above everything that links to it). Force: the physics layout.")
             .onChange(of: layoutMode) { _, _ in
                 // The page re-lays out the current graph; force mode reports progress.
                 if let graphData, !graphData.nodes.isEmpty {
@@ -479,6 +481,9 @@ private struct GraphWebView: NSViewRepresentable {
         var nodes = [], N = 0, NC = 0;
         var X, Y, VX, VY, FX, FY;
         var EF, ET, E = 0;
+        // Layered mode only: per edge, the lane points a long edge bends
+        // through (null entry or null array = drawn straight).
+        var edgeWaypoints = null;
         var tx = 0, ty = 0, sc = 1;
         var panning = false, px0 = 0, py0 = 0, ptx = 0, pty = 0;
         var hovered = -1;
@@ -560,19 +565,21 @@ private struct GraphWebView: NSViewRepresentable {
             }
         }
 
-        // 'tree' (a spanning forest drawn top-down — see treeLayout) or
-        // 'force' (the physics simulation). Switching re-lays out the data in
-        // place; force mode then starts from the current positions.
+        // 'tree' (a spanning forest drawn top-down — see treeLayout),
+        // 'layered' (every arrow points up — see layeredLayout) or 'force'
+        // (the physics simulation). Switching re-lays out the data in place;
+        // force mode then starts from the current positions.
         var layoutMode = 'tree';
 
         function startLayout() {
+            edgeWaypoints = null;   // only layeredLayout sets them
             if (layoutMode === 'force') {
                 startSimulation();
                 return;
             }
             simGeneration++;   // cancels a running force layout's frames
             if (rafID) { cancelAnimationFrame(rafID); rafID = 0; }
-            treeLayout();
+            if (layoutMode === 'layered') layeredLayout(); else treeLayout();
             placeIsolated();
             draw();
             simStep = 1; simSteps = 1;
@@ -580,7 +587,7 @@ private struct GraphWebView: NSViewRepresentable {
         }
 
         function setLayoutMode(mode) {
-            if (mode !== 'tree' && mode !== 'force') return;
+            if (mode !== 'tree' && mode !== 'layered' && mode !== 'force') return;
             layoutMode = mode;
             if (N === 0) return;
             tx = 0; ty = 0; sc = 1;
@@ -839,19 +846,29 @@ private struct GraphWebView: NSViewRepresentable {
                 compHeight[c] = maxDepth * LEVEL_SPACING;
             }
 
-            // Pack components into rows, widest first, about square overall.
-            var byWidth = new Int32Array(roots.length);
-            for (i = 0; i < roots.length; i++) byWidth[i] = i;
+            packComponents(roots.length, comp, compWidth, compHeight);
+        }
+
+        // Packs `count` components — each laid out from (0, 0) with the
+        // given width/height, node i belonging to comp[i] — into rows,
+        // widest first, about square overall, then centres everything on
+        // the origin. Shared by the Tree and Layered layouts. Optional
+        // `extraPoints` (x,y pairs; component per point in `extraComp`) are
+        // moved along with their component — the layered edges' waypoints.
+        function packComponents(count, comp, compWidth, compHeight, extraPoints, extraComp) {
+            var i;
+            var byWidth = new Int32Array(count);
+            for (i = 0; i < count; i++) byWidth[i] = i;
             byWidth.sort(function(p, q) { return compWidth[q] - compWidth[p] || p - q; });
             var totalArea = 0, widest = 0;
-            for (i = 0; i < roots.length; i++) {
+            for (i = 0; i < count; i++) {
                 totalArea += (compWidth[i] + COMPONENT_GAP) * (compHeight[i] + COMPONENT_GAP);
                 if (compWidth[i] > widest) widest = compWidth[i];
             }
             var rowWidth = Math.max(widest, Math.sqrt(totalArea) * 1.2);
-            var offsetX = new Float64Array(roots.length), offsetY = new Float64Array(roots.length);
+            var offsetX = new Float64Array(count), offsetY = new Float64Array(count);
             var cursorX = 0, cursorY = 0, rowHeight = 0;
-            for (i = 0; i < roots.length; i++) {
+            for (i = 0; i < count; i++) {
                 var k = byWidth[i];
                 if (cursorX > 0 && cursorX + compWidth[k] > rowWidth) {
                     cursorY += rowHeight + COMPONENT_GAP;
@@ -871,6 +888,337 @@ private struct GraphWebView: NSViewRepresentable {
             }
             var cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
             for (i = 0; i < NC; i++) { X[i] -= cx; Y[i] -= cy; VX[i] = 0; VY[i] = 0; }
+            if (extraPoints) {
+                for (i = 0; i < extraComp.length; i++) {
+                    extraPoints[2 * i] += offsetX[extraComp[i]] - cx;
+                    extraPoints[2 * i + 1] += offsetY[extraComp[i]] - cy;
+                }
+            }
+        }
+
+        // ---- Layered layout (Sugiyama-style) for directed structure: every
+        // arrow points strictly upward. Layers by longest path to a sink —
+        // sinks (ultimate etymons) on the top row, each node one row below
+        // its deepest out-neighbour, so a word deriving from two etymons
+        // lands below both. DFS back edges are left out of the layering (only
+        // they can point down), so cyclic searches still lay out. Order
+        // within a layer starts from a DFS down the forest, then a few
+        // median
+        // barycenter sweeps (fewer crossings); x from relaxing each node
+        // toward the median of its neighbours under the layer's order and
+        // minimum gap (an isotonic least-squares fit). Components are packed
+        // like Tree mode's. A long edge gets a virtual node per crossed row
+        // and is drawn as a polyline through them.
+        var LAYER_SWEEPS = 6, LAYER_X_PASSES = 8;
+
+        function layeredLayout() {
+            if (NC === 0) return;
+            var i, e, k;
+
+            // Directed adjacency (CSR): out-lists and in-lists, each entry
+            // carrying the edge index for the back-edge flags.
+            var outDeg = new Int32Array(NC), inDeg = new Int32Array(NC);
+            for (e = 0; e < E; e++) { outDeg[EF[e]]++; inDeg[ET[e]]++; }
+            var outStart = new Int32Array(NC + 1), inStart = new Int32Array(NC + 1);
+            for (i = 0; i < NC; i++) {
+                outStart[i + 1] = outStart[i] + outDeg[i];
+                inStart[i + 1] = inStart[i] + inDeg[i];
+            }
+            var outFill = new Int32Array(NC), inFill = new Int32Array(NC);
+            var outAdj = new Int32Array(E), outEdge = new Int32Array(E);
+            var inAdj = new Int32Array(E), inEdge = new Int32Array(E);
+            for (e = 0; e < E; e++) {
+                var a = EF[e], b = ET[e];
+                outAdj[outStart[a] + outFill[a]] = b; outEdge[outStart[a] + outFill[a]++] = e;
+                inAdj[inStart[b] + inFill[b]] = a; inEdge[inStart[b] + inFill[b]++] = e;
+            }
+
+            // Components over the undirected graph (packed separately).
+            var comp = new Int32Array(NC).fill(-1), compCount = 0, queue = new Int32Array(NC);
+            for (i = 0; i < NC; i++) {
+                if (comp[i] !== -1) continue;
+                var head = 0, tail = 0;
+                queue[tail++] = i; comp[i] = compCount;
+                while (head < tail) {
+                    var u = queue[head++];
+                    for (k = outStart[u]; k < outStart[u + 1]; k++) {
+                        if (comp[outAdj[k]] === -1) { comp[outAdj[k]] = compCount; queue[tail++] = outAdj[k]; }
+                    }
+                    for (k = inStart[u]; k < inStart[u + 1]; k++) {
+                        if (comp[inAdj[k]] === -1) { comp[inAdj[k]] = compCount; queue[tail++] = inAdj[k]; }
+                    }
+                }
+                compCount++;
+            }
+
+            // Cycle removal: iterative DFS over out-edges; an edge into a
+            // node still on the DFS stack is a back edge.
+            var ignored = new Uint8Array(E), color = new Uint8Array(NC);
+            var dfsNode = new Int32Array(NC), dfsPos = new Int32Array(NC);
+            for (i = 0; i < NC; i++) {
+                if (color[i] !== 0) continue;
+                var sp = 0;
+                dfsNode[sp] = i; dfsPos[sp] = outStart[i]; sp++; color[i] = 1;
+                while (sp > 0) {
+                    var top = dfsNode[sp - 1], dpos = dfsPos[sp - 1];
+                    if (dpos < outStart[top + 1]) {
+                        dfsPos[sp - 1] = dpos + 1;
+                        var w = outAdj[dpos];
+                        if (color[w] === 1) {
+                            ignored[outEdge[dpos]] = 1;
+                        } else if (color[w] === 0) {
+                            color[w] = 1; dfsNode[sp] = w; dfsPos[sp] = outStart[w]; sp++;
+                        }
+                    } else {
+                        color[top] = 2; sp--;
+                    }
+                }
+            }
+
+            // Depth: longest path to a sink over the kept edges (sinks 0), in
+            // reverse Kahn order — every sink on its component's top row and
+            // each node one row below its deepest out-neighbour, so a
+            // single-etymon edge spans exactly one row (layering from the
+            // sources instead put every leaf on the bottom row, and the long
+            // root-to-leaf edges that made crossed everything).
+            var depth = new Int32Array(NC), remaining = new Int32Array(NC);
+            for (e = 0; e < E; e++) if (!ignored[e]) remaining[EF[e]]++;
+            var order = new Int32Array(NC), oh = 0, ot = 0;
+            for (i = 0; i < NC; i++) if (remaining[i] === 0) order[ot++] = i;
+            while (oh < ot) {
+                var v2 = order[oh++];
+                for (k = inStart[v2]; k < inStart[v2 + 1]; k++) {
+                    if (ignored[inEdge[k]]) continue;
+                    var u2 = inAdj[k];
+                    if (depth[v2] + 1 > depth[u2]) depth[u2] = depth[v2] + 1;
+                    if (--remaining[u2] === 0) order[ot++] = u2;
+                }
+            }
+
+            // Per component: layer index counts upward from the deepest row
+            // (higher layer = higher on screen), then layer lists seeded in
+            // Kahn order, barycenter sweeps, x relaxation.
+            var compMaxLayer = new Int32Array(compCount);
+            for (i = 0; i < NC; i++) if (depth[i] > compMaxLayer[comp[i]]) compMaxLayer[comp[i]] = depth[i];
+            var layer0 = new Int32Array(NC);
+            for (i = 0; i < NC; i++) layer0[i] = compMaxLayer[comp[i]] - depth[i];
+
+            // A kept edge spanning several rows gets a virtual node in every
+            // row it crosses (Sugiyama's dummy nodes): the ordering and x
+            // passes then keep a lane for it, and it is drawn as a polyline
+            // through that lane (edgeWaypoints). Nodes 0..NC-1 are real,
+            // NC..total-1 virtual; the edges form an undirected CSR over the
+            // extended node set.
+            var virtualCount = 0;
+            for (e = 0; e < E; e++) if (!ignored[e]) virtualCount += Math.max(0, layer0[ET[e]] - layer0[EF[e]] - 1);
+            var total = NC + virtualCount;
+            var layer = new Int32Array(total), xcomp = new Int32Array(total);
+            for (i = 0; i < NC; i++) { layer[i] = layer0[i]; xcomp[i] = comp[i]; }
+            var extFrom = [], extTo = [];
+            var edgeVirtualStart = new Int32Array(E).fill(-1), edgeVirtualCount = new Int32Array(E);
+            var nextVirtual = NC;
+            for (e = 0; e < E; e++) {
+                if (ignored[e]) continue;
+                var a2 = EF[e], b2 = ET[e], span = layer0[b2] - layer0[a2];
+                if (span <= 1) { extFrom.push(a2); extTo.push(b2); continue; }
+                edgeVirtualStart[e] = nextVirtual; edgeVirtualCount[e] = span - 1;
+                var prev = a2;
+                for (var sIdx = 1; sIdx < span; sIdx++) {
+                    var vn = nextVirtual++;
+                    layer[vn] = layer0[a2] + sIdx; xcomp[vn] = comp[a2];
+                    extFrom.push(prev); extTo.push(vn);
+                    prev = vn;
+                }
+                extFrom.push(prev); extTo.push(b2);
+            }
+            var nbDeg = new Int32Array(total);
+            for (k = 0; k < extFrom.length; k++) { nbDeg[extFrom[k]]++; nbDeg[extTo[k]]++; }
+            var nbStart = new Int32Array(total + 1);
+            for (i = 0; i < total; i++) nbStart[i + 1] = nbStart[i] + nbDeg[i];
+            var nbFill = new Int32Array(total), nbAdj = new Int32Array(nbStart[total]);
+            for (k = 0; k < extFrom.length; k++) {
+                nbAdj[nbStart[extFrom[k]] + nbFill[extFrom[k]]++] = extTo[k];
+                nbAdj[nbStart[extTo[k]] + nbFill[extTo[k]]++] = extFrom[k];
+            }
+
+            // Seed the within-layer order with a DFS down the kept in-edges
+            // from each sink (Kahn's order lists the sinks first): the
+            // forest's own left-to-right order, crossing-free for its edges,
+            // so the sweeps only have to accommodate the extra edges.
+            var seedRank = new Int32Array(NC).fill(-1), seedCounter = 0, dstack = new Int32Array(NC);
+            for (var oi = 0; oi < NC; oi++) {
+                if (seedRank[order[oi]] !== -1) continue;
+                var dsp = 0;
+                dstack[dsp++] = order[oi];
+                while (dsp > 0) {
+                    var nd0 = dstack[--dsp];
+                    if (seedRank[nd0] !== -1) continue;
+                    seedRank[nd0] = seedCounter++;
+                    for (k = inStart[nd0]; k < inStart[nd0 + 1]; k++) {
+                        if (ignored[inEdge[k]]) continue;
+                        if (seedRank[inAdj[k]] === -1) dstack[dsp++] = inAdj[k];
+                    }
+                }
+            }
+            var bySeed = new Int32Array(NC);
+            for (i = 0; i < NC; i++) bySeed[seedRank[i]] = i;
+
+            // Layer lists per component: real nodes in seed order, then the
+            // virtual ones (the sweeps move them beside their edges).
+            var layerLists = new Array(compCount);
+            for (i = 0; i < compCount; i++) {
+                layerLists[i] = new Array(compMaxLayer[i] + 1);
+                for (k = 0; k <= compMaxLayer[i]; k++) layerLists[i][k] = [];
+            }
+            for (i = 0; i < NC; i++) layerLists[comp[bySeed[i]]][layer[bySeed[i]]].push(bySeed[i]);
+            for (i = NC; i < total; i++) layerLists[xcomp[i]][layer[i]].push(i);
+
+            var pos = new Float64Array(total), key = new Float64Array(total);
+            var px = new Float64Array(total), py = new Float64Array(total);
+            var compWidth = new Float64Array(compCount), compHeight = new Float64Array(compCount);
+
+            function neighbourKey(v, lower, useX) {
+                // Median of the neighbours on one side of v's layer — lower
+                // rows when `lower`, else higher — by order position (sweeps)
+                // or x (x passes); NaN when there are none.
+                var vals = [], L = layer[v];
+                for (var q = nbStart[v]; q < nbStart[v + 1]; q++) {
+                    var n1 = nbAdj[q];
+                    if (lower === (layer[n1] < L) && layer[n1] !== L) vals.push(useX ? px[n1] : pos[n1]);
+                }
+                if (vals.length === 0) return NaN;
+                vals.sort(function(p, q3) { return p - q3; });
+                var mid = vals.length >> 1;
+                return vals.length % 2 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2;
+            }
+
+            function sortLayer(list, lower) {
+                for (var t = 0; t < list.length; t++) {
+                    var bc = neighbourKey(list[t], lower, false);
+                    key[list[t]] = isNaN(bc) ? pos[list[t]] : bc;
+                }
+                list.sort(function(p, q) { return key[p] - key[q] || p - q; });
+                for (var t2 = 0; t2 < list.length; t2++) pos[list[t2]] = t2;
+            }
+
+            // Crossings the edges of `left` and `right` (neighbours in a row,
+            // left first) make with the rows above and below. Every extended
+            // edge spans one row, so this is exact.
+            function crossingsIfOrdered(left, right) {
+                var count = 0;
+                for (var q = nbStart[left]; q < nbStart[left + 1]; q++) {
+                    var a = nbAdj[q], la = layer[a], pa = pos[a];
+                    for (var q2 = nbStart[right]; q2 < nbStart[right + 1]; q2++) {
+                        var b = nbAdj[q2];
+                        if (layer[b] === la && pos[b] < pa) count++;
+                    }
+                }
+                return count;
+            }
+
+            // Transpose refinement: swap row neighbours while it lowers their
+            // crossings; a few passes until nothing improves.
+            function transpose(lists, maxL) {
+                for (var tp = 0; tp < 12; tp++) {
+                    var improved = false;
+                    for (var L = 0; L <= maxL; L++) {
+                        var lst = lists[L];
+                        for (var k2 = 0; k2 + 1 < lst.length; k2++) {
+                            var u = lst[k2], w = lst[k2 + 1];
+                            if (crossingsIfOrdered(w, u) < crossingsIfOrdered(u, w)) {
+                                lst[k2] = w; lst[k2 + 1] = u; pos[w] = k2; pos[u] = k2 + 1;
+                                improved = true;
+                            }
+                        }
+                    }
+                    if (!improved) break;
+                }
+            }
+
+            // x for one layer: closest positions to `desired` that keep the
+            // layer's order and the minimum gap — pool adjacent violators on
+            // desired[i] - i*gap (least squares), then add i*gap back.
+            var blockSum = [], blockCount = [], blockValue = [];
+            function placeLayer(list, desired) {
+                var nb = 0;
+                for (var t = 0; t < list.length; t++) {
+                    var d = desired[t] - t * LEAF_SPACING;
+                    blockSum[nb] = d; blockCount[nb] = 1; blockValue[nb] = d; nb++;
+                    while (nb > 1 && blockValue[nb - 2] > blockValue[nb - 1]) {
+                        blockSum[nb - 2] += blockSum[nb - 1];
+                        blockCount[nb - 2] += blockCount[nb - 1];
+                        blockValue[nb - 2] = blockSum[nb - 2] / blockCount[nb - 2];
+                        nb--;
+                    }
+                }
+                var idx = 0;
+                for (var bI = 0; bI < nb; bI++) {
+                    for (var c2 = 0; c2 < blockCount[bI]; c2++, idx++) px[list[idx]] = blockValue[bI] + idx * LEAF_SPACING;
+                }
+            }
+
+            for (var c = 0; c < compCount; c++) {
+                var lists = layerLists[c], maxL = compMaxLayer[c], L;
+                for (L = 0; L <= maxL; L++) for (k = 0; k < lists[L].length; k++) pos[lists[L][k]] = k;
+                for (var s2 = 0; s2 < LAYER_SWEEPS; s2++) {
+                    for (L = 1; L <= maxL; L++) sortLayer(lists[L], true);
+                    for (L = maxL - 1; L >= 0; L--) sortLayer(lists[L], false);
+                }
+                // (Interleaving this into every sweep measured no better and
+                // twice as slow.)
+                transpose(lists, maxL);
+                for (L = 0; L <= maxL; L++) for (k = 0; k < lists[L].length; k++) px[lists[L][k]] = k * LEAF_SPACING;
+                var desired = [];
+                for (var p2 = 0; p2 < LAYER_X_PASSES; p2++) {
+                    var upward = (p2 % 2 === 0);
+                    for (var step = 0; step <= maxL; step++) {
+                        L = upward ? step : maxL - step;
+                        var list = lists[L];
+                        desired.length = list.length;
+                        for (k = 0; k < list.length; k++) {
+                            var dLower = neighbourKey(list[k], true, true), dUpper = neighbourKey(list[k], false, true);
+                            var dsr = isNaN(dLower) ? dUpper : (isNaN(dUpper) ? dLower : (dLower + dUpper) / 2);
+                            desired[k] = isNaN(dsr) ? px[list[k]] : dsr;
+                        }
+                        placeLayer(list, desired);
+                    }
+                }
+                // Normalise the component to start at x = 0, top row at y = 0.
+                var minX = Infinity, maxX = -Infinity;
+                for (L = 0; L <= maxL; L++) for (k = 0; k < lists[L].length; k++) {
+                    var x = px[lists[L][k]];
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                }
+                for (L = 0; L <= maxL; L++) for (k = 0; k < lists[L].length; k++) {
+                    var nd = lists[L][k];
+                    px[nd] -= minX;
+                    py[nd] = (maxL - L) * LEVEL_SPACING;
+                }
+                compWidth[c] = maxX - minX;
+                compHeight[c] = maxL * LEVEL_SPACING;
+            }
+            for (i = 0; i < NC; i++) { X[i] = px[i]; Y[i] = py[i]; }
+            // The virtual nodes ride along with the packing; each long edge
+            // then takes its own as waypoints.
+            var extraPoints = new Float64Array(2 * virtualCount), extraComp = new Int32Array(virtualCount);
+            for (i = NC; i < total; i++) {
+                extraPoints[2 * (i - NC)] = px[i];
+                extraPoints[2 * (i - NC) + 1] = py[i];
+                extraComp[i - NC] = xcomp[i];
+            }
+            packComponents(compCount, comp, compWidth, compHeight, extraPoints, extraComp);
+            edgeWaypoints = new Array(E);
+            for (e = 0; e < E; e++) {
+                if (edgeVirtualStart[e] < 0) { edgeWaypoints[e] = null; continue; }
+                var wp = new Float64Array(2 * edgeVirtualCount[e]);
+                for (k = 0; k < edgeVirtualCount[e]; k++) {
+                    var vi = edgeVirtualStart[e] + k - NC;
+                    wp[2 * k] = extraPoints[2 * vi];
+                    wp[2 * k + 1] = extraPoints[2 * vi + 1];
+                }
+                edgeWaypoints[e] = wp;
+            }
         }
         // ---- layout end ----
 
@@ -953,9 +1301,23 @@ private struct GraphWebView: NSViewRepresentable {
             ctx.strokeStyle = 'rgba(120,120,135,0.55)';
             ctx.fillStyle = 'rgba(120,120,135,0.55)';
             ctx.lineWidth = 1.3 / sc;
+            var wp, lx, ly;
             ctx.beginPath();
             for (i = 0; i < E; i++) {
                 a = EF[i]; b = ET[i];
+                wp = edgeWaypoints ? edgeWaypoints[i] : null;
+                if (wp) {
+                    // A long layered edge bends through its lane points.
+                    dx = wp[0] - X[a]; dy = wp[1] - Y[a];
+                    dist = Math.sqrt(dx*dx + dy*dy) || 1;
+                    ctx.moveTo(X[a] + dx/dist*r, Y[a] + dy/dist*r);
+                    for (var w = 0; w < wp.length; w += 2) ctx.lineTo(wp[w], wp[w + 1]);
+                    lx = wp[wp.length - 2]; ly = wp[wp.length - 1];
+                    dx = X[b] - lx; dy = Y[b] - ly;
+                    dist = Math.sqrt(dx*dx + dy*dy) || 1;
+                    ctx.lineTo(X[b] - dx/dist*r, Y[b] - dy/dist*r);
+                    continue;
+                }
                 dx = X[b] - X[a]; dy = Y[b] - Y[a];
                 dist = Math.sqrt(dx*dx + dy*dy);
                 if (dist < r*2 + gap) continue;
@@ -967,9 +1329,12 @@ private struct GraphWebView: NSViewRepresentable {
             ctx.beginPath();
             for (i = 0; i < E; i++) {
                 a = EF[i]; b = ET[i];
-                dx = X[b] - X[a]; dy = Y[b] - Y[a];
+                wp = edgeWaypoints ? edgeWaypoints[i] : null;
+                // The arrowhead follows the last segment.
+                if (wp) { lx = wp[wp.length - 2]; ly = wp[wp.length - 1]; } else { lx = X[a]; ly = Y[a]; }
+                dx = X[b] - lx; dy = Y[b] - ly;
                 dist = Math.sqrt(dx*dx + dy*dy);
-                if (dist < r*2 + gap) continue;
+                if (dist === 0 || (!wp && dist < r*2 + gap)) continue;
                 nx = dx/dist; ny = dy/dist;
                 ex = X[b] - nx*r; ey = Y[b] - ny*r;
                 ang = Math.atan2(dy, dx);
