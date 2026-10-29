@@ -49,26 +49,6 @@ enum GraphNodeColor: String, CaseIterable, Identifiable {
     }
 
     var color: Color { Color(nsColor: nsColor) }
-
-    /// A filled circle for the picker's menu rows (NSMenu items take images,
-    /// not arbitrary views).
-    var swatchImage: NSImage {
-        if let cached = Self.swatchCache[self] { return cached }
-        let fill = nsColor
-        let image = NSImage(size: NSSize(width: 14, height: 14), flipped: false) { rect in
-            let circle = NSBezierPath(ovalIn: rect.insetBy(dx: 0.5, dy: 0.5))
-            fill.setFill()
-            circle.fill()
-            NSColor.black.withAlphaComponent(0.25).setStroke()
-            circle.lineWidth = 1
-            circle.stroke()
-            return true
-        }
-        Self.swatchCache[self] = image
-        return image
-    }
-
-    private static var swatchCache: [GraphNodeColor: NSImage] = [:]
 }
 
 /// The three node roles the Graph tab colours, decided by the arrows actually
@@ -163,12 +143,14 @@ struct GraphSettingsWindowView: View {
     }
 }
 
-/// One role's row: the title and a popup of swatches — the chosen colour's
-/// circle is the popup itself, no colour names. Each row owns its
-/// UserDefaults binding.
+/// One role's row: the title and the chosen colour's circle, which is the
+/// selector — clicking it opens a popover with the palette as a 4-column
+/// grid of circles (4/4/3), no colour names. Each row owns its UserDefaults
+/// binding.
 private struct GraphNodeColorRow: View {
     let role: GraphNodeRole
     @AppStorage private var color: GraphNodeColor
+    @State private var isPalettePresented = false
 
     init(role: GraphNodeRole) {
         self.role = role
@@ -177,15 +159,66 @@ private struct GraphNodeColorRow: View {
 
     var body: some View {
         LabeledContent(role.title) {
-            Picker("", selection: $color) {
-                ForEach(GraphNodeColor.allCases) { option in
-                    Image(nsImage: option.swatchImage)
-                        .tag(option)
+            Button {
+                isPalettePresented.toggle()
+            } label: {
+                GraphColorSwatch(color: color, diameter: 18)
+            }
+            .buttonStyle(.plain)
+            .help("Choose a color")
+            .popover(isPresented: $isPalettePresented, arrowEdge: .bottom) {
+                GraphColorPaletteView(selection: $color) {
+                    isPalettePresented = false
                 }
             }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .fixedSize()
         }
+    }
+}
+
+/// The palette popover: four circles per row (the 11 colours fall 4/4/3),
+/// the current choice ringed, the name on hover. A click chooses and closes.
+private struct GraphColorPaletteView: View {
+    @Binding var selection: GraphNodeColor
+    let onPick: () -> Void
+
+    private static let cell: CGFloat = 30
+    private let columns = Array(repeating: GridItem(.fixed(cell), spacing: 6), count: 4)
+
+    var body: some View {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 6) {
+            ForEach(GraphNodeColor.allCases) { option in
+                Button {
+                    selection = option
+                    onPick()
+                } label: {
+                    GraphColorSwatch(color: option, diameter: 22)
+                        .overlay {
+                            if option == selection {
+                                Circle()
+                                    .stroke(Color.primary, lineWidth: 2)
+                                    .frame(width: Self.cell - 2, height: Self.cell - 2)
+                            }
+                        }
+                        .frame(width: Self.cell, height: Self.cell)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(option.title)
+            }
+        }
+        .padding(12)
+    }
+}
+
+/// A filled colour circle with a faint edge so pale colours keep a shape.
+private struct GraphColorSwatch: View {
+    let color: GraphNodeColor
+    let diameter: CGFloat
+
+    var body: some View {
+        Circle()
+            .fill(color.color)
+            .overlay(Circle().stroke(Color.black.opacity(0.25), lineWidth: 1))
+            .frame(width: diameter, height: diameter)
     }
 }
