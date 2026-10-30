@@ -47,7 +47,6 @@ struct QuickGraphWindowView: View {
     @State private var markups: [Int64: GraphNodeMarkup] = [:]
     @State private var message: String?
     @State private var layoutProgress: Double?
-    @State private var loadedRequestID: UUID?
 
     var body: some View {
         graphArea
@@ -67,11 +66,15 @@ struct QuickGraphWindowView: View {
                     .keyboardShortcut(.cancelAction)
                     .hidden()
             )
-            .onReceive(windowState.$request) { request in
-                // The publisher replays its value on subscription; the id
-                // keeps a replay from reloading.
-                guard let request, request.id != loadedRequestID else { return }
-                loadedRequestID = request.id
+            .task(id: windowState.request?.id) {
+                // task(id:) runs once the view is installed and again only
+                // when the request changes. (An onReceive of the @Published
+                // request replays its value DURING the view update, where
+                // state writes are unreliable; it re-ran the load after the
+                // page had reported the layout done and left the progress
+                // overlay stuck at 0%.)
+                guard let request = windowState.request else { return }
+                await Task.yield()   // let the spinner paint before the synchronous fetch
                 load(request)
             }
     }
@@ -128,22 +131,28 @@ struct QuickGraphWindowView: View {
         settingsName = settings.name
         layoutMode = settings.layoutMode
         colors = settings.colors
-        graphData = nil
-        markups = [:]
         message = nil
-        layoutProgress = nil
         do {
             let data = try appDatabase.fetchGraphData(query: settings.query, fieldFilter: settings.fieldFilter)
             guard let component = data.connectedComponent(containing: request.instanceID) else {
+                graphData = nil
+                markups = [:]
+                layoutProgress = nil
                 message = request.selection == .default
                     ? "This instance has no node in the graph."
                     : "This instance isn't among the “\(settings.name)” preset's search results."
                 return
             }
             markups = resolveGraphMarkups(settings.markups, for: component, appDatabase: appDatabase)
-            layoutProgress = 0
+            // As on the Graph tab: progress only for data the page hasn't laid
+            // out yet — the page reports it, and a reload of the same
+            // component triggers no layout, so nothing would clear it.
+            layoutProgress = (!component.nodes.isEmpty && component != graphData) ? 0 : nil
             graphData = component
         } catch {
+            graphData = nil
+            markups = [:]
+            layoutProgress = nil
             message = error.localizedDescription
         }
     }
