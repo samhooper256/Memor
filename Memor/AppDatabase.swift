@@ -1669,6 +1669,65 @@ struct AppDatabase {
         }
     }
 
+    /// The ids of every instance the instance-search `query` matches, across
+    /// all types including the map types — what the Graph tab's markup layers
+    /// are matched on (the page intersects them with its nodes). The same
+    /// parsing and collection/office validation as `searchInstances`, with
+    /// id-only SELECTs instead of rows.
+    func fetchInstanceIDs(matchingInstanceSearch query: String) throws -> Set<Int64> {
+        let parsedQuery = try parseInstanceSearchQuery(query)
+
+        return try dbQueue.read { db in
+            try validateCollectionSearchComponents(
+                Self.collectionNames(in: parsedQuery.expression),
+                db: db
+            )
+            try validateOfficeSearchComponents(
+                Self.officeNames(in: parsedQuery.expression),
+                db: db
+            )
+
+            var ids: Set<Int64> = []
+            let tableAlias = "instance_table"
+            for typeInfo in try fetchInstanceSearchTypeInfos(db: db) {
+                let searchConditions = makeInstanceSearchConditions(
+                    tableAlias: tableAlias,
+                    typeName: typeInfo.typeName,
+                    typeID: typeInfo.typeID,
+                    fieldIndices: typeInfo.allFieldIndices,
+                    expression: parsedQuery.expression
+                )
+                let whereClause = searchConditions.sql.isEmpty ? "" : "\nWHERE \(searchConditions.sql)"
+                let typeIDs = try Int64.fetchAll(
+                    db,
+                    sql: "SELECT \(tableAlias).id FROM \"type\(typeInfo.typeID)\" AS \(tableAlias)\(whereClause)",
+                    arguments: searchConditions.arguments
+                )
+                ids.formUnion(typeIDs)
+            }
+            ids.formUnion(try fetchPointMapInstanceSearchRows(db: db, expression: parsedQuery.expression).map(\.id))
+            ids.formUnion(try fetchBoundaryMapInstanceSearchRows(db: db, expression: parsedQuery.expression).map(\.id))
+            return ids
+        }
+    }
+
+    /// Parses an instance search and checks that its collection and office
+    /// names exist — the Graph Settings window's inline check of a markup
+    /// layer's query as it is typed.
+    func validateInstanceSearch(query: String) throws {
+        let parsedQuery = try parseInstanceSearchQuery(query)
+        try dbQueue.read { db in
+            try validateCollectionSearchComponents(
+                Self.collectionNames(in: parsedQuery.expression),
+                db: db
+            )
+            try validateOfficeSearchComponents(
+                Self.officeNames(in: parsedQuery.expression),
+                db: db
+            )
+        }
+    }
+
     /// The Graph tab's Field filter text → entries. Tokenized like the search
     /// language (whitespace-separated, quotes group), each token split at its
     /// FIRST colon into type and field (a type name can't contain one; a field

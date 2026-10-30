@@ -177,7 +177,8 @@ struct MemorApp: App {
         .windowResizability(.contentSize)
 
         Window("Graph Settings", id: "graph-settings") {
-            GraphSettingsWindowView()
+            GraphSettingsWindowView(appDatabase: appDatabase)
+                .environmentObject(navigationState)
         }
         .windowResizability(.contentSize)
 

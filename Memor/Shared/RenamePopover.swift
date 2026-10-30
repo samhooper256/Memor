@@ -58,6 +58,9 @@ struct RenamePopover: View {
     let title: String
     let placeholder: String
     let initialName: String
+    /// The commit button's title — "Rename" unless the popover names
+    /// something new (the Graph Settings "Add" preset popover).
+    let commitTitle: String
     /// Returns an error message to show in place (the popover stays open so
     /// the name can be corrected), or nil once the owner accepted the name —
     /// the owner then dismisses the popover by clearing its item.
@@ -72,12 +75,14 @@ struct RenamePopover: View {
         title: String,
         placeholder: String,
         initialName: String,
+        commitTitle: String = "Rename",
         onCommit: @escaping (String) -> String?,
         onCancel: @escaping () -> Void
     ) {
         self.title = title
         self.placeholder = placeholder
         self.initialName = initialName
+        self.commitTitle = commitTitle
         self.onCommit = onCommit
         self.onCancel = onCancel
         _text = State(initialValue: initialName)
@@ -102,7 +107,7 @@ struct RenamePopover: View {
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel)
-                Button("Rename") { commit() }
+                Button(commitTitle) { commit() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }

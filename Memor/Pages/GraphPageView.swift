@@ -12,7 +12,7 @@ import WebKit
 /// How the page lays the graph out: a spanning forest drawn top-down (tree
 /// edges never cross), a layered drawing in which every arrow points up, or
 /// the force simulation. A display preference, so it persists.
-enum GraphLayoutMode: String, CaseIterable, Identifiable {
+enum GraphLayoutMode: String, CaseIterable, Identifiable, Codable {
     case tree
     case layered
     case force
@@ -54,12 +54,21 @@ struct GraphPageView: View {
     // The search text, the field filter text and its checkbox persist across
     // tab switches (the page is rebuilt on every visit) and launches. Only
     // the inputs are kept — the graph itself is not re-run until Search.
-    @AppStorage("com.sam.Memor.graphSearchQuery") private var searchQuery = ""
+    @AppStorage(GraphPageDefaults.searchQueryKey) private var searchQuery = ""
     @State private var searchFocusRequest: UUID?
     @State private var fieldFilterFocusRequest: UUID?   // Tab/Shift+Tab swap the two boxes
     // The field filter: typename:fieldname entries; ignored unless enabled.
-    @AppStorage("com.sam.Memor.graphFieldFilterText") private var fieldFilterText = ""
-    @AppStorage("com.sam.Memor.graphFieldFilterEnabled") private var isFieldFilterEnabled = false
+    @AppStorage(GraphPageDefaults.fieldFilterTextKey) private var fieldFilterText = ""
+    @AppStorage(GraphPageDefaults.fieldFilterEnabledKey) private var isFieldFilterEnabled = false
+    // The checkbox state the last search ran with: the Toggle's onChange
+    // re-runs only for a change that didn't bring its own run (preset apply).
+    @State private var lastRunFieldFilterEnabled: Bool?
+    // Markups and presets (Graph Settings). The markup colours per node id
+    // are computed for the current graph's nodes — with each result and,
+    // debounced, whenever the layers change — and sent to the page.
+    @ObservedObject private var graphSettings = GraphSettingsStore.shared
+    @State private var markupsByNodeID: [Int64: GraphNodeMarkup] = [:]
+    @State private var markupRecomputeTask: Task<Void, Never>?
     @State private var graphData: GraphData?
     @State private var errorMessage: String?
     @State private var isSearching = false
@@ -105,6 +114,14 @@ struct GraphPageView: View {
             // and swallows an immediate focus set.
             try? await Task.sleep(for: .milliseconds(50))
             searchFocusRequest = UUID()
+        }
+        .onChange(of: graphSettings.markups) { _, _ in
+            scheduleMarkupRecompute()
+        }
+        .onReceive(graphSettings.$pendingApply) { preset in
+            // Graph Settings' Apply: handled at once while the tab is showing,
+            // else on its next visit (the publisher replays its value).
+            if let preset { applyPreset(preset) }
         }
     }
 
@@ -167,8 +184,10 @@ struct GraphPageView: View {
         HStack(spacing: 10) {
             Toggle("Field filter", isOn: $isFieldFilterEnabled)
                 .toggleStyle(.checkbox)
-                .onChange(of: isFieldFilterEnabled) { _, _ in
-                    if graphData != nil || errorMessage != nil {
+                .onChange(of: isFieldFilterEnabled) { _, isEnabled in
+                    // A click re-runs the last search; a preset apply sets
+                    // this and runs itself, so its change is skipped here.
+                    if (graphData != nil || errorMessage != nil), isEnabled != lastRunFieldFilterEnabled {
                         runSearch()
                     }
                 }
@@ -205,6 +224,7 @@ struct GraphPageView: View {
                     graphData: graphData,
                     layoutMode: layoutMode,
                     nodeColors: nodeColors,
+                    markups: markupsByNodeID,
                     findQuery: isFindPresented ? findText : nil,
                     onLayoutProgress: { progress in
                         layoutProgress = progress < 1 ? progress : nil
@@ -280,6 +300,8 @@ struct GraphPageView: View {
     private func runSearch() {
         let query = searchQuery
         let fieldFilter = isFieldFilterEnabled ? fieldFilterText : nil
+        lastRunFieldFilterEnabled = isFieldFilterEnabled
+        markupRecomputeTask?.cancel()
         isSearching = true
         Task {
             do {
@@ -288,14 +310,67 @@ struct GraphPageView: View {
                 // yet, and only while mounted (a non-empty graph).
                 layoutProgress = (!data.nodes.isEmpty && data != graphData) ? 0 : nil
                 graphData = data
+                markupsByNodeID = computeMarkups(for: data)
                 errorMessage = nil
             } catch {
                 graphData = nil
+                markupsByNodeID = [:]
                 layoutProgress = nil
                 errorMessage = error.localizedDescription
             }
             isSearching = false
         }
+    }
+
+    /// The markup layers resolved against the graph's nodes: each enabled
+    /// layer with a colour, in list order, paints its fill and/or outline on
+    /// the nodes its search matches, a later layer overriding an earlier one
+    /// per property. A layer whose search fails to parse or names an unknown
+    /// collection/office is skipped (the settings window shows why).
+    private func computeMarkups(for data: GraphData) -> [Int64: GraphNodeMarkup] {
+        let nodeIDs = Set(data.nodes.map(\.instanceID))
+        var result: [Int64: GraphNodeMarkup] = [:]
+        for markup in graphSettings.markups where markup.drawsAnything {
+            guard let matches = try? appDatabase.fetchInstanceIDs(matchingInstanceSearch: markup.query) else { continue }
+            for id in matches where nodeIDs.contains(id) {
+                var entry = result[id] ?? GraphNodeMarkup()
+                if let fill = markup.fill { entry.fill = fill.hex }
+                if let outline = markup.outline { entry.outline = outline.hex }
+                result[id] = entry
+            }
+        }
+        return result
+    }
+
+    /// Layers edited in Graph Settings: recompute for the current graph after
+    /// a short pause, so typing a search there doesn't query on every key.
+    private func scheduleMarkupRecompute() {
+        markupRecomputeTask?.cancel()
+        guard graphData != nil else {
+            markupsByNodeID = [:]
+            return
+        }
+        markupRecomputeTask = Task {
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled, let graphData else { return }
+            markupsByNodeID = computeMarkups(for: graphData)
+        }
+    }
+
+    /// Graph Settings' Apply. The store already wrote the preset to
+    /// UserDefaults; setting the page's values here too keeps them current
+    /// for the run below. Clearing the request first keeps a resubscription
+    /// from replaying it.
+    private func applyPreset(_ preset: GraphPreset) {
+        graphSettings.pendingApply = nil
+        searchQuery = preset.query
+        fieldFilterText = preset.fieldFilterText
+        isFieldFilterEnabled = preset.isFieldFilterEnabled
+        layoutMode = preset.layoutMode
+        isolatedColor = preset.colors.isolated
+        inboundColor = preset.colors.inbound
+        sourceOnlyColor = preset.colors.sourceOnly
+        runSearch()
     }
 }
 
@@ -304,6 +379,8 @@ private struct GraphWebView: NSViewRepresentable {
     let layoutMode: GraphLayoutMode
     /// The per-role node colours (Graph Settings); applied in place, no relayout.
     let nodeColors: GraphNodeColorSet
+    /// The markup layers resolved per node id (Graph Settings); same.
+    let markups: [Int64: GraphNodeMarkup]
     /// The find bar's text while it is open; nil when closed (normal colours).
     let findQuery: String?
     /// Layout progress 0…1 from the page (1 = finished).
@@ -337,6 +414,7 @@ private struct GraphWebView: NSViewRepresentable {
             layoutMode: layoutMode,
             findQuery: findQuery,
             nodeColors: nodeColors.hexesByKind,
+            markups: markups,
             on: webView
         )
     }
@@ -416,22 +494,26 @@ private struct GraphWebView: NSViewRepresentable {
         private var lastSentFindQuery: String?
         private var hasSentFindQuery = false
         private var lastSentColors: [String]?
-        private var pending: (data: GraphData, mode: GraphLayoutMode, find: String?, colors: [String])?
+        private var lastSentMarkups: [Int64: GraphNodeMarkup]?
+        private var pending: (
+            data: GraphData, mode: GraphLayoutMode, find: String?, colors: [String], markups: [Int64: GraphNodeMarkup]
+        )?
 
         func update(
             graphData: GraphData,
             layoutMode: GraphLayoutMode,
             findQuery: String?,
             nodeColors: [String],
+            markups: [Int64: GraphNodeMarkup],
             on webView: WKWebView
         ) {
             let findChanged = !hasSentFindQuery || findQuery != lastSentFindQuery
             guard graphData != lastSent || layoutMode != lastSentMode || findChanged
-                    || nodeColors != lastSentColors else { return }
+                    || nodeColors != lastSentColors || markups != lastSentMarkups else { return }
             if isLoaded {
-                send(graphData, layoutMode: layoutMode, findQuery: findQuery, nodeColors: nodeColors, to: webView)
+                send(graphData, layoutMode: layoutMode, findQuery: findQuery, nodeColors: nodeColors, markups: markups, to: webView)
             } else {
-                pending = (graphData, layoutMode, findQuery, nodeColors)
+                pending = (graphData, layoutMode, findQuery, nodeColors, markups)
             }
         }
 
@@ -439,7 +521,14 @@ private struct GraphWebView: NSViewRepresentable {
             isLoaded = true
             if let pending {
                 self.pending = nil
-                send(pending.data, layoutMode: pending.mode, findQuery: pending.find, nodeColors: pending.colors, to: webView)
+                send(
+                    pending.data,
+                    layoutMode: pending.mode,
+                    findQuery: pending.find,
+                    nodeColors: pending.colors,
+                    markups: pending.markups,
+                    to: webView
+                )
             }
         }
 
@@ -448,14 +537,28 @@ private struct GraphWebView: NSViewRepresentable {
             layoutMode: GraphLayoutMode,
             findQuery: String?,
             nodeColors: [String],
+            markups: [Int64: GraphNodeMarkup],
             to webView: WKWebView
         ) {
-            // Colours first, so the data's first draw already uses them.
+            // Colours and markups first, so the data's first draw uses them.
             if nodeColors != lastSentColors {
                 lastSentColors = nodeColors
                 if let json = try? JSONSerialization.data(withJSONObject: nodeColors),
                    let literal = String(data: json, encoding: .utf8) {
                     webView.evaluateJavaScript("setNodeColors(\(literal))", completionHandler: nil)
+                }
+            }
+            if markups != lastSentMarkups {
+                lastSentMarkups = markups
+                // {"id": [fill | null, outline | null]}
+                let jsonValue: (String?) -> Any = { $0.map { $0 as Any } ?? NSNull() }
+                var payload: [String: [Any]] = [:]
+                for (id, markup) in markups {
+                    payload[String(id)] = [jsonValue(markup.fill), jsonValue(markup.outline)]
+                }
+                if let json = try? JSONSerialization.data(withJSONObject: payload),
+                   let literal = String(data: json, encoding: .utf8) {
+                    webView.evaluateJavaScript("setMarkups(\(literal))", completionHandler: nil)
                 }
             }
             if data != lastSent {
@@ -605,14 +708,11 @@ private struct GraphWebView: NSViewRepresentable {
                 Y[p] = (Math.random() - 0.5) * spread;
             }
             applyFind();
+            applyMarkups();
             tx = 0; ty = 0; sc = 1;
             startLayout();
         }
 
-        // The host's find bar: null while closed (normal colours); while open,
-        // nodes whose label contains the text (case-insensitive) draw yellow
-        // and all others gray — nothing typed yet means all gray. Recolours
-        // without any relayout, and the query survives new data.
         // Node fill by kind (0 isolated, 1 source-only, 2 inbound): the Graph
         // Settings colours. The host sends them before the first data and on
         // every change; a change only redraws.
@@ -624,6 +724,77 @@ private struct GraphWebView: NSViewRepresentable {
             draw();
         }
 
+        // Markup layers (Graph Settings): per node id, [fill, outline] CSS
+        // colours (null = none), already resolved by the host in layer order.
+        // A filled node skips its kind colour; an outlined node gets a ring
+        // just outside its circle. The per-index arrays are rebuilt on every
+        // data change, so markups survive new data like the find query.
+        var markupsByID = null, markFill = null, markOutline = null;
+
+        function setMarkups(m) {
+            markupsByID = (m && typeof m === 'object') ? m : null;
+            applyMarkups();
+            draw();
+        }
+
+        function applyMarkups() {
+            markFill = null; markOutline = null;
+            if (!markupsByID || N === 0) return;
+            var fills = new Array(N), outlines = new Array(N), any = false;
+            for (var i = 0; i < N; i++) {
+                var mk = markupsByID[nodes[i].id];
+                fills[i] = (mk && mk[0]) || null;
+                outlines[i] = (mk && mk[1]) || null;
+                if (fills[i] || outlines[i]) any = true;
+            }
+            if (any) { markFill = fills; markOutline = outlines; }
+        }
+
+        function drawMarkups(r) {
+            if (!markFill) return;
+            var byColor = new Map(), i, k, list;
+            for (i = 0; i < N; i++) {
+                if (!markFill[i]) continue;
+                list = byColor.get(markFill[i]);
+                if (!list) { list = []; byColor.set(markFill[i], list); }
+                list.push(i);
+            }
+            byColor.forEach(function(idx, color) {
+                ctx.fillStyle = color;
+                ctx.beginPath();
+                for (k = 0; k < idx.length; k++) {
+                    i = idx[k];
+                    ctx.moveTo(X[i] + r, Y[i]);
+                    ctx.arc(X[i], Y[i], r, 0, Math.PI*2);
+                }
+                ctx.fill();
+            });
+            // Outlines: a ring just outside the circle, constant screen width.
+            var lw = 3 / sc, ro = r + lw / 2;
+            byColor = new Map();
+            for (i = 0; i < N; i++) {
+                if (!markOutline[i]) continue;
+                list = byColor.get(markOutline[i]);
+                if (!list) { list = []; byColor.set(markOutline[i], list); }
+                list.push(i);
+            }
+            ctx.lineWidth = lw;
+            byColor.forEach(function(idx, color) {
+                ctx.strokeStyle = color;
+                ctx.beginPath();
+                for (k = 0; k < idx.length; k++) {
+                    i = idx[k];
+                    ctx.moveTo(X[i] + ro, Y[i]);
+                    ctx.arc(X[i], Y[i], ro, 0, Math.PI*2);
+                }
+                ctx.stroke();
+            });
+        }
+
+        // The host's find bar: null while closed (normal colours); while open,
+        // nodes whose label contains the text (case-insensitive) draw yellow
+        // and all others gray — nothing typed yet means all gray. Recolours
+        // without any relayout, and the query survives new data.
         var findQuery = null, findMatch = null;
 
         function setFindQuery(q) {
@@ -1429,6 +1600,7 @@ private struct GraphWebView: NSViewRepresentable {
                 drawNodes(0, nodeColors[0], r);
                 drawNodes(1, nodeColors[1], r);
                 drawNodes(2, nodeColors[2], r);
+                drawMarkups(r);
             }
 
             if (hovered >= 0) {
@@ -1445,7 +1617,7 @@ private struct GraphWebView: NSViewRepresentable {
             ctx.fillStyle = color;
             ctx.beginPath();
             for (var i = 0; i < N; i++) {
-                if (nodes[i].kind !== kind) continue;
+                if (nodes[i].kind !== kind || (markFill && markFill[i])) continue;
                 ctx.moveTo(X[i] + r, Y[i]);
                 ctx.arc(X[i], Y[i], r, 0, Math.PI*2);
             }
