@@ -15,6 +15,7 @@ struct GraphSettingsWindowView: View {
     let appDatabase: AppDatabase
 
     @EnvironmentObject private var navigationState: AppNavigationState
+    @EnvironmentObject private var shortcutSettings: ShortcutSettings
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var store = GraphSettingsStore.shared
 
@@ -25,6 +26,7 @@ struct GraphSettingsWindowView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                displaySection
                 colorsSection
                 markupsSection
                 presetsSection
@@ -48,6 +50,24 @@ struct GraphSettingsWindowView: View {
             Button("Cancel", role: .cancel) { }
         } message: { preset in
             Text("“\(preset.name)” will be removed. The graph's current settings are not affected.")
+        }
+    }
+
+    // MARK: - Display
+
+    private var displaySection: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle("Info mode: show every node's label", isOn: $store.isInfoModeEnabled)
+                Text("The same as \(shortcutSettings.binding(for: .graphToggleInfoMode).displayString) on the Graph tab. Not saved in presets or across launches.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } label: {
+            Text("Display").font(.headline)
         }
     }
 
@@ -208,6 +228,7 @@ private struct GraphNodeColorRow: View {
                     get: { color },
                     set: { if let chosen = $0 { color = chosen } }
                 ),
+                palette: GraphNodeColor.roleChoices,
                 allowsNone: false
             )
         }
@@ -247,11 +268,11 @@ private struct GraphMarkupRow: View {
 
                 Text("Fill")
                     .foregroundStyle(.secondary)
-                GraphColorButton(selection: $markup.fill, allowsNone: true)
+                GraphColorButton(selection: $markup.fill, palette: GraphNodeColor.allCases, allowsNone: true)
 
                 Text("Outline")
                     .foregroundStyle(.secondary)
-                GraphColorButton(selection: $markup.outline, allowsNone: true)
+                GraphColorButton(selection: $markup.outline, palette: GraphNodeColor.allCases, allowsNone: true)
 
                 Button {
                     onMoveUp()
@@ -344,9 +365,11 @@ private struct GraphPresetRow: View {
 // MARK: - Colour picking
 
 /// The colour circle that is the control: clicking it opens the palette
-/// popover. `allowsNone` adds a "None" cell (the markup colours).
+/// popover showing `palette`. `allowsNone` adds a "None" cell (the markup
+/// colours).
 private struct GraphColorButton: View {
     @Binding var selection: GraphNodeColor?
+    let palette: [GraphNodeColor]
     let allowsNone: Bool
 
     @State private var isPalettePresented = false
@@ -360,18 +383,19 @@ private struct GraphColorButton: View {
         .buttonStyle(.plain)
         .help(selection?.title ?? "None")
         .popover(isPresented: $isPalettePresented, arrowEdge: .bottom) {
-            GraphColorPaletteView(selection: $selection, allowsNone: allowsNone) {
+            GraphColorPaletteView(selection: $selection, palette: palette, allowsNone: allowsNone) {
                 isPalettePresented = false
             }
         }
     }
 }
 
-/// The palette popover: four circles per row (the 11 colours fall 4/4/3,
-/// 4/4/4 with None), the current choice ringed, the name on hover. A click
-/// chooses and closes.
+/// The palette popover: four circles per row (the 11 role colours fall
+/// 4/4/3; the markup palette adds white and None), the current choice
+/// ringed, the name on hover. A click chooses and closes.
 private struct GraphColorPaletteView: View {
     @Binding var selection: GraphNodeColor?
+    let palette: [GraphNodeColor]
     let allowsNone: Bool
     let onPick: () -> Void
 
@@ -379,7 +403,7 @@ private struct GraphColorPaletteView: View {
     private let columns = Array(repeating: GridItem(.fixed(cell), spacing: 6), count: 4)
 
     private var options: [GraphNodeColor?] {
-        GraphNodeColor.allCases.map(Optional.some) + (allowsNone ? [nil] : [])
+        palette.map(Optional.some) + (allowsNone ? [nil] : [])
     }
 
     var body: some View {

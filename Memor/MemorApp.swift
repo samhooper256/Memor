@@ -179,6 +179,7 @@ struct MemorApp: App {
         Window("Graph Settings", id: "graph-settings") {
             GraphSettingsWindowView(appDatabase: appDatabase)
                 .environmentObject(navigationState)
+                .environmentObject(shortcutSettings)
         }
         .windowResizability(.contentSize)
 

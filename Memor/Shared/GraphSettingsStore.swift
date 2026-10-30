@@ -24,14 +24,18 @@ enum GraphPageDefaults {
 
 /// The palette a node colour is chosen from: the app's own colours (the SRS
 /// blue/red/green/magenta, the find bar's yellow and gray, the accent blue)
-/// plus the rest of the system set. Fixed hex values: the page draws the same
-/// colour in light and dark mode, as it always has.
+/// plus the rest of the system set, and white. Fixed hex values: the page
+/// draws the same colour in light and dark mode, as it always has.
 enum GraphNodeColor: String, CaseIterable, Identifiable, Codable {
-    case red, orange, yellow, green, teal, blue, indigo, purple, magenta, pink, gray
+    case red, orange, yellow, green, teal, blue, indigo, purple, magenta, pink, gray, white
 
     var id: String { rawValue }
 
     var title: String { rawValue.capitalized }
+
+    /// The choices for a role colour: everything but white, which is offered
+    /// for markup fills and outlines only.
+    static var roleChoices: [GraphNodeColor] { allCases.filter { $0 != .white } }
 
     /// The CSS colour the page fills nodes with.
     var hex: String {
@@ -47,6 +51,7 @@ enum GraphNodeColor: String, CaseIterable, Identifiable, Codable {
         case .magenta: return "#FF00FF"
         case .pink: return "#FF375F"
         case .gray: return "#8E8E93"
+        case .white: return "#FFFFFF"
         }
     }
 
@@ -182,6 +187,9 @@ final class GraphSettingsStore: ObservableObject {
     /// A preset the Graph page should load and run: set by `apply`, consumed
     /// by the page — at once while it is showing, else on its next visit.
     @Published var pendingApply: GraphPreset?
+    /// Info mode: every node shows its label beside it. Session-only by
+    /// design — never persisted and never part of a preset.
+    @Published var isInfoModeEnabled = false
 
     private init() {
         markups = Self.load([GraphMarkup].self, key: Self.markupsKey) ?? []

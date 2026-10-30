@@ -104,7 +104,10 @@ struct GraphPageView: View {
             // fires while a search box has focus.
             ShortcutActionsKeyHandler(
                 shortcutSettings: shortcutSettings,
-                handlers: [(.graphOpenSettings, { openWindow(id: "graph-settings") })]
+                handlers: [
+                    (.graphOpenSettings, { openWindow(id: "graph-settings") }),
+                    (.graphToggleInfoMode, { graphSettings.isInfoModeEnabled.toggle() })
+                ]
             )
         }
         .task {
@@ -225,6 +228,7 @@ struct GraphPageView: View {
                     layoutMode: layoutMode,
                     nodeColors: nodeColors,
                     markups: markupsByNodeID,
+                    infoMode: graphSettings.isInfoModeEnabled,
                     findQuery: isFindPresented ? findText : nil,
                     onLayoutProgress: { progress in
                         layoutProgress = progress < 1 ? progress : nil
@@ -381,6 +385,8 @@ private struct GraphWebView: NSViewRepresentable {
     let nodeColors: GraphNodeColorSet
     /// The markup layers resolved per node id (Graph Settings); same.
     let markups: [Int64: GraphNodeMarkup]
+    /// Info mode: every node shows its label (session-only).
+    let infoMode: Bool
     /// The find bar's text while it is open; nil when closed (normal colours).
     let findQuery: String?
     /// Layout progress 0…1 from the page (1 = finished).
@@ -410,11 +416,14 @@ private struct GraphWebView: NSViewRepresentable {
         context.coordinator.onLayoutProgress = onLayoutProgress
         context.coordinator.onEditInstance = onEditInstance
         context.coordinator.update(
-            graphData: graphData,
-            layoutMode: layoutMode,
-            findQuery: findQuery,
-            nodeColors: nodeColors.hexesByKind,
-            markups: markups,
+            Coordinator.PagePayload(
+                data: graphData,
+                layoutMode: layoutMode,
+                findQuery: findQuery,
+                nodeColors: nodeColors.hexesByKind,
+                markups: markups,
+                infoMode: infoMode
+            ),
             on: webView
         )
     }
@@ -430,6 +439,18 @@ private struct GraphWebView: NSViewRepresentable {
         static let progressMessageName = "layoutProgress"
         static let contextMenuMessageName = "nodeContextMenu"
         static let doubleClickMessageName = "nodeDoubleClick"
+
+        /// Everything the page is told. The coordinator diffs each part
+        /// against what it last sent and re-sends only the changed ones.
+        struct PagePayload: Equatable {
+            var data: GraphData
+            var layoutMode: GraphLayoutMode
+            var findQuery: String?
+            var nodeColors: [String]
+            var markups: [Int64: GraphNodeMarkup]
+            var infoMode: Bool
+        }
+
         var onLayoutProgress: ((Double) -> Void)?
         var onEditInstance: ((Int64) -> Void)?
 
@@ -495,25 +516,14 @@ private struct GraphWebView: NSViewRepresentable {
         private var hasSentFindQuery = false
         private var lastSentColors: [String]?
         private var lastSentMarkups: [Int64: GraphNodeMarkup]?
-        private var pending: (
-            data: GraphData, mode: GraphLayoutMode, find: String?, colors: [String], markups: [Int64: GraphNodeMarkup]
-        )?
+        private var lastSentInfoMode: Bool?
+        private var pending: PagePayload?
 
-        func update(
-            graphData: GraphData,
-            layoutMode: GraphLayoutMode,
-            findQuery: String?,
-            nodeColors: [String],
-            markups: [Int64: GraphNodeMarkup],
-            on webView: WKWebView
-        ) {
-            let findChanged = !hasSentFindQuery || findQuery != lastSentFindQuery
-            guard graphData != lastSent || layoutMode != lastSentMode || findChanged
-                    || nodeColors != lastSentColors || markups != lastSentMarkups else { return }
+        func update(_ payload: PagePayload, on webView: WKWebView) {
             if isLoaded {
-                send(graphData, layoutMode: layoutMode, findQuery: findQuery, nodeColors: nodeColors, markups: markups, to: webView)
+                send(payload, to: webView)
             } else {
-                pending = (graphData, layoutMode, findQuery, nodeColors, markups)
+                pending = payload
             }
         }
 
@@ -521,57 +531,50 @@ private struct GraphWebView: NSViewRepresentable {
             isLoaded = true
             if let pending {
                 self.pending = nil
-                send(
-                    pending.data,
-                    layoutMode: pending.mode,
-                    findQuery: pending.find,
-                    nodeColors: pending.colors,
-                    markups: pending.markups,
-                    to: webView
-                )
+                send(pending, to: webView)
             }
         }
 
-        private func send(
-            _ data: GraphData,
-            layoutMode: GraphLayoutMode,
-            findQuery: String?,
-            nodeColors: [String],
-            markups: [Int64: GraphNodeMarkup],
-            to webView: WKWebView
-        ) {
-            // Colours and markups first, so the data's first draw uses them.
-            if nodeColors != lastSentColors {
-                lastSentColors = nodeColors
-                if let json = try? JSONSerialization.data(withJSONObject: nodeColors),
+        /// Each part goes to the page only when it differs from what the
+        /// page has.
+        private func send(_ payload: PagePayload, to webView: WKWebView) {
+            // Colours, markups and info mode first, so the data's first draw
+            // already uses them.
+            if payload.nodeColors != lastSentColors {
+                lastSentColors = payload.nodeColors
+                if let json = try? JSONSerialization.data(withJSONObject: payload.nodeColors),
                    let literal = String(data: json, encoding: .utf8) {
                     webView.evaluateJavaScript("setNodeColors(\(literal))", completionHandler: nil)
                 }
             }
-            if markups != lastSentMarkups {
-                lastSentMarkups = markups
+            if payload.markups != lastSentMarkups {
+                lastSentMarkups = payload.markups
                 // {"id": [fill | null, outline | null]}
                 let jsonValue: (String?) -> Any = { $0.map { $0 as Any } ?? NSNull() }
-                var payload: [String: [Any]] = [:]
-                for (id, markup) in markups {
-                    payload[String(id)] = [jsonValue(markup.fill), jsonValue(markup.outline)]
+                var markupsByID: [String: [Any]] = [:]
+                for (id, markup) in payload.markups {
+                    markupsByID[String(id)] = [jsonValue(markup.fill), jsonValue(markup.outline)]
                 }
-                if let json = try? JSONSerialization.data(withJSONObject: payload),
+                if let json = try? JSONSerialization.data(withJSONObject: markupsByID),
                    let literal = String(data: json, encoding: .utf8) {
                     webView.evaluateJavaScript("setMarkups(\(literal))", completionHandler: nil)
                 }
             }
-            if data != lastSent {
-                sendData(data, layoutMode: layoutMode, to: webView)
-            } else if layoutMode != lastSentMode {
-                // Same data, new mode: re-lay out in place rather than resending it.
-                lastSentMode = layoutMode
-                webView.evaluateJavaScript("setLayoutMode('\(layoutMode.rawValue)')", completionHandler: nil)
+            if payload.infoMode != lastSentInfoMode {
+                lastSentInfoMode = payload.infoMode
+                webView.evaluateJavaScript("setInfoMode(\(payload.infoMode))", completionHandler: nil)
             }
-            if !hasSentFindQuery || findQuery != lastSentFindQuery {
+            if payload.data != lastSent {
+                sendData(payload.data, layoutMode: payload.layoutMode, to: webView)
+            } else if payload.layoutMode != lastSentMode {
+                // Same data, new mode: re-lay out in place rather than resending it.
+                lastSentMode = payload.layoutMode
+                webView.evaluateJavaScript("setLayoutMode('\(payload.layoutMode.rawValue)')", completionHandler: nil)
+            }
+            if !hasSentFindQuery || payload.findQuery != lastSentFindQuery {
                 hasSentFindQuery = true
-                lastSentFindQuery = findQuery
-                let literal = findQuery
+                lastSentFindQuery = payload.findQuery
+                let literal = payload.findQuery
                     .flatMap { try? JSONSerialization.data(withJSONObject: $0, options: .fragmentsAllowed) }
                     .flatMap { String(data: $0, encoding: .utf8) } ?? "null"
                 webView.evaluateJavaScript("setFindQuery(\(literal))", completionHandler: nil)
@@ -709,6 +712,7 @@ private struct GraphWebView: NSViewRepresentable {
             }
             applyFind();
             applyMarkups();
+            labelCache = null;
             tx = 0; ty = 0; sc = 1;
             startLayout();
         }
@@ -789,6 +793,100 @@ private struct GraphWebView: NSViewRepresentable {
                 }
                 ctx.stroke();
             });
+        }
+
+        // Info mode (⌘I / Graph Settings): every node shows its label — the
+        // tooltip's rendering (escaped text with <b>/<i> runs) drawn on the
+        // canvas in SCREEN space beside the node after the world-space pass,
+        // culled to the viewport, measured lazily per node and cached until
+        // new data or a DPR change. Session-only: the host never persists it.
+        var infoMode = false, labelCache = null, labelCacheDPR = 1;
+        var LABEL_FONT = 'system-ui, -apple-system, sans-serif';
+        var LABEL_MAX_WIDTH = 300;   // CSS px, the tooltip's max-width
+
+        function setInfoMode(on) {
+            infoMode = !!on;
+            draw();
+        }
+
+        function unescapeLabel(s) {
+            return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+        }
+
+        // nodes[i].html is escaped text with only <b>/<i> tags (fieldDisplayHTML).
+        function labelRuns(html) {
+            var runs = [], bold = 0, italic = 0, re = /<(\\/?)([bi])>/g, last = 0, m;
+            function push(t) {
+                if (t) runs.push({ t: unescapeLabel(t), b: bold > 0, i: italic > 0 });
+            }
+            while ((m = re.exec(html)) !== null) {
+                push(html.slice(last, m.index));
+                if (m[2] === 'b') bold += m[1] ? -1 : 1; else italic += m[1] ? -1 : 1;
+                last = re.lastIndex;
+            }
+            push(html.slice(last));
+            return runs;
+        }
+
+        function labelFont(run) {
+            return (run.i ? 'italic ' : '') + (run.b ? 'bold ' : '') + (12 * DPR) + 'px ' + LABEL_FONT;
+        }
+
+        // A node's runs measured in device pixels, cut with an ellipsis past
+        // LABEL_MAX_WIDTH.
+        function measureLabel(i) {
+            var runs = labelRuns(nodes[i].html || '(no label)');
+            var max = LABEL_MAX_WIDTH * DPR, out = [], width = 0;
+            for (var k = 0; k < runs.length; k++) {
+                var run = runs[k], font = labelFont(run);
+                ctx.font = font;
+                var w = ctx.measureText(run.t).width;
+                if (width + w <= max) {
+                    out.push({ t: run.t, font: font, w: w });
+                    width += w;
+                    continue;
+                }
+                var t = run.t;
+                while (t.length > 0) {
+                    t = t.slice(0, -1);
+                    w = ctx.measureText(t + '…').width;
+                    if (width + w <= max) break;
+                }
+                out.push({ t: t + '…', font: font, w: w });
+                width += w;
+                break;
+            }
+            return { runs: out, w: width };
+        }
+
+        function drawLabels() {
+            if (!infoMode || N === 0) return;
+            if (!labelCache || labelCacheDPR !== DPR) { labelCache = new Array(N); labelCacheDPR = DPR; }
+            var w = W(), h = H();
+            var padX = 9 * DPR, padY = 4 * DPR, gap = 6 * DPR, radius = 6 * DPR;
+            var boxH = 12 * DPR + 2 * padY;
+            ctx.textBaseline = 'middle';
+            ctx.textAlign = 'left';
+            for (var i = 0; i < N; i++) {
+                var sx = X[i] * sc + w / 2 + tx, sy = Y[i] * sc + h / 2 + ty;
+                var bx = sx + R + gap, by = sy - boxH / 2;
+                if (bx > w || by > h || by + boxH < 0 || bx < -(LABEL_MAX_WIDTH * DPR + 2 * padX)) continue;
+                var lc = labelCache[i] || (labelCache[i] = measureLabel(i));
+                var bw = lc.w + 2 * padX;
+                if (bx + bw < 0) continue;
+                ctx.fillStyle = 'rgba(20,20,20,0.88)';
+                ctx.beginPath();
+                ctx.roundRect(bx, by, bw, boxH, radius);
+                ctx.fill();
+                ctx.fillStyle = '#fff';
+                var x = bx + padX;
+                for (var k = 0; k < lc.runs.length; k++) {
+                    var run = lc.runs[k];
+                    ctx.font = run.font;
+                    ctx.fillText(run.t, x, sy);
+                    x += run.w;
+                }
+            }
         }
 
         // The host's find bar: null while closed (normal colours); while open,
@@ -1611,6 +1709,7 @@ private struct GraphWebView: NSViewRepresentable {
                 ctx.stroke();
             }
             ctx.restore();
+            drawLabels();   // screen space, so after the world-space pass
         }
 
         function drawNodes(kind, color, r) {
@@ -1658,7 +1757,8 @@ private struct GraphWebView: NSViewRepresentable {
                 // Safe by construction: escaped text with only <b>/<i> (fieldDisplayHTML).
                 tip.innerHTML = nodes[n].html || '(no label)';
                 tip.style.left = (e.clientX + 14) + 'px';
-                tip.style.top  = (e.clientY -  8) + 'px';
+                // Below the cursor in info mode, clear of the node's own label.
+                tip.style.top  = (e.clientY + (infoMode ? 18 : -8)) + 'px';
                 canvas.style.cursor = 'pointer';
             } else {
                 tip.style.display = 'none';

@@ -51,6 +51,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
 
     // Graph tab
     case graphOpenSettings
+    case graphToggleInfoMode
 
     // Study mode
     case studyRevealOrGood
@@ -104,6 +105,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         case .instancesSelectNextType: return "Select Next Type"
         case .instancesSelectPreviousType: return "Select Previous Type"
         case .graphOpenSettings: return "Open Graph Settings"
+        case .graphToggleInfoMode: return "Toggle Info Mode"
         case .studyRevealOrGood: return "Reveal / Rate Good"
         case .studyRatingAgain: return "Rate Again"
         case .studyRatingHard: return "Rate Hard"
@@ -143,7 +145,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
             return .global
         case .instancesSelectNextType, .instancesSelectPreviousType:
             return .instances
-        case .graphOpenSettings:
+        case .graphOpenSettings, .graphToggleInfoMode:
             return .graph
         case .studyRevealOrGood, .studyRatingAgain, .studyRatingHard, .studyRatingGood,
              .studyRatingEasy, .studyUndo, .studyEditInstance, .studyEditType,
@@ -178,6 +180,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         case .instancesSelectNextType: return KeyBinding(key: "DownArrow", modifiers: .command)
         case .instancesSelectPreviousType: return KeyBinding(key: "UpArrow", modifiers: .command)
         case .graphOpenSettings: return KeyBinding(key: "S", modifiers: .command)
+        case .graphToggleInfoMode: return KeyBinding(key: "I", modifiers: .command)
         case .studyRevealOrGood: return KeyBinding(key: "Space")
         case .studyRatingAgain: return KeyBinding(key: "1")
         case .studyRatingHard: return KeyBinding(key: "2")
