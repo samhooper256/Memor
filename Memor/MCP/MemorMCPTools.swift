@@ -2646,6 +2646,13 @@ enum MemorMCPTools {
             "type": .string("array"),
             "items": .object(["type": .string("string")])
         ])
+        // A shared fragment plus a per-property description, for clients that
+        // show parameter docs field by field rather than the tool description.
+        func described(_ schema: Value, _ description: String) -> Value {
+            guard case .object(var fields) = schema else { return schema }
+            fields["description"] = .string(description)
+            return .object(fields)
+        }
         let stringKeyedStringMap: Value = .object([
             "type": .string("object"),
             "description": .string("Object whose keys are numeric IDs as strings and whose values are strings."),
@@ -2748,9 +2755,9 @@ enum MemorMCPTools {
                         "field_values_by_field_id": stringKeyedStringMap,
                         "field_values_by_field_name": nameKeyedStringMap,
                         "query_type_ids": int64Array,
-                        "priority": int64Number,
-                        "collection_ids": int64Array,
-                        "collection_names": stringArray
+                        "priority": described(int64Number, "The new instance's final priority, an integer from 1 to 10. Applied after the collections are joined, so it overrides their default priorities. Omitted: 1, raised to the highest default of the collections joined."),
+                        "collection_ids": described(int64Array, "IDs of collections to put the new instance in. An unknown ID is an error and nothing is created. Joining a collection raises the instance's priority to the collection's default priority when that is higher (never lowers it)."),
+                        "collection_names": described(stringArray, "Names of collections to put the new instance in, matched case-insensitively; may be combined with collection_ids. An unknown name is an error and nothing is created. Same priority effect as collection_ids.")
                     ]),
                     "required": .array([.string("type_id")])
                 ])
@@ -2761,9 +2768,9 @@ enum MemorMCPTools {
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
-                        "priority": int64Number,
-                        "collection_ids": int64Array,
-                        "collection_names": stringArray,
+                        "priority": described(int64Number, "The final priority of EVERY created instance, an integer from 1 to 10. Applied after the collections are joined, so it overrides their default priorities. Omitted: 1, raised to the highest default of the collections joined."),
+                        "collection_ids": described(int64Array, "IDs of collections to put EVERY created instance in. An unknown ID fails the whole call before anything is created. Joining a collection raises an instance's priority to the collection's default priority when that is higher (never lowers it)."),
+                        "collection_names": described(stringArray, "Names of collections to put EVERY created instance in, matched case-insensitively; may be combined with collection_ids. An unknown name fails the whole call before anything is created. Same priority effect as collection_ids."),
                         "instances": .object([
                             "type": .string("array"),
                             "items": .object([
