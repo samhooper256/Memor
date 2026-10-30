@@ -239,6 +239,46 @@ final class HyperlinkSearchPopupState: NSObject, ObservableObject, NSWindowDeleg
         }
     }
 
+    /// The popup's "smarter" instance ordering: when the TYPED text is one
+    /// plain string (quoted or not, with or without `literal:`), the
+    /// instances whose primary field starts with it come first, in
+    /// alphabetical order; the rest keep their order. The pre-filter plays
+    /// no part. Compared on the partially rendered text (tags dropped), so
+    /// an italic term still counts.
+    private func hoistingPrefixMatches(_ results: [InstanceSearchResult]) -> [InstanceSearchResult] {
+        guard let literal = simpleLiteral(in: searchQuery) else { return results }
+        var prefixed: [(result: InstanceSearchResult, text: String)] = []
+        var others: [InstanceSearchResult] = []
+        for result in results {
+            let text = fieldDisplayPlainText(result.displayValue)
+            if text.range(of: literal, options: [.caseInsensitive, .anchored]) != nil {
+                prefixed.append((result, text))
+            } else {
+                others.append(result)
+            }
+        }
+        guard !prefixed.isEmpty else { return results }
+        prefixed.sort { $0.text.localizedCaseInsensitiveCompare($1.text) == .orderedAscending }
+        return prefixed.map(\.result) + others
+    }
+
+    /// The literal when `query` is exactly one plain-string component — no
+    /// operator or parenthesis, no keyword prefix (`literal:` is allowed and
+    /// stripped) — else nil, including for an empty or unparseable query.
+    private func simpleLiteral(in query: String) -> String? {
+        guard let tokens = try? appDatabase.tokenizeSearchQueryComponents(query),
+              tokens.count == 1 else { return nil }
+        let token = tokens[0]
+        if ["(", ")", "OR", "NOT", ":noqueries", ":new"].contains(token) { return nil }
+        if token.hasPrefix("literal:") {
+            let literal = String(token.dropFirst("literal:".count))
+            return literal.isEmpty ? nil : literal
+        }
+        let keywordPrefixes = ["collection:", "col:", "type:", "id:", "qt:", "office:"]
+        if keywordPrefixes.contains(where: { token.hasPrefix($0) }) { return nil }
+        return token
+    }
+
     func performSearch() {
         let query = effectiveQuery()
         let activeMode = mode
@@ -249,7 +289,9 @@ final class HyperlinkSearchPopupState: NSObject, ObservableObject, NSWindowDeleg
                 switch activeMode {
                 case .instances:
                     let sections = try appDatabase.searchInstances(query: query)
-                    let all = sections.flatMap(\.instances)
+                    // Reordered before the 100-row cut, so a prefix match
+                    // far down the list still surfaces.
+                    let all = hoistingPrefixMatches(sections.flatMap(\.instances))
                     totalResultCount = all.count
                     instanceResults = Array(all.prefix(100))
                     queryResults = []

@@ -47,7 +47,7 @@ Memor/
     PersonSlotsEditor.swift         Person editor's Relationships panel: parent slots, partner cards, synced Children box, person picker popover with bare-name entry
     PersonQueryChecklist.swift      Built-in Person query checkboxes (Relationships per kind + per partner; Offices per holding + All Offices) with enabled-but-empty warnings, preview, and reset
     PersonOfficesEditor.swift       Person editor's Offices panel: ordered office cards (dates/note, predecessor/successor chips) + office picker popover with inline create
-    HyperlinkSearch.swift           ⌘K hyperlink-search popup: controller, state, panel, text field, popup view
+    HyperlinkSearch.swift           ⌘K hyperlink-search popup: controller, state, panel, text field, popup view. Instances mode orders "smartly" when the TYPED text is one plain-string component (quoted or not, `literal:` or bare; the pre-filter is ignored; anything with an operator, parenthesis or keyword prefix is left alone): instances whose primary field — partially rendered, tags dropped — starts with it (case-insensitive) come first in alphabetical order, the rest keep their order (`hoistingPrefixMatches`/`simpleLiteral`, applied before the 100-row cut so no prefix match is lost)
     CollectionSelector.swift        Collections panel search field + checklist row
     TypePicker.swift                Change-type popup (controller + popup state + popup view)
   PointMap/
