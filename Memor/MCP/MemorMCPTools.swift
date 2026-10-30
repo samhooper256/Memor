@@ -62,18 +62,23 @@ enum MemorMCPTools {
             let fieldValuesByID = try arguments.optionalInt64KeyedStringMap("field_values_by_field_id")
             let fieldValuesByName = try arguments.optionalStringKeyedStringMap("field_values_by_field_name")
             let queryTypeIDs = try arguments.optionalInt64Array("query_type_ids") ?? []
+            let placement = try resolveNewInstancePlacement(arguments, appDatabase: appDatabase)
             let created = try createInstanceCore(
                 typeID: typeID,
                 fieldValuesByID: fieldValuesByID,
                 fieldValuesByName: fieldValuesByName,
                 queryTypeIDs: Set(queryTypeIDs),
+                placement: placement,
                 appDatabase: appDatabase
             )
             postDatabaseChange()
             return try jsonResult(created)
         case "create_instances":
             let items = try arguments.requireObjectArray("instances")
-            return try jsonResult(createInstances(items: items, appDatabase: appDatabase))
+            // Resolved once, before the batch: a bad collection or priority
+            // fails the whole call with nothing created.
+            let placement = try resolveNewInstancePlacement(arguments, appDatabase: appDatabase)
+            return try jsonResult(createInstances(items: items, placement: placement, appDatabase: appDatabase))
         case "update_instance":
             let instanceID = try arguments.requireInt64("instance_id")
             let fieldValuesByID = try arguments.optionalInt64KeyedStringMap("field_values_by_field_id")
@@ -522,6 +527,7 @@ enum MemorMCPTools {
         fieldValuesByID: [Int64: String]?,
         fieldValuesByName: [String: String]?,
         queryTypeIDs: Set<Int64>,
+        placement: NewInstancePlacement,
         appDatabase: AppDatabase
     ) throws -> CreatedInstanceDTO {
         guard let type = try appDatabase.fetchType(typeID: typeID) else {
@@ -550,11 +556,72 @@ enum MemorMCPTools {
             fieldValuesByFieldID: fieldValues,
             queryTypeIDs: queryTypeIDs
         )
-        return CreatedInstanceDTO(instanceID: instanceID, typeID: typeID)
+        let priority = try applyPlacement(placement, to: instanceID, appDatabase: appDatabase)
+        return CreatedInstanceDTO(
+            instanceID: instanceID,
+            typeID: typeID,
+            priority: priority,
+            collectionIds: placement.collectionIDs
+        )
+    }
+
+    /// Where create_instance(s) put a new instance and at what priority.
+    /// Resolved once per call, before anything is created, so an unknown
+    /// collection or a bad priority creates nothing.
+    private struct NewInstancePlacement {
+        var collectionIDs: [Int64]
+        var priority: Int?
+    }
+
+    private static func resolveNewInstancePlacement(
+        _ arguments: [String: Value],
+        appDatabase: AppDatabase
+    ) throws -> NewInstancePlacement {
+        let priority = try arguments.optionalInt64("priority").map { try validatedPriority($0) }
+        let ids = try arguments.optionalInt64Array("collection_ids") ?? []
+        let names = try arguments.optionalStringArray("collection_names") ?? []
+        var collectionIDs: [Int64] = []
+        if !ids.isEmpty || !names.isEmpty {
+            let collections = try appDatabase.fetchCollections()
+            for id in ids {
+                guard collections.contains(where: { $0.id == id }) else {
+                    throw MemorMCPToolError(message: "Collection not found: \(id).")
+                }
+                if !collectionIDs.contains(id) { collectionIDs.append(id) }
+            }
+            for name in names {
+                guard let match = collections.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
+                    throw MemorMCPToolError(message: "Collection not found: \"\(name)\".")
+                }
+                if !collectionIDs.contains(match.id) { collectionIDs.append(match.id) }
+            }
+        }
+        return NewInstancePlacement(collectionIDs: collectionIDs, priority: priority)
+    }
+
+    /// Adds the new instance to the placement's collections (each new
+    /// membership raises its priority to the collection's default) and then
+    /// sets the explicit priority, when given, as the final word — as in the
+    /// editor, where a priority lowered after checking a collection stays
+    /// lowered. Returns the instance's resulting priority.
+    private static func applyPlacement(
+        _ placement: NewInstancePlacement,
+        to instanceID: Int64,
+        appDatabase: AppDatabase
+    ) throws -> Int {
+        for collectionID in placement.collectionIDs {
+            try appDatabase.addInstance(instanceID, toCollectionID: collectionID)
+        }
+        if let priority = placement.priority {
+            _ = try appDatabase.setInstancePriority(instanceIDs: [instanceID], priority: priority)
+            return priority
+        }
+        return try appDatabase.fetchInstancePriority(instanceID: instanceID)
     }
 
     private static func createInstances(
         items: [[String: Value]],
+        placement: NewInstancePlacement,
         appDatabase: AppDatabase
     ) throws -> [BatchCreateResultDTO] {
         if items.isEmpty {
@@ -574,6 +641,7 @@ enum MemorMCPTools {
                     fieldValuesByID: fieldValuesByID,
                     fieldValuesByName: fieldValuesByName,
                     queryTypeIDs: queryTypeIDs,
+                    placement: placement,
                     appDatabase: appDatabase
                 )
                 anySucceeded = true
@@ -2574,6 +2642,10 @@ enum MemorMCPTools {
             "type": .string("array"),
             "items": .object(["type": .string("integer")])
         ])
+        let stringArray: Value = .object([
+            "type": .string("array"),
+            "items": .object(["type": .string("string")])
+        ])
         let stringKeyedStringMap: Value = .object([
             "type": .string("object"),
             "description": .string("Object whose keys are numeric IDs as strings and whose values are strings."),
@@ -2668,24 +2740,30 @@ enum MemorMCPTools {
 
             Tool(
                 name: "create_instance",
-                description: "Create a new instance of an Object type (use create_pointmap_instance / create_boundarymap_instance for map types). Provide field values via field_values_by_field_name (field names to string values) and/or field_values_by_field_id (field IDs as strings to string values); at least one is required. query_type_ids is an optional array of enabled query type IDs.",
+                description: "Create a new instance of an Object type (use create_pointmap_instance / create_boundarymap_instance for map types). Provide field values via field_values_by_field_name (field names to string values) and/or field_values_by_field_id (field IDs as strings to string values); at least one is required. query_type_ids is an optional array of enabled query type IDs. Optional collection_ids and/or collection_names (case-insensitive; unknown ones are an error and nothing is created) put the new instance in those collections — a new membership raises its priority to the collection's default. Optional priority (1–10) is the instance's final priority, applied after the collections, so it wins over their defaults.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
                         "type_id": int64Number,
                         "field_values_by_field_id": stringKeyedStringMap,
                         "field_values_by_field_name": nameKeyedStringMap,
-                        "query_type_ids": int64Array
+                        "query_type_ids": int64Array,
+                        "priority": int64Number,
+                        "collection_ids": int64Array,
+                        "collection_names": stringArray
                     ]),
                     "required": .array([.string("type_id")])
                 ])
             ),
             Tool(
                 name: "create_instances",
-                description: "Create many instances in a single call. Each item has the same shape as create_instance's arguments. Items are processed independently: the result is an array with one entry per item reporting either the created instance_id or an error message, so a bad item doesn't abort the rest of the batch.",
+                description: "Create many instances in a single call. Each item has the same shape as create_instance's arguments minus priority and collections, which are given ONCE at the top level and apply to every created instance: optional collection_ids and/or collection_names (case-insensitive; an unknown one fails the whole call before anything is created) and optional priority (1–10, the final priority, applied after the collections). Items are processed independently: the result is an array with one entry per item reporting either the created instance_id or an error message, so a bad item doesn't abort the rest of the batch.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
+                        "priority": int64Number,
+                        "collection_ids": int64Array,
+                        "collection_names": stringArray,
                         "instances": .object([
                             "type": .string("array"),
                             "items": .object([
@@ -3558,6 +3636,11 @@ private struct TypeDetailDTO: Encodable {
 private struct CreatedInstanceDTO: Encodable {
     let instanceID: Int64
     let typeID: Int64
+    /// The instance's priority after creation: the explicit `priority` when
+    /// given, else 1 raised to the highest default of the collections joined.
+    let priority: Int
+    /// The collections the instance was added to (ids), in request order.
+    let collectionIds: [Int64]
 }
 
 private struct BatchCreateResultDTO: Encodable {
@@ -4138,6 +4221,20 @@ private extension [String: Value] {
         if v.isNull { return nil }
         if let b = v.boolValue { return b }
         throw MemorMCPToolError(message: "Argument `\(key)` must be a boolean.")
+    }
+
+    func optionalStringArray(_ key: String) throws -> [String]? {
+        guard let v = self[key] else { return nil }
+        if v.isNull { return nil }
+        guard let array = v.arrayValue else {
+            throw MemorMCPToolError(message: "Argument `\(key)` must be an array.")
+        }
+        return try array.map { elem -> String in
+            guard let s = elem.stringValue else {
+                throw MemorMCPToolError(message: "Argument `\(key)` must be an array of strings.")
+            }
+            return s
+        }
     }
 
     func optionalInt64Array(_ key: String) throws -> [Int64]? {
