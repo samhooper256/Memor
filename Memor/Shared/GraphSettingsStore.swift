@@ -347,18 +347,20 @@ final class GraphSettingsStore: ObservableObject {
     }
 
     /// The submenu's rows: the last-used option first, marked, then
-    /// "(default)", then the presets A–Z — each option listed once.
+    /// "(default)", then the presets A–Z — each option listed once. The
+    /// last-used option is hoisted only while it still exists; a deleted
+    /// preset is forgotten, never relabelled as the defaults.
     func quickGraphMenuEntries() -> [QuickGraphMenuEntry] {
         var ordered: [(selection: QuickGraphSelection, title: String)] = [(.default, "(default)")]
         ordered += presets
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             .map { (.preset($0.id), $0.name) }
-        let lastUsed = effectiveQuickGraphSelection
+        let lastUsed = quickGraphLastUsed.flatMap { used in ordered.first { $0.selection == used } }
         var entries: [QuickGraphMenuEntry] = []
-        if quickGraphLastUsed != nil, let match = ordered.first(where: { $0.selection == lastUsed }) {
-            entries.append(QuickGraphMenuEntry(selection: match.selection, title: "\(match.title) [last used]", isLastUsed: true))
+        if let lastUsed {
+            entries.append(QuickGraphMenuEntry(selection: lastUsed.selection, title: "\(lastUsed.title) [last used]", isLastUsed: true))
         }
-        for option in ordered where !(quickGraphLastUsed != nil && option.selection == lastUsed) {
+        for option in ordered where option.selection != lastUsed?.selection {
             entries.append(QuickGraphMenuEntry(selection: option.selection, title: option.title, isLastUsed: false))
         }
         return entries
@@ -451,6 +453,12 @@ final class GraphSettingsStore: ObservableObject {
 
     func deletePreset(id: UUID) {
         presets.removeAll { $0.id == id }
+        // A deleted preset can't stay the last-used Quick Graph option: ⌘G
+        // would silently fall back to the defaults while the submenu still
+        // marked something "[last used]".
+        if quickGraphLastUsed == .preset(id) {
+            quickGraphLastUsed = nil
+        }
     }
 
     // MARK: - Persistence (JSON in UserDefaults)
