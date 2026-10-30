@@ -64,6 +64,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
     case studyEditType
     case studyDuplicateInstance
     case studyPlayAudio
+    case studyQuickGraph
 
     // Instance editor
     case editorSave
@@ -116,6 +117,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         case .studyEditType: return "Edit Type"
         case .studyDuplicateInstance: return "Duplicate Current Instance"
         case .studyPlayAudio: return "Play Audio"
+        case .studyQuickGraph: return "Quick Graph"
         case .editorSave: return "Save"
         case .editorSubmit: return "Submit"
         case .editorWrapBold: return "Wrap Bold"
@@ -149,7 +151,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
             return .graph
         case .studyRevealOrGood, .studyRatingAgain, .studyRatingHard, .studyRatingGood,
              .studyRatingEasy, .studyUndo, .studyEditInstance, .studyEditType,
-             .studyDuplicateInstance, .studyPlayAudio:
+             .studyDuplicateInstance, .studyPlayAudio, .studyQuickGraph:
             return .study
         case .editorSave, .editorSubmit, .editorWrapBold, .editorWrapItalic, .editorWrapEmphasis,
              .editorInsertImage, .editorCopyLink, .editorPickType, .editorOpenHyperlinkSearch,
@@ -197,6 +199,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         // separate two actions whose DEFAULT is the contested key (it resets the other to its
         // default, which is A again) — a pre-existing quirk of the conflict resolver.
         case .studyPlayAudio: return KeyBinding(key: "A")
+        case .studyQuickGraph: return KeyBinding(key: "G", modifiers: .command)
         case .editorSave: return KeyBinding(key: "S", modifiers: .command)
         case .editorSubmit: return KeyBinding(key: "Return", modifiers: .command)
         case .editorWrapBold: return KeyBinding(key: "B", modifiers: .command)

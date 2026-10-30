@@ -172,11 +172,117 @@ struct GraphNodeMarkup: Equatable {
     var outline: String?
 }
 
+/// What a Quick Graph (Study mode) is drawn with: the defaults or a preset.
+nonisolated enum QuickGraphSelection: Equatable {
+    case `default`
+    case preset(UUID)
+
+    /// The UserDefaults form: "default" or the preset's id.
+    var storageValue: String {
+        switch self {
+        case .default: return "default"
+        case .preset(let id): return id.uuidString
+        }
+    }
+
+    init?(storageValue: String) {
+        if storageValue == "default" {
+            self = .default
+            return
+        }
+        guard let id = UUID(uuidString: storageValue) else { return nil }
+        self = .preset(id)
+    }
+}
+
+/// The settings a Quick Graph draws with: a preset's, or the defaults (every
+/// instance, no field filter, Tree, the default colours, no markups).
+struct QuickGraphSettings {
+    var name: String
+    var query: String
+    var fieldFilter: String?
+    var layoutMode: GraphLayoutMode
+    var colors: GraphNodeColorSet
+    var markups: [GraphMarkup]
+
+    static let defaults = QuickGraphSettings(
+        name: "(default)",
+        query: "",
+        fieldFilter: nil,
+        layoutMode: .tree,
+        colors: GraphNodeColorSet(
+            isolated: GraphNodeRole.isolated.defaultColor,
+            inbound: GraphNodeRole.inbound.defaultColor,
+            sourceOnly: GraphNodeRole.sourceOnly.defaultColor
+        ),
+        markups: []
+    )
+}
+
+/// One row of Study mode's Quick Graph submenu.
+struct QuickGraphMenuEntry {
+    var selection: QuickGraphSelection
+    var title: String
+    var isLastUsed: Bool
+}
+
+/// The markup layers resolved against a graph's nodes: each enabled layer
+/// with a colour, in list order, paints its fill and/or outline on the nodes
+/// its search matches, a later layer overriding an earlier one per property.
+/// A layer whose search fails to parse or names an unknown collection/office
+/// is skipped (the settings window shows why). Shared by the Graph tab and
+/// the Quick Graph window.
+func resolveGraphMarkups(
+    _ markups: [GraphMarkup],
+    for data: GraphData,
+    appDatabase: AppDatabase
+) -> [Int64: GraphNodeMarkup] {
+    let nodeIDs = Set(data.nodes.map(\.instanceID))
+    var result: [Int64: GraphNodeMarkup] = [:]
+    for markup in markups where markup.drawsAnything {
+        guard let matches = try? appDatabase.fetchInstanceIDs(matchingInstanceSearch: markup.query) else { continue }
+        for id in matches where nodeIDs.contains(id) {
+            var entry = result[id] ?? GraphNodeMarkup()
+            if let fill = markup.fill { entry.fill = fill.hex }
+            if let outline = markup.outline { entry.outline = outline.hex }
+            result[id] = entry
+        }
+    }
+    return result
+}
+
+extension GraphData {
+    /// The connected component holding the instance — arrows followed in
+    /// either direction — with the edges between its nodes and the source
+    /// set narrowed to it; nil when the instance is not a node.
+    func connectedComponent(containing instanceID: Int64) -> GraphData? {
+        guard nodes.contains(where: { $0.instanceID == instanceID }) else { return nil }
+        var neighbours: [Int64: [Int64]] = [:]
+        for edge in edges {
+            neighbours[edge.fromInstanceID, default: []].append(edge.toInstanceID)
+            neighbours[edge.toInstanceID, default: []].append(edge.fromInstanceID)
+        }
+        var reached: Set<Int64> = [instanceID]
+        var queue = [instanceID]
+        while let current = queue.popLast() {
+            for next in neighbours[current] ?? [] where reached.insert(next).inserted {
+                queue.append(next)
+            }
+        }
+        return GraphData(
+            nodes: nodes.filter { reached.contains($0.instanceID) },
+            sourceNodeIDs: sourceNodeIDs.intersection(reached),
+            edges: edges.filter { reached.contains($0.fromInstanceID) && reached.contains($0.toInstanceID) }
+        )
+    }
+}
+
 final class GraphSettingsStore: ObservableObject {
     static let shared = GraphSettingsStore()
 
     private static let markupsKey = "com.sam.Memor.graphMarkups"
     private static let presetsKey = "com.sam.Memor.graphPresets"
+    private static let quickGraphLastUsedKey = "com.sam.Memor.quickGraphLastUsed"
 
     @Published var markups: [GraphMarkup] {
         didSet { if markups != oldValue { Self.persist(markups, key: Self.markupsKey) } }
@@ -190,10 +296,72 @@ final class GraphSettingsStore: ObservableObject {
     /// Info mode: every node shows its label beside it. Session-only by
     /// design — never persisted and never part of a preset.
     @Published var isInfoModeEnabled = false
+    /// The option the last Quick Graph was opened with: ⌘G reuses it and the
+    /// submenu lists it first. Persisted; a deleted preset counts as none.
+    @Published var quickGraphLastUsed: QuickGraphSelection? {
+        didSet {
+            if let quickGraphLastUsed {
+                UserDefaults.standard.set(quickGraphLastUsed.storageValue, forKey: Self.quickGraphLastUsedKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Self.quickGraphLastUsedKey)
+            }
+        }
+    }
 
     private init() {
         markups = Self.load([GraphMarkup].self, key: Self.markupsKey) ?? []
         presets = Self.load([GraphPreset].self, key: Self.presetsKey) ?? []
+        quickGraphLastUsed = UserDefaults.standard.string(forKey: Self.quickGraphLastUsedKey)
+            .flatMap(QuickGraphSelection.init(storageValue:))
+    }
+
+    // MARK: - Quick Graph
+
+    func preset(id: UUID) -> GraphPreset? {
+        presets.first { $0.id == id }
+    }
+
+    /// The last-used option, or the defaults when there is none or its
+    /// preset has been deleted.
+    var effectiveQuickGraphSelection: QuickGraphSelection {
+        if case .preset(let id)? = quickGraphLastUsed, preset(id: id) == nil { return .default }
+        return quickGraphLastUsed ?? .default
+    }
+
+    func recordQuickGraphUse(_ selection: QuickGraphSelection) {
+        quickGraphLastUsed = selection
+    }
+
+    func quickGraphSettings(for selection: QuickGraphSelection) -> QuickGraphSettings {
+        guard case .preset(let id) = selection, let preset = preset(id: id) else {
+            return .defaults
+        }
+        return QuickGraphSettings(
+            name: preset.name,
+            query: preset.query,
+            fieldFilter: preset.isFieldFilterEnabled ? preset.fieldFilterText : nil,
+            layoutMode: preset.layoutMode,
+            colors: preset.colors,
+            markups: preset.markups
+        )
+    }
+
+    /// The submenu's rows: the last-used option first, marked, then
+    /// "(default)", then the presets A–Z — each option listed once.
+    func quickGraphMenuEntries() -> [QuickGraphMenuEntry] {
+        var ordered: [(selection: QuickGraphSelection, title: String)] = [(.default, "(default)")]
+        ordered += presets
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            .map { (.preset($0.id), $0.name) }
+        let lastUsed = effectiveQuickGraphSelection
+        var entries: [QuickGraphMenuEntry] = []
+        if quickGraphLastUsed != nil, let match = ordered.first(where: { $0.selection == lastUsed }) {
+            entries.append(QuickGraphMenuEntry(selection: match.selection, title: "\(match.title) [last used]", isLastUsed: true))
+        }
+        for option in ordered where !(quickGraphLastUsed != nil && option.selection == lastUsed) {
+            entries.append(QuickGraphMenuEntry(selection: option.selection, title: option.title, isLastUsed: false))
+        }
+        return entries
     }
 
     // MARK: - Markups

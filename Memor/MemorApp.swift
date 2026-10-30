@@ -43,6 +43,7 @@ struct MemorApp: App {
     @StateObject private var stackStatsWindowState = StackStatsWindowState()
     @StateObject private var quickStudyState = QuickStudyState()
     @StateObject private var studyModeState = StudyModeState()
+    @StateObject private var quickGraphWindowState = QuickGraphWindowState()
     @StateObject private var shortcutSettings = ShortcutSettings.shared
     @StateObject private var timeZoneSettings = TimeZoneSettings.shared
     @StateObject private var developerState = DeveloperState.shared
@@ -80,6 +81,7 @@ struct MemorApp: App {
                 .environmentObject(stackStatsWindowState)
                 .environmentObject(quickStudyState)
                 .environmentObject(studyModeState)
+                .environmentObject(quickGraphWindowState)
                 .environmentObject(shortcutSettings)
                 .environmentObject(timeZoneSettings)
                 // The Type detail page's "Edit Offices" button lives in the
@@ -182,6 +184,14 @@ struct MemorApp: App {
                 .environmentObject(shortcutSettings)
         }
         .windowResizability(.contentSize)
+
+        Window("Quick Graph", id: "quick-graph") {
+            QuickGraphWindowView(appDatabase: appDatabase)
+                .environmentObject(quickGraphWindowState)
+                .environmentObject(editInstanceWindowState)
+                .environmentObject(shortcutSettings)
+        }
+        .defaultSize(width: 900, height: 640)
 
         Window("Edit Global HTML", id: "global-html-editor") {
             GlobalCodeEditorWindowView(

@@ -35,6 +35,8 @@ struct StudyModeView: View {
     @EnvironmentObject private var shortcutSettings: ShortcutSettings
     @EnvironmentObject private var navigationState: AppNavigationState
     @EnvironmentObject private var studyModeState: StudyModeState
+    @EnvironmentObject private var quickGraphWindowState: QuickGraphWindowState
+    private var graphSettings: GraphSettingsStore { .shared }
 
     let stack: Stack
     let appDatabase: AppDatabase
@@ -285,6 +287,10 @@ struct StudyModeView: View {
                         guard let currentQuery, currentQuery.kind == .standard else { return }
                         playFirstAudioRequestID = UUID()
                     },
+                    onQuickGraph: {
+                        // The last-used option, or the defaults. No reveal gate.
+                        openQuickGraph(graphSettings.effectiveQuickGraphSelection)
+                    },
                     onArrowLinkShortcut: { key in
                         // Only after the answer is revealed; mirrors the link-click callbacks below.
                         guard isAnswerRevealed, let currentQuery else { return false }
@@ -468,6 +474,13 @@ struct StudyModeView: View {
                     openWindow(id: "query-preview")
                 },
                 isObscured: showsMap,
+                contextMenuCustomizer: { menu in
+                    // Either side of the query: the submenu is built fresh
+                    // on each right-click, so it reflects the presets and the
+                    // last-used option as they stand.
+                    menu.addItem(.separator())
+                    menu.addItem(makeQuickGraphMenuItem())
+                },
                 playFirstAudioRequestID: playFirstAudioRequestID
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1080,6 +1093,34 @@ private struct StudyResponseButton: View {
     }
 }
 
+// MARK: - Quick Graph
+
+extension StudyModeView {
+    /// The context menu's "Quick Graph" item: a submenu of the last-used
+    /// option first (marked "[last used]"), then "(default)", then the
+    /// presets A–Z — each option once.
+    fileprivate func makeQuickGraphMenuItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "Quick Graph", action: nil, keyEquivalent: "")
+        let submenu = NSMenu(title: "Quick Graph")
+        for entry in graphSettings.quickGraphMenuEntries() {
+            submenu.addItem(ClosureMenuItem(title: entry.title) {
+                openQuickGraph(entry.selection)
+            })
+        }
+        item.submenu = submenu
+        return item
+    }
+
+    /// Opens the Quick Graph window on the current instance with the option,
+    /// which becomes the last-used one.
+    fileprivate func openQuickGraph(_ selection: QuickGraphSelection) {
+        guard let currentQuery else { return }
+        graphSettings.recordQuickGraphUse(selection)
+        quickGraphWindowState.requestOpen(instanceID: currentQuery.instanceID, selection: selection)
+        openWindow(id: "quick-graph")
+    }
+}
+
 private struct StudyModeKeyCommandHandler: NSViewRepresentable {
     let shortcutSettings: ShortcutSettings
     let onEscape: () -> Void
@@ -1091,6 +1132,7 @@ private struct StudyModeKeyCommandHandler: NSViewRepresentable {
     let onEditType: () -> Void
     let onDuplicateInstance: () -> Void
     let onPlayAudio: () -> Void
+    let onQuickGraph: () -> Void
     let onArrowLinkShortcut: (LinkShortcutKey) -> Bool
 
     func makeNSView(context: Context) -> KeyCommandHandlingView {
@@ -1105,6 +1147,7 @@ private struct StudyModeKeyCommandHandler: NSViewRepresentable {
         view.onEditType = onEditType
         view.onDuplicateInstance = onDuplicateInstance
         view.onPlayAudio = onPlayAudio
+        view.onQuickGraph = onQuickGraph
         view.onArrowLinkShortcut = onArrowLinkShortcut
         return view
     }
@@ -1120,6 +1163,7 @@ private struct StudyModeKeyCommandHandler: NSViewRepresentable {
         nsView.onEditType = onEditType
         nsView.onDuplicateInstance = onDuplicateInstance
         nsView.onPlayAudio = onPlayAudio
+        nsView.onQuickGraph = onQuickGraph
         nsView.onArrowLinkShortcut = onArrowLinkShortcut
     }
 
@@ -1134,6 +1178,7 @@ private struct StudyModeKeyCommandHandler: NSViewRepresentable {
         var onEditType: (() -> Void)?
         var onDuplicateInstance: (() -> Void)?
         var onPlayAudio: (() -> Void)?
+        var onQuickGraph: (() -> Void)?
         var onArrowLinkShortcut: ((LinkShortcutKey) -> Bool)?
 
         private var keyDownMonitor: Any?
@@ -1187,7 +1232,7 @@ private struct StudyModeKeyCommandHandler: NSViewRepresentable {
                                 .studyRevealOrGood, .studyRatingAgain, .studyRatingHard,
                                 .studyRatingGood, .studyRatingEasy, .studyUndo,
                                 .studyEditInstance, .studyEditType, .studyDuplicateInstance,
-                                .studyPlayAudio,
+                                .studyPlayAudio, .studyQuickGraph,
                             ]
                             if ownedActions.contains(where: { settings.binding(for: $0).matches(event) }) {
                                 return nil
@@ -1247,6 +1292,10 @@ private struct StudyModeKeyCommandHandler: NSViewRepresentable {
                     }
                     if settings.binding(for: .studyPlayAudio).matches(event) {
                         self.onPlayAudio?()
+                        return nil
+                    }
+                    if settings.binding(for: .studyQuickGraph).matches(event) {
+                        self.onQuickGraph?()
                         return nil
                     }
 

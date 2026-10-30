@@ -464,6 +464,9 @@ struct QueryHTMLView: NSViewRepresentable {
     /// page with a SetCursor(arrow) it applies without a hit test — stomping the
     /// pointing-hand cursor the reverse map queries set on hover.
     var isObscured: Bool = false
+    /// Runs on WebKit's context menu just before it opens, to add items
+    /// (Study mode's "Quick Graph" submenu). nil leaves WebKit's menu alone.
+    var contextMenuCustomizer: ((NSMenu) -> Void)? = nil
     /// One-shot "play the FIRST <audio> on the shown page" request, nonce-style like
     /// PointMapQueryView(locatorPulseID:): each fresh UUID plays once (restarting from 0),
     /// nil or an unchanged value does nothing. Rides updateNSView without a reload because
@@ -477,6 +480,7 @@ struct QueryHTMLView: NSViewRepresentable {
         view.onInstanceLinkActivated = onInstanceLinkActivated
         view.onQueryLinkActivated = onQueryLinkActivated
         view.onContentCommitted = onContentCommitted
+        view.contextMenuCustomizer = contextMenuCustomizer
         view.isHidden = isObscured
         // A nonce minted before this container existed is already spent — never replay it on
         // mount. (Study and the Query Preview now keep their web view mounted through map
@@ -489,6 +493,7 @@ struct QueryHTMLView: NSViewRepresentable {
         containerView.onInstanceLinkActivated = onInstanceLinkActivated
         containerView.onQueryLinkActivated = onQueryLinkActivated
         containerView.onContentCommitted = onContentCommitted
+        containerView.contextMenuCustomizer = contextMenuCustomizer
         // Un-hide BEFORE loading so the next HTML page loads into a visible view (a hidden
         // view still loads and commits — WebKit just marks the page not visible).
         containerView.isHidden = isObscured
@@ -499,12 +504,23 @@ struct QueryHTMLView: NSViewRepresentable {
     }
 }
 
-private final class NonFirstResponderWKWebView: WKWebView {
+/// A WKWebView whose context menu a host can extend: `contextMenuCustomizer`
+/// runs on WebKit's own menu just before it opens.
+class CustomizableContextMenuWKWebView: WKWebView {
+    var contextMenuCustomizer: ((NSMenu) -> Void)?
+
+    override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        super.willOpenMenu(menu, with: event)
+        contextMenuCustomizer?(menu)
+    }
+}
+
+private final class NonFirstResponderWKWebView: CustomizableContextMenuWKWebView {
     override var acceptsFirstResponder: Bool { false }
 }
 
 final class QueryWebContainerView: NSView {
-    private let webView: WKWebView
+    private let webView: CustomizableContextMenuWKWebView
     private let imageSchemeHandler = LocalImageURLSchemeHandler()
     private let navigationDelegate = QueryWebNavigationDelegate()
     private var lastLoadedHTML: String?
@@ -546,6 +562,12 @@ final class QueryWebContainerView: NSView {
     /// indicator up until real content is actually painting, and the launch
     /// pre-warm uses it to release its webview once the process is warm.
     var onContentCommitted: ((String) -> Void)?
+    /// Extends WebKit's context menu (see CustomizableContextMenuWKWebView).
+    var contextMenuCustomizer: ((NSMenu) -> Void)? {
+        didSet {
+            webView.contextMenuCustomizer = contextMenuCustomizer
+        }
+    }
 
     init(disableUserInteraction: Bool = false) {
         let configuration = makeLocalContentWebViewConfiguration()
@@ -553,7 +575,7 @@ final class QueryWebContainerView: NSView {
         if disableUserInteraction {
             webView = NonFirstResponderWKWebView(frame: .zero, configuration: configuration)
         } else {
-            webView = WKWebView(frame: .zero, configuration: configuration)
+            webView = CustomizableContextMenuWKWebView(frame: .zero, configuration: configuration)
         }
 
         super.init(frame: .zero)

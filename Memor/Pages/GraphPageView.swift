@@ -326,24 +326,10 @@ struct GraphPageView: View {
         }
     }
 
-    /// The markup layers resolved against the graph's nodes: each enabled
-    /// layer with a colour, in list order, paints its fill and/or outline on
-    /// the nodes its search matches, a later layer overriding an earlier one
-    /// per property. A layer whose search fails to parse or names an unknown
-    /// collection/office is skipped (the settings window shows why).
+    /// The store's markup layers resolved against the graph's nodes (see
+    /// resolveGraphMarkups in GraphSettingsStore.swift).
     private func computeMarkups(for data: GraphData) -> [Int64: GraphNodeMarkup] {
-        let nodeIDs = Set(data.nodes.map(\.instanceID))
-        var result: [Int64: GraphNodeMarkup] = [:]
-        for markup in graphSettings.markups where markup.drawsAnything {
-            guard let matches = try? appDatabase.fetchInstanceIDs(matchingInstanceSearch: markup.query) else { continue }
-            for id in matches where nodeIDs.contains(id) {
-                var entry = result[id] ?? GraphNodeMarkup()
-                if let fill = markup.fill { entry.fill = fill.hex }
-                if let outline = markup.outline { entry.outline = outline.hex }
-                result[id] = entry
-            }
-        }
-        return result
+        resolveGraphMarkups(graphSettings.markups, for: data, appDatabase: appDatabase)
     }
 
     /// Layers edited in Graph Settings: recompute for the current graph after
@@ -378,7 +364,9 @@ struct GraphPageView: View {
     }
 }
 
-private struct GraphWebView: NSViewRepresentable {
+/// The graph panel: a WKWebView running the self-contained page below.
+/// Shared with the Quick Graph window.
+struct GraphWebView: NSViewRepresentable {
     let graphData: GraphData
     let layoutMode: GraphLayoutMode
     /// The per-role node colours (Graph Settings); applied in place, no relayout.
